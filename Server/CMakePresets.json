@@ -1,0 +1,71 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21
+  },
+  "configurePresets": [
+    {
+      "name": "mingw-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "P:/Qt/QTSHIT/Tools/mingw1310_64/bin/gcc.exe",
+        "CMAKE_CXX_COMPILER": "P:/Qt/QTSHIT/Tools/mingw1310_64/bin/g++.exe",
+        "CMAKE_PREFIX_PATH": "P:/Qt/QTSHIT/6.11.0/mingw_64"
+      },
+      "environment": {
+        "PATH": "P:\\Qt\\QTSHIT\\Tools\\mingw1310_64\\bin;P:\\Qt\\QTSHIT\\6.11.0\\mingw_64\\bin;$penv{PATH}"
+      },
+      "vendor": {
+        "microsoft.com/VisualStudioSettings/CMake/1": {
+          "intelliSenseMode": "windows-gcc-x64"
+        }
+      }
+    },
+    {
+      "name": "mingw-debug",
+      "displayName": "MinGW Qt6 — Debug",
+      "inherits": "mingw-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "mingw-release",
+      "displayName": "MinGW Qt6 — Release",
+      "inherits": "mingw-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "hidden": true,
+      "name": "Qt",
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "$env{QTDIR}"
+      },
+      "vendor": {
+        "qt-project.org/Qt": {
+          "checksum": "wVa86FgEkvdCTVp1/nxvrkaemJc="
+        }
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "mingw-debug",
+      "configurePreset": "mingw-debug"
+    },
+    {
+      "name": "mingw-release",
+      "configurePreset": "mingw-release"
+    }
+  ],
+  "vendor": {
+    "qt-project.org/Presets": {
+      "checksum": "q8g83U1ptWfh0JjKhjPW9zI5ol0="
+    }
+  }
+}

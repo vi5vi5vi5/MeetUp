@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MeetUp — тестовый клиент</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #181b22;
+    --panel-2: #1f232c;
+    --border: #2a2f3a;
+    --text: #e7e9ee;
+    --muted: #9aa2b1;
+    --accent: #4c8dff;
+    --accent-hover: #3b7cf0;
+    --danger: #ff5c6c;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+
+  /* ---- экран входа ---- */
+  #join-screen {
+    position: fixed; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(1200px 600px at 50% -10%, #1a2130, var(--bg));
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 32px;
+    width: 340px;
+    box-shadow: 0 20px 60px rgba(0,0,0,.4);
+  }
+  .card h1 { margin: 0 0 4px; font-size: 22px; letter-spacing: .3px; }
+  .card p  { margin: 0 0 24px; color: var(--muted); font-size: 13px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 14px 0 6px; }
+  input[type=text] {
+    width: 100%; padding: 11px 12px;
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 10px; font-size: 14px;
+  }
+  input[type=text]:focus { outline: none; border-color: var(--accent); }
+  button {
+    cursor: pointer; border: none; border-radius: 10px;
+    font-size: 14px; font-weight: 600; color: #fff;
+    background: var(--accent); padding: 11px 16px;
+    transition: background .15s ease;
+  }
+  button:hover { background: var(--accent-hover); }
+  button:disabled { opacity: .5; cursor: default; }
+  #join-btn { width: 100%; margin-top: 22px; padding: 12px; }
+  .hint { margin-top: 14px; font-size: 12px; color: var(--muted); text-align: center; }
+
+  /* ---- основной экран ---- */
+  #app { display: none; height: 100%; grid-template-columns: 1fr 320px; }
+  #app.active { display: grid; }
+
+  .stage { display: flex; flex-direction: column; min-width: 0; }
+  .stage-head {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 18px; border-bottom: 1px solid var(--border);
+  }
+  .stage-head .room { font-weight: 600; }
+  .stage-head .status { font-size: 12px; color: var(--muted); }
+  .stage-head .spacer { flex: 1; }
+  .leave { background: transparent; color: var(--danger); padding: 6px 10px; }
+  .leave:hover { background: rgba(255,92,108,.1); }
+
+  .grid {
+    flex: 1; min-height: 0; overflow: auto;
+    display: grid; gap: 12px; padding: 16px;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    align-content: start;
+  }
+  .tile {
+    position: relative; aspect-ratio: 4 / 3;
+    background: #000; border: 1px solid var(--border);
+    border-radius: 12px; overflow: hidden;
+  }
+  .tile video, .tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .tile .name {
+    position: absolute; left: 8px; bottom: 8px;
+    background: rgba(0,0,0,.55); backdrop-filter: blur(4px);
+    padding: 3px 8px; border-radius: 6px; font-size: 12px;
+  }
+  .tile.you .name { color: #9fe0a0; }
+  .tile .placeholder {
+    position: absolute; inset: 0; display: flex;
+    align-items: center; justify-content: center;
+    color: var(--muted); font-size: 13px;
+  }
+
+  /* ---- боковая панель ---- */
+  .side { border-left: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; background: var(--panel); }
+  .side h2 { margin: 0; padding: 14px 16px; font-size: 12px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); border-bottom: 1px solid var(--border); }
+  .participants { padding: 8px; max-height: 34%; overflow: auto; border-bottom: 1px solid var(--border); }
+  .participant { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; }
+  .participant .dot { width: 8px; height: 8px; border-radius: 50%; background: #46d17f; flex: none; }
+  .participant .pname { font-size: 13px; }
+  .participant .me { color: var(--muted); font-size: 11px; margin-left: auto; }
+
+  .chat { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .messages { flex: 1; overflow: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+  .msg .meta { font-size: 11px; color: var(--muted); margin-bottom: 2px; }
+  .msg .meta b { color: var(--text); font-weight: 600; }
+  .msg.self .meta b { color: var(--accent); }
+  .msg .text { background: var(--panel-2); padding: 8px 11px; border-radius: 10px; display: inline-block; max-width: 100%; word-wrap: break-word; }
+  .composer { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--border); }
+  .composer input { flex: 1; }
+  .composer button { padding: 10px 14px; }
+</style>
+</head>
+<body>
+
+<div id="join-screen">
+  <div class="card">
+    <h1>MeetUp</h1>
+    <p>Тестовый клиент видеоконференции</p>
+    <label for="room-input">Код комнаты</label>
+    <input id="room-input" type="text" placeholder="например, AB12CD" autocomplete="off" value="TEST01">
+    <label for="name-input">Ваше имя</label>
+    <input id="name-input" type="text" placeholder="Иван" autocomplete="off">
+    <button id="join-btn">Войти в конференцию</button>
+    <div class="hint" id="join-hint">Откройте страницу в двух вкладках с одним кодом.</div>
+  </div>
+</div>
+
+<div id="app">
+  <div class="stage">
+    <div class="stage-head">
+      <span class="room" id="room-label">—</span>
+      <span class="status" id="conn-status">подключение…</span>
+      <span class="spacer"></span>
+      <button class="leave" id="leave-btn">Выйти</button>
+    </div>
+    <div class="grid" id="grid"></div>
+  </div>
+
+  <div class="side">
+    <h2>Участники (<span id="pcount">0</span>)</h2>
+    <div class="participants" id="participants"></div>
+    <div class="chat">
+      <h2>Чат</h2>
+      <div class="messages" id="messages"></div>
+      <div class="composer">
+        <input id="chat-input" type="text" placeholder="Сообщение…" autocomplete="off">
+        <button id="send-btn">→</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+// ---- Протокол ----
+const MSG_VIDEO = 1;
+const MSG_AUDIO = 2;
+const WS_PORT = 9000;
+
+// ---- Состояние ----
+let ws = null;
+let myId = null;
+let myName = "";
+let roomCode = "";
+let localStream = null;
+let captureTimer = null;
+const participants = new Map();       // id -> name
+const remoteUrls = new Map();         // id -> текущий objectURL (чтобы освобождать)
+
+// ---- Элементы ----
+const $ = (id) => document.getElementById(id);
+const joinScreen = $("join-screen");
+const app = $("app");
+const grid = $("grid");
+
+// ================= Вход =================
+$("join-btn").addEventListener("click", doJoin);
+$("name-input").addEventListener("keydown", (e) => { if (e.key === "Enter") doJoin(); });
+$("leave-btn").addEventListener("click", () => location.reload());
+
+function doJoin() {
+  roomCode = $("room-input").value.trim();
+  myName = $("name-input").value.trim();
+  if (!roomCode || !myName) {
+    $("join-hint").textContent = "Заполните код комнаты и имя.";
+    $("join-hint").style.color = "var(--danger)";
+    return;
+  }
+  $("join-btn").disabled = true;
+  connect();
+}
+
+function connect() {
+  ws = new WebSocket(`ws://${location.hostname}:${WS_PORT}`);
+  ws.binaryType = "arraybuffer";
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ type: "join", room: roomCode, name: myName }));
+  };
+  ws.onmessage = onMessage;
+  ws.onclose = () => setStatus("соединение закрыто");
+  ws.onerror = () => {
+    $("join-btn").disabled = false;
+    $("join-hint").textContent = "Не удалось подключиться к серверу.";
+    $("join-hint").style.color = "var(--danger)";
+  };
+}
+
+// ================= Приём =================
+function onMessage(event) {
+  if (typeof event.data === "string") {
+    handleJson(JSON.parse(event.data));
+  } else {
+    handleBinary(event.data);   // ArrayBuffer
+  }
+}
+
+function handleJson(msg) {
+  switch (msg.type) {
+    case "join_ok":       onJoinOk(msg); break;
+    case "participant_joined": addParticipant(msg.id, msg.name); break;
+    case "participant_left":   removeParticipant(msg.id); break;
+    case "chat":          addChatMessage(msg.sender_id, msg.text, msg.timestamp_ms); break;
+    case "error":         console.warn("Ошибка сервера:", msg.reason); break;
+  }
+}
+
+function onJoinOk(msg) {
+  myId = msg.sender_id;
+  joinScreen.style.display = "none";
+  app.classList.add("active");
+  $("room-label").textContent = "Комната " + roomCode;
+  setStatus("в сети");
+
+  // Уже присутствующие участники.
+  (msg.participants || []).forEach((p) => addParticipant(p.id, p.name));
+  // Мы сами.
+  addParticipant(myId, myName + " (вы)");
+
+  startCamera();
+}
+
+function handleBinary(buf) {
+  const dv = new DataView(buf);
+  const type = dv.getUint8(0);
+  const senderId = dv.getUint32(1, true);
+  // const ts = dv.getBigUint64(5, true);  // timestamp, пока не используем
+  const payload = buf.slice(13);
+  if (type === MSG_VIDEO) showRemoteFrame(senderId, payload);
+}
+
+// ================= Камера и отправка =================
+async function startCamera() {
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({
+      video: { width: 480, height: 360 }, audio: false
+    });
+  } catch (e) {
+    setStatus("нет доступа к камере");
+    console.error(e);
+    return;
+  }
+
+  const tile = ensureTile(myId, myName, true);
+  const video = document.createElement("video");
+  video.autoplay = true; video.muted = true; video.playsInline = true;
+  video.srcObject = localStream;
+  tile.querySelector(".placeholder")?.remove();
+  tile.prepend(video);
+
+  // Кадр для захвата.
+  const canvas = document.createElement("canvas");
+  canvas.width = 480; canvas.height = 360;
+  const ctx = canvas.getContext("2d");
+
+  captureTimer = setInterval(() => {
+    if (video.readyState < 2) return;           // ещё нет кадра
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob(async (blob) => {
+      if (!blob || !ws || ws.readyState !== WebSocket.OPEN) return;
+      const jpeg = new Uint8Array(await blob.arrayBuffer());
+      // [type:1][timestamp_ms:8 LE][jpeg...]
+      const out = new Uint8Array(9 + jpeg.length);
+      const view = new DataView(out.buffer);
+      view.setUint8(0, MSG_VIDEO);
+      view.setBigUint64(1, BigInt(Date.now()), true);
+      out.set(jpeg, 9);
+      ws.send(out.buffer);
+    }, "image/jpeg", 0.7);
+  }, 100);   // ~10 кадров/сек
+}
+
+function showRemoteFrame(senderId, payload) {
+  if (senderId === myId) return;               // своё видео показываем с камеры
+  const name = participants.get(senderId) || ("Участник " + senderId);
+  const tile = ensureTile(senderId, name, false);
+  let img = tile.querySelector("img");
+  if (!img) {
+    img = document.createElement("img");
+    tile.querySelector(".placeholder")?.remove();
+    tile.prepend(img);
+  }
+  const url = URL.createObjectURL(new Blob([payload], { type: "image/jpeg" }));
+  const prev = remoteUrls.get(senderId);
+  if (prev) URL.revokeObjectURL(prev);
+  remoteUrls.set(senderId, url);
+  img.src = url;
+}
+
+// ================= Плитки участников =================
+function ensureTile(id, name, isSelf) {
+  let tile = document.getElementById("tile-" + id);
+  if (!tile) {
+    tile = document.createElement("div");
+    tile.id = "tile-" + id;
+    tile.className = "tile" + (isSelf ? " you" : "");
+    tile.innerHTML =
+      '<div class="placeholder">ожидание видео…</div>' +
+      '<div class="name"></div>';
+    grid.appendChild(tile);
+  }
+  tile.querySelector(".name").textContent = name;
+  return tile;
+}
+
+function removeTile(id) {
+  document.getElementById("tile-" + id)?.remove();
+  const url = remoteUrls.get(id);
+  if (url) { URL.revokeObjectURL(url); remoteUrls.delete(id); }
+}
+
+// ================= Список участников =================
+function addParticipant(id, name) {
+  participants.set(id, name);
+  renderParticipants();
+}
+
+function removeParticipant(id) {
+  participants.delete(id);
+  removeTile(id);
+  renderParticipants();
+}
+
+function renderParticipants() {
+  const box = $("participants");
+  box.innerHTML = "";
+  participants.forEach((name, id) => {
+    const row = document.createElement("div");
+    row.className = "participant";
+    row.innerHTML = '<span class="dot"></span><span class="pname"></span>' +
+                    (id === myId ? '<span class="me">вы</span>' : '');
+    row.querySelector(".pname").textContent = name;
+    box.appendChild(row);
+  });
+  $("pcount").textContent = participants.size;
+}
+
+// ================= Чат =================
+$("send-btn").addEventListener("click", sendChat);
+$("chat-input").addEventListener("keydown", (e) => { if (e.key === "Enter") sendChat(); });
+
+function sendChat() {
+  const input = $("chat-input");
+  const text = input.value.trim();
+  if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: "chat", text }));
+  input.value = "";
+}
+
+function addChatMessage(senderId, text, tsMs) {
+  const name = senderId === myId ? "Вы" : (participants.get(senderId) || ("Участник " + senderId));
+  const time = new Date(Number(tsMs)).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  const box = $("messages");
+  const el = document.createElement("div");
+  el.className = "msg" + (senderId === myId ? " self" : "");
+  el.innerHTML = '<div class="meta"><b></b> · <span></span></div><div class="text"></div>';
+  el.querySelector("b").textContent = name;
+  el.querySelector(".meta span").textContent = time;
+  el.querySelector(".text").textContent = text;
+  box.appendChild(el);
+  box.scrollTop = box.scrollHeight;
+}
+
+// ================= Прочее =================
+function setStatus(t) { $("conn-status").textContent = t; }
+</script>
+</body>
+</html>

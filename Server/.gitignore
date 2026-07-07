@@ -1,0 +1,12 @@
+# Сборка
+/build/
+/docs/
+/.claude/
+
+# Visual Studio
+/.vs/
+*.vcxproj.user
+*.user
+
+# Локальные настройки Claude Code
+.claude/settings.local.json
