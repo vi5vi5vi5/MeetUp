@@ -10,6 +10,9 @@
 Формат сообщений (JSON-типы, бинарный заголовок кадров) описан в
 [`../docs/meetup-server-spec.md`](../docs/meetup-server-spec.md).
 
+TLS этот слой не делает: в проде https/wss терминирует nginx из
+[`../proxy`](../proxy/README.md), сюда трафик приходит уже расшифрованным.
+
 ## Куда расти
 
 - Новые типы WebSocket-сообщений добавляются в `ConferenceServer::onText`:

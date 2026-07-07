@@ -21,3 +21,8 @@ docs/
 # Сам докер-контекст
 Dockerfile
 .dockerignore
+docker-compose.yml
+
+# У прокси свой контекст сборки (proxy/), в образ приложения он не нужен
+proxy/
+tools/

@@ -199,7 +199,13 @@ function doJoin() {
 }
 
 function connect() {
-  ws = new WebSocket(`ws://${location.hostname}:${WS_PORT}`);
+  // Страница по https обязана использовать wss — TLS терминирует nginx,
+  // который проксирует /ws на WS-порт сервера (см. proxy/nginx.conf).
+  // По http (локальная разработка без прокси) коннектимся напрямую на порт.
+  const wsUrl = location.protocol === "https:"
+      ? `wss://${location.host}/ws`
+      : `ws://${location.hostname}:${WS_PORT}`;
+  ws = new WebSocket(wsUrl);
   ws.binaryType = "arraybuffer";
 
   ws.onopen = () => {

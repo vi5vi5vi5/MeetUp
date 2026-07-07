@@ -42,8 +42,9 @@ WORKDIR /app
 COPY --from=build /src/build/MeetUpServer /app/MeetUpServer
 COPY web /app/web
 
-# HTTP-раздача веб-клиента и WebSocket-relay.
-# WS-порт 9000 жёстко зашит в web/index.html — менять маппинг нельзя.
+# HTTP-раздача веб-клиента и WebSocket-relay. Это внутренние порты:
+# наружу их публикует docker-compose через nginx-прокси (https/wss),
+# см. proxy/ и docker-compose.yml.
 EXPOSE 80 9000
 
 # --web-root обязателен: вшитый в бинарь WEB_ROOT_DEFAULT указывает на путь
