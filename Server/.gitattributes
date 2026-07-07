@@ -1,0 +1,4 @@
+# Shell-скрипты всегда с LF: CRLF ломает bash на Linux
+# (интерпретатор видит "bash\r" и падает с "No such file or directory").
+# Держим eol=lf независимо от core.autocrlf на конкретной машине.
+*.sh text eol=lf

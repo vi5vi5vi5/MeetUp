@@ -1,0 +1,23 @@
+# Артефакты сборки
+build/
+out/
+
+# IDE / локальные настройки
+.vs/
+.claude/
+*.user
+
+# Windows-специфичные скрипты и пресеты (в контейнере не нужны,
+# содержат зашитые пути P:\Qt\... — только сбивают cmake)
+build.ps1
+run.ps1
+CMakePresets.json
+CMakeUserPresets.json
+
+# История и документация в образ не кладём
+.git/
+docs/
+
+# Сам докер-контекст
+Dockerfile
+.dockerignore
