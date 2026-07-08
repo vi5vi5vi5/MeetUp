@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MeetUp — Подключение к комнате</title>
+<link rel="stylesheet" href="assets/fonts.css">
+<link rel="stylesheet" href="assets/theme.css">
+<style>
+  html, body { height: 100%; margin: 0; }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-ui);
+    font-size: var(--text-md);
+    line-height: var(--leading-base);
+    transition: background .24s var(--ease);
+  }
+  #root { position: fixed; inset: 0; }
+  a { color: var(--accent-ink); text-decoration: none; }
+  a:hover { opacity: .8; }
+  ::selection { background: var(--accent); color: var(--on-accent); }
+
+  .page { position: absolute; inset: 0; display: flex; flex-direction: column; }
+
+  .topbar { display: flex; align-items: center; gap: 16px; padding: 22px 28px; }
+  .wordmark {
+    font-family: var(--font-label); font-weight: 700; font-size: 18px;
+    letter-spacing: 2px; text-transform: uppercase;
+  }
+  .topbar-actions { display: flex; align-items: center; gap: 14px; }
+  .signin-link {
+    font-family: var(--font-label); font-size: 11px; letter-spacing: 2px;
+    text-transform: uppercase; color: var(--text-muted);
+  }
+  .signin-link:hover { color: var(--accent-ink); opacity: 1; }
+
+  .stagewrap { flex: 1; display: grid; place-items: center; padding: 0 28px 40px; }
+  .stage {
+    display: grid; grid-template-columns: 1.05fr .95fr; gap: 56px;
+    align-items: center; max-width: 900px; width: 100%;
+  }
+
+  .hero-title {
+    margin: 0; font-family: var(--font-display); font-weight: 800;
+    font-size: clamp(38px, 6vw, 58px); line-height: .95; letter-spacing: -1.5px;
+  }
+  .hero-sub {
+    margin-top: 20px; max-width: 340px; color: var(--text-muted);
+    font-size: 15px; line-height: 1.5;
+  }
+  .hero-meta {
+    margin-top: 28px; display: flex; align-items: center; gap: 10px;
+    font-family: var(--font-label); font-size: 11px; letter-spacing: 2px;
+    text-transform: uppercase; color: var(--text-faint);
+  }
+  .hero-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--live); }
+
+  .cardwrap { justify-self: end; width: 100%; max-width: 380px; }
+
+  .divider { display: flex; align-items: center; gap: 12px; margin: 20px 0 16px; }
+  .divider::before, .divider::after {
+    content: ""; flex: 1; height: 1px; background: var(--border);
+  }
+  .divider span {
+    font-family: var(--font-label); font-size: 10px; letter-spacing: 2px;
+    text-transform: uppercase; color: var(--text-faint);
+  }
+
+  .msg { margin-top: 14px; text-align: center; font-size: 12px; }
+
+  /* ---- Mobile ---- */
+  @media (max-width: 760px) {
+    .topbar { padding: 18px 20px; }
+    .stagewrap { padding: 0 20px 28px; align-items: start; }
+    .stage {
+      grid-template-columns: 1fr; gap: 26px; max-width: 420px; min-width: 0;
+      align-content: start; padding-top: 8px;
+    }
+    .hero { text-align: left; }
+    .hero-title { font-size: clamp(32px, 11vw, 44px); min-width: 0; overflow-wrap: anywhere; }
+    .hero-sub { margin-top: 14px; max-width: none; font-size: 14px; }
+    .hero-meta { margin-top: 18px; }
+    .cardwrap { justify-self: stretch; max-width: none; }
+  }
+  @media (max-width: 400px) {
+    .hero-sub { display: none; }
+    .hero-meta { display: none; }
+    .signin-link { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<div id="root"></div>
+<script src="assets/react.js"></script>
+<script src="assets/react-dom.js"></script>
+<script src="assets/babel.js"></script>
+<script src="assets/meetup-ds.js"></script>
+<script src="assets/meetup-common.js"></script>
+<script type="text/babel">
+  const { useState, useEffect } = React;
+  const { Card, Button, Input, Field, IconButton } = window.MeetUpDesignSystem_2584b5;
+
+  // Лобби анонимного входа: без аккаунта, только имя. Пользователи с
+  // аккаунтом получат своё лобби после реализации авторизации (TODO(auth)).
+  function LobbyScreen() {
+    const [theme, setTheme] = useState("dark");
+    const [name, setName] = useState(MeetUp.savedName());
+    const [room, setRoom] = useState("");
+    const [err, setErr] = useState("");
+    const [busy, setBusy] = useState(false);
+
+    useEffect(() => {
+      document.documentElement.setAttribute("data-theme", theme);
+    }, [theme]);
+    const toggle = () => setTheme(t => (t === "dark" ? "light" : "dark"));
+
+    function goToConference(code) {
+      MeetUp.saveName(name.trim());
+      location.href = "conference.html?room=" + encodeURIComponent(code);
+    }
+
+    // Вход по коду: проверяем через API, что комната существует, — иначе
+    // опечатка молча увела бы в пустую «комнату-призрак».
+    async function join() {
+      if (!name.trim()) { setErr("Введите ваше имя."); return; }
+      if (!room.trim()) { setErr("Введите код комнаты."); return; }
+      setErr("");
+      setBusy(true);
+      const resp = await MeetUp.api("GET", "/api/rooms/" + encodeURIComponent(room.trim()));
+      if (resp.ok) { goToConference(room.trim()); return; }
+      setBusy(false);
+      if (resp.status === 404) setErr("Комната не найдена. Проверьте код.");
+      else setErr("Сервер недоступен. Попробуйте позже.");
+    }
+
+    // Новая комната: код генерирует сервер (длинная случайная строка).
+    async function create() {
+      if (!name.trim()) { setErr("Введите ваше имя, чтобы создать трансляцию."); return; }
+      setErr("");
+      setBusy(true);
+      const resp = await MeetUp.api("POST", "/api/rooms");
+      if (resp.ok && resp.body && resp.body.room) { goToConference(resp.body.room); return; }
+      setBusy(false);
+      setErr("Не удалось создать комнату. Попробуйте позже.");
+    }
+
+    return (
+      <div className="page" style={{ background: "var(--bg)", color: "var(--text)", fontFamily: "var(--font-ui)" }}>
+        <div className="topbar">
+          <div className="wordmark">MeetUp</div>
+          <span style={{ flex: 1 }} />
+          <div className="topbar-actions">
+            <a className="signin-link" href="login.html">Войти</a>
+            <IconButton icon={theme === "dark" ? "sun" : "moon"} size="sm"
+                        label="Сменить тему" onClick={toggle} />
+          </div>
+        </div>
+
+        <div className="stagewrap">
+          <div className="stage">
+            <div className="hero">
+              <h1 className="hero-title">
+                Встреча<br />за <span style={{ color: "var(--accent-ink)" }}>один клик</span>
+              </h1>
+              <p className="hero-sub">
+                Без установки и регистрации. Укажите имя, введите код комнаты — и вы в эфире.
+              </p>
+              <div className="hero-meta">
+                <span className="hero-dot" />
+                Открытая видеосвязь
+              </div>
+            </div>
+
+            <div className="cardwrap">
+              <Card elevated width="100%" style={{ boxSizing: "border-box" }}>
+                <Field label="Ваше имя" htmlFor="name">
+                  <Input id="name" value={name} autoComplete="name" placeholder="Анна" maxLength={40}
+                         onChange={(e) => { setName(e.target.value); setErr(""); }} />
+                </Field>
+
+                <Field label="Код комнаты" htmlFor="room" hint="Спросите код у организатора"
+                       style={{ marginTop: 18 }}>
+                  <Input id="room" value={room} autoComplete="off" placeholder="Например: fRt7…" maxLength={64}
+                         onChange={(e) => { setRoom(e.target.value); setErr(""); }}
+                         onKeyDown={(e) => e.key === "Enter" && join()} />
+                </Field>
+
+                <Button variant="primary" block iconRight="arrow-right" disabled={busy}
+                        style={{ marginTop: 22 }} onClick={join}>
+                  Войти в конференцию
+                </Button>
+
+                <div className="divider"><span>или</span></div>
+
+                <Button variant="ghost" block icon="plus" disabled={busy} onClick={create}>
+                  Создать трансляцию
+                </Button>
+
+                <div className="msg" style={{ color: err ? "var(--danger)" : "var(--text-faint)" }}>
+                  {err || "Код новой комнаты сгенерирует сервер."}
+                </div>
+              </Card>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  ReactDOM.createRoot(document.getElementById("root")).render(<LobbyScreen />);
+</script>
+
+</body>
+</html>

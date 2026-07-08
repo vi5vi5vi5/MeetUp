@@ -6,7 +6,8 @@
 class ConferenceRoom;
 
 // Реестр комнат: код -> комната. Владеет комнатами (создаёт и удаляет).
-// На этом этапе комнаты живут только в памяти, без обращения к БД.
+// Коды комнат генерирует только сервер (см. createRoom) — join возможен лишь
+// в существующую комнату. Комнаты живут в памяти, без обращения к БД.
 class RoomRegistry
 {
 public:
@@ -16,15 +17,21 @@ public:
     RoomRegistry(const RoomRegistry &) = delete;
     RoomRegistry &operator=(const RoomRegistry &) = delete;
 
-    // Найти комнату по коду или создать новую, если её ещё нет.
-    ConferenceRoom *getOrCreate(const QString &code);
+    // Создать комнату со случайным уникальным кодом.
+    ConferenceRoom *createRoom();
+
     ConferenceRoom *find(const QString &code) const;
 
-    // Удалить комнату, если в ней не осталось участников.
-    void removeIfEmpty(ConferenceRoom *room);
+    // Удалить комнаты, простоявшие пустыми дольше ttlMs: брошенные после
+    // создания и те, откуда все вышли. Пауза до удаления даёт пережить
+    // обрыв связи последнего участника без потери комнаты и истории чата.
+    // Возвращает число удалённых комнат.
+    int purgeIdle(qint64 ttlMs);
 
     int roomCount() const { return int(m_rooms.size()); }
 
 private:
+    static QString generateCode();
+
     QHash<QString, ConferenceRoom *> m_rooms;
 };

@@ -1,0 +1,169 @@
+/* MeetUp — Color tokens · "Prism Minimal"
+   Dark is the default (:root); light overrides under [data-theme="light"].
+   Video tiles are MONOCHROME: dark greys in dark, light greys in light —
+   the lime accent is the only chroma in the system. */
+
+:root {
+  /* ---- Surfaces (dark, default) ---- */
+  --bg:          #0e0e10;
+  --surface:     #161619;   /* cards, panels, controls */
+  --surface-2:   #1e1e22;   /* inset: inputs, chat bubbles, hover */
+  --surface-3:   #26262b;   /* raised / pressed */
+  --border:      #26262b;   /* hairline */
+  --border-strong: #33333a; /* emphasized hairline */
+
+  /* ---- Text ---- */
+  --text:        #f2f2f4;
+  --text-muted:  #9a9aa2;
+  --text-faint:  #6a6a72;
+
+  /* ---- Accent (acid lime) ---- */
+  --accent:      #c6ff3d;   /* fill: primary buttons, active states */
+  --accent-ink:  #c6ff3d;   /* accent used as TEXT / icon colour */
+  --on-accent:   #10120a;   /* text/icon sitting on an accent fill */
+
+  /* ---- Semantic ---- */
+  --danger:      #ff5470;
+  --on-danger:   #ffffff;
+  --live:        #c6ff3d;   /* "в эфире" indicator */
+
+  /* ---- Monochrome tile ramps ---- */
+  --tile-from:      #2b2b32;
+  --tile-to:        #17171b;
+  --tile-self-from: #3a3a42; /* your own tile — slightly lighter */
+  --tile-self-to:   #17171b;
+
+  /* ---- Elevation ---- */
+  --shadow-card: 0 12px 34px rgba(0, 0, 0, .5);
+  --shadow-pop:  0 8px 24px rgba(0, 0, 0, .45);
+
+  /* ---- Scrims ---- */
+  --scrim-chip:  rgba(0, 0, 0, .5);
+}
+
+:root[data-theme="light"] {
+  /* ---- Surfaces (warm off-white) ---- */
+  --bg:          #f4f3ee;
+  --surface:     #ffffff;
+  --surface-2:   #eceadf;
+  --surface-3:   #e4e2d8;
+  --border:      #e4e2d8;
+  --border-strong: #dedcd2;
+
+  /* ---- Text ---- */
+  --text:        #16161a;
+  --text-muted:  #8a8a80;
+  --text-faint:  #a8a89e;
+
+  /* ---- Accent ---- */
+  --accent:      #c6ff3d;   /* bright lime fill stays vivid */
+  --accent-ink:  #5b8c00;   /* deep olive-lime for legible text on white */
+  --on-accent:   #16161a;
+
+  /* ---- Semantic ---- */
+  --danger:      #e0225b;
+  --on-danger:   #ffffff;
+  --live:        #7ab80a;
+
+  /* ---- Monochrome tile ramps (light greys) ---- */
+  --tile-from:      #f4f2ea;
+  --tile-to:        #e7e5da;
+  --tile-self-from: #ffffff;
+  --tile-self-to:   #eceadf;
+
+  /* ---- Elevation ---- */
+  --shadow-card: 0 12px 34px rgba(60, 50, 20, .12);
+  --shadow-pop:  0 8px 24px rgba(60, 50, 20, .10);
+
+  /* ---- Scrims ---- */
+  --scrim-chip:  rgba(255, 255, 255, .85);
+}
+/* MeetUp — Typography tokens · "Prism Minimal"
+   Display: Unbounded (geometric, strong Cyrillic) for big headings.
+   UI/body: Manrope. Uppercase micro-labels: Space Grotesk (Latin only —
+   use for logo & Latin labels, never for Cyrillic runs).
+   NOTE: these are Google Fonts, a deliberate NEW brand direction — the
+   original client used the OS system stack (see readme.md). */
+
+:root {
+  /* ---- Families ---- */
+  --font-display: "Unbounded", "Manrope", system-ui, sans-serif;
+  --font-ui:      "Manrope", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-label:   "Space Grotesk", ui-monospace, monospace;
+  --font-mono:    ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* ---- Sizes ---- */
+  --text-display: 34px;  /* stage / hero headline */
+  --text-2xl:     26px;  /* section headline */
+  --text-xl:      20px;  /* card title */
+  --text-lg:      16px;
+  --text-md:      14px;  /* body / base */
+  --text-sm:      13px;  /* participant name, msg text */
+  --text-xs:      12px;  /* labels, meta */
+  --text-2xs:     11px;  /* timestamp, tag */
+
+  /* ---- Weights ---- */
+  --weight-regular:   400;
+  --weight-medium:    500;
+  --weight-semibold:  600;
+  --weight-bold:      700;
+  --weight-extrabold: 800;
+
+  /* ---- Line height ---- */
+  --leading-tight: 0.98;  /* display */
+  --leading-snug:  1.2;
+  --leading-base:  1.5;   /* body */
+
+  /* ---- Letter spacing ---- */
+  --tracking-display: -1px;   /* tight display */
+  --tracking-label:   2px;    /* uppercase micro-labels */
+}
+/* MeetUp — Spacing tokens · loose 2px-based rhythm */
+
+:root {
+  --space-1:  4px;
+  --space-2:  6px;
+  --space-3:  8px;
+  --space-4:  10px;
+  --space-5:  12px;
+  --space-6:  14px;
+  --space-7:  16px;
+  --space-8:  18px;
+  --space-9:  20px;
+  --space-10: 24px;
+  --space-12: 32px;
+  --space-16: 48px;
+
+  /* ---- Semantic ---- */
+  --gap-grid:   10px;  /* video grid gap */
+  --gap-inline: 8px;   /* control dock / row gaps */
+  --pad-card:   24px;
+  --pad-panel:  20px;
+  --pad-stage:  26px;
+  --pad-input:  12px 14px;
+  --pad-button: 11px 18px;
+}
+/* MeetUp — Radii & motion · "Prism Minimal"
+   Moderate rounding (12–16px). Elevation/shadow tokens are theme-scoped
+   in colors.css (--shadow-card / --shadow-pop). */
+
+:root {
+  /* ---- Corner radii ---- */
+  --radius-card:  16px;   /* cards, lobby panel */
+  --radius-lg:    14px;   /* video tiles, dock */
+  --radius-md:    12px;   /* buttons, inputs, icon buttons */
+  --radius-sm:    10px;   /* chat bubbles, rows */
+  --radius-xs:    7px;    /* tile name chip, tags */
+  --radius-pill:  999px;  /* status pills */
+  --radius-full:  50%;    /* dots, round avatars */
+
+  /* ---- Motion ---- */
+  --ease:        cubic-bezier(.2, .7, .3, 1); /* @kind other */
+  --dur-fast:    .15s;    /* @kind other */
+  --dur-med:     .24s;    /* @kind other */
+  --transition:  all .15s cubic-bezier(.2, .7, .3, 1); /* @kind other */
+
+  /* ---- Effects ---- */
+  /* frosted name chip */
+  --blur-chip:   blur(8px); /* @kind other */
+}

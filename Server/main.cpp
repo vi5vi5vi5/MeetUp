@@ -2,6 +2,7 @@
 #include <QCommandLineParser>
 #include <QDir>
 
+#include "core/RoomRegistry.h"
 #include "network/ConferenceServer.h"
 #include "network/HttpFileServer.h"
 
@@ -49,8 +50,12 @@ int main(int argc, char *argv[])
     if (webRoot.isEmpty())
         webRoot = QDir(app.applicationDirPath()).filePath(QStringLiteral("web"));
 
-    ConferenceServer conference(wsPort);
-    HttpFileServer http(httpPort, webRoot);
+    // Общий реестр комнат: HTTP API создаёт комнаты, WebSocket-relay
+    // подключает в них участников.
+    RoomRegistry registry;
+
+    ConferenceServer conference(wsPort, &registry);
+    HttpFileServer http(httpPort, webRoot, &registry);
 
     if (!conference.isListening() || !http.isListening())
         return 1;

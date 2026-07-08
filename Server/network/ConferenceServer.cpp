@@ -1,6 +1,7 @@
 #include "network/ConferenceServer.h"
 #include "core/ClientSession.h"
 #include "core/ConferenceRoom.h"
+#include "core/RoomRegistry.h"
 
 #include <QWebSocketServer>
 #include <QWebSocket>
@@ -8,10 +9,11 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QDateTime>
+#include <QTimer>
 #include <QDebug>
 
-ConferenceServer::ConferenceServer(quint16 port, QObject *parent)
-    : QObject(parent), m_port(port)
+ConferenceServer::ConferenceServer(quint16 port, RoomRegistry *registry, QObject *parent)
+    : QObject(parent), m_registry(registry), m_port(port)
 {
     m_server = new QWebSocketServer(QStringLiteral("MeetUp"),
                                     QWebSocketServer::NonSecureMode, this);
@@ -24,6 +26,10 @@ ConferenceServer::ConferenceServer(quint16 port, QObject *parent)
         qCritical().noquote() << QStringLiteral("Failed to listen on port %1: %2")
                                      .arg(port).arg(m_server->errorString());
     }
+
+    auto *purgeTimer = new QTimer(this);
+    connect(purgeTimer, &QTimer::timeout, this, &ConferenceServer::purgeIdleRooms);
+    purgeTimer->start(kPurgeIntervalMs);
 }
 
 ConferenceServer::~ConferenceServer()
@@ -69,6 +75,8 @@ void ConferenceServer::onText(ClientSession *session, const QString &text)
         handleJoin(session, msg);
     else if (type == QLatin1String("chat"))
         handleChat(session, msg);
+    else if (type == QLatin1String("state"))
+        handleState(session, msg);
     else
         sendError(session, QStringLiteral("unknown_type"));
 }
@@ -76,7 +84,7 @@ void ConferenceServer::onText(ClientSession *session, const QString &text)
 void ConferenceServer::handleJoin(ClientSession *session, const QJsonObject &msg)
 {
     const QString roomCode = msg.value(QStringLiteral("room")).toString().trimmed();
-    const QString name = msg.value(QStringLiteral("name")).toString().trimmed();
+    const QString name = msg.value(QStringLiteral("name")).toString().trimmed().left(64);
 
     if (roomCode.isEmpty() || name.isEmpty()) {
         sendError(session, QStringLiteral("invalid_join"));
@@ -87,15 +95,23 @@ void ConferenceServer::handleJoin(ClientSession *session, const QJsonObject &msg
         return;
     }
 
-    ConferenceRoom *room = m_registry.getOrCreate(roomCode);
+    // Комнату создаёт только HTTP API — опечатка в коде не плодит комнат-призраков.
+    ConferenceRoom *room = m_registry->find(roomCode);
+    if (!room) {
+        sendError(session, QStringLiteral("room_not_found"));
+        return;
+    }
+
     session->setId(m_nextId++);
     session->setName(name);
 
-    // join_ok — только вошедшему, со списком уже присутствующих участников.
+    // join_ok — только вошедшему: список присутствующих и история чата,
+    // чтобы новый участник видел разговор, который шёл до него.
     session->sendJson(QJsonObject{
         {"type", "join_ok"},
         {"sender_id", qint64(session->id())},
         {"participants", room->participantsJson()},
+        {"history", room->historyJson()},
     });
 
     // Теперь добавляем в комнату и уведомляем остальных.
@@ -106,6 +122,8 @@ void ConferenceServer::handleJoin(ClientSession *session, const QJsonObject &msg
         {"type", "participant_joined"},
         {"id", qint64(session->id())},
         {"name", session->name()},
+        {"mic", session->micOn()},
+        {"cam", session->camOn()},
     }, session);
 
     qInfo().noquote() << QStringLiteral("join: %1 (id=%2) -> room '%3', participants: %4")
@@ -121,17 +139,43 @@ void ConferenceServer::handleChat(ClientSession *session, const QJsonObject &msg
         return;
     }
 
-    const QString text = msg.value(QStringLiteral("text")).toString();
+    const QString text = msg.value(QStringLiteral("text")).toString().left(2000);
     if (text.isEmpty())
         return;
 
-    // Рассылаем всем, включая отправителя — единая лента у всех.
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    room->appendChat(ChatEntry{session->id(), session->name(), text, now});
+
+    // Рассылаем всем, включая отправителя — единая лента у всех. Имя дублируем
+    // в сообщении: получатель мог зайти позже отправителя и не знать его id.
     room->broadcastJson(QJsonObject{
         {"type", "chat"},
         {"sender_id", qint64(session->id())},
+        {"sender_name", session->name()},
         {"text", text},
-        {"timestamp_ms", qint64(QDateTime::currentMSecsSinceEpoch())},
+        {"timestamp_ms", now},
     });
+}
+
+void ConferenceServer::handleState(ClientSession *session, const QJsonObject &msg)
+{
+    ConferenceRoom *room = session->room();
+    if (!room) {
+        sendError(session, QStringLiteral("not_in_room"));
+        return;
+    }
+
+    if (msg.contains(QStringLiteral("mic")))
+        session->setMicOn(msg.value(QStringLiteral("mic")).toBool(session->micOn()));
+    if (msg.contains(QStringLiteral("cam")))
+        session->setCamOn(msg.value(QStringLiteral("cam")).toBool(session->camOn()));
+
+    room->broadcastJson(QJsonObject{
+        {"type", "participant_state"},
+        {"id", qint64(session->id())},
+        {"mic", session->micOn()},
+        {"cam", session->camOn()},
+    }, session);
 }
 
 void ConferenceServer::onBinary(ClientSession *session, const QByteArray &data)
@@ -168,13 +212,21 @@ void ConferenceServer::onDisconnected(ClientSession *session)
             {"type", "participant_left"},
             {"id", qint64(session->id())},
         });
-        m_registry.removeIfEmpty(room);
+        // Опустевшую комнату не удаляем сразу: participants могли отвалиться
+        // по сети и вернуться. Брошенные комнаты собирает purgeIdleRooms().
     }
 
     m_sessions.remove(session);
     session->deleteLater();
 
     qInfo() << "Client disconnected, active sessions:" << m_sessions.size();
+}
+
+void ConferenceServer::purgeIdleRooms()
+{
+    const int removed = m_registry->purgeIdle(kRoomIdleTtlMs);
+    if (removed > 0)
+        qInfo() << "Purged idle rooms:" << removed << "left:" << m_registry->roomCount();
 }
 
 void ConferenceServer::sendError(ClientSession *session, const QString &reason)

@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MeetUp — Вход</title>
+<link rel="stylesheet" href="assets/fonts.css">
+<link rel="stylesheet" href="assets/theme.css">
+<style>
+  html, body { height: 100%; margin: 0; }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-ui);
+    font-size: var(--text-md);
+    line-height: var(--leading-base);
+    transition: background .24s var(--ease);
+  }
+  #root { position: fixed; inset: 0; }
+  a { color: var(--accent-ink); text-decoration: none; }
+  a:hover { opacity: .8; }
+  ::selection { background: var(--accent); color: var(--on-accent); }
+
+  .page { position: absolute; inset: 0; display: flex; flex-direction: column; }
+
+  .topbar { display: flex; align-items: center; padding: 22px 28px; }
+  .wordmark {
+    font-family: var(--font-label); font-weight: 700; font-size: 18px;
+    letter-spacing: 2px; text-transform: uppercase;
+  }
+
+  .stagewrap { flex: 1; display: grid; place-items: center; padding: 0 28px 40px; }
+  .stage {
+    display: grid; grid-template-columns: 1.05fr .95fr; gap: 56px;
+    align-items: center; max-width: 900px; width: 100%;
+  }
+
+  .hero-title {
+    margin: 0; font-family: var(--font-display); font-weight: 800;
+    font-size: clamp(38px, 6vw, 58px); line-height: .95; letter-spacing: -1.5px;
+  }
+  .hero-sub {
+    margin-top: 20px; max-width: 340px; color: var(--text-muted);
+    font-size: 15px; line-height: 1.5;
+  }
+  .hero-meta {
+    margin-top: 28px; display: flex; align-items: center; gap: 10px;
+    font-family: var(--font-label); font-size: 11px; letter-spacing: 2px;
+    text-transform: uppercase; color: var(--text-faint);
+  }
+  .hero-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--live); }
+
+  .cardwrap { justify-self: end; width: 100%; max-width: 380px; }
+
+  .row-between { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .forgot { font-size: 12px; color: var(--accent-ink); }
+
+  .divider { display: flex; align-items: center; gap: 12px; margin: 20px 0 16px; }
+  .divider::before, .divider::after {
+    content: ""; flex: 1; height: 1px; background: var(--border);
+  }
+  .divider span {
+    font-family: var(--font-label); font-size: 10px; letter-spacing: 2px;
+    text-transform: uppercase; color: var(--text-faint);
+  }
+
+  .msg { margin-top: 14px; text-align: center; font-size: 12px; }
+
+  /* ---- Mobile ---- */
+  @media (max-width: 760px) {
+    .topbar { padding: 18px 20px; }
+    .stagewrap { padding: 0 20px 28px; align-items: start; }
+    .stage {
+      grid-template-columns: 1fr; gap: 26px; max-width: 420px; min-width: 0;
+      align-content: start; padding-top: 8px;
+    }
+    .hero { text-align: left; }
+    .hero-title { font-size: clamp(32px, 11vw, 44px); min-width: 0; overflow-wrap: anywhere; }
+    .hero-sub { margin-top: 14px; max-width: none; font-size: 14px; }
+    .hero-meta { margin-top: 18px; }
+    .cardwrap { justify-self: stretch; max-width: none; }
+  }
+  @media (max-width: 400px) {
+    .hero-sub { display: none; }
+    .hero-meta { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<div id="root"></div>
+<script src="assets/react.js"></script>
+<script src="assets/react-dom.js"></script>
+<script src="assets/babel.js"></script>
+<script src="assets/meetup-ds.js"></script>
+<script src="assets/meetup-common.js"></script>
+<script type="text/babel">
+  const { useState, useEffect } = React;
+  const { Card, Button, Input, Field, IconButton } = window.MeetUpDesignSystem_2584b5;
+
+  function LoginScreen() {
+    const [theme, setTheme] = useState("dark");
+    const [login, setLogin] = useState("");
+    const [pass, setPass] = useState("");
+    const [err, setErr] = useState("");
+    const [busy, setBusy] = useState(false);
+
+    useEffect(() => {
+      document.documentElement.setAttribute("data-theme", theme);
+    }, [theme]);
+    const toggle = () => setTheme(t => (t === "dark" ? "light" : "dark"));
+
+    // Вход по аккаунту — заглушка: сервер отвечает 501 not_implemented.
+    // TODO(auth): при 200 сохранить сессию и перейти в лобби пользователя
+    // (не anon_lobby — оно только для входа без аккаунта).
+    async function submit() {
+      if (!login.trim() || !pass.trim()) { setErr("Введите логин и пароль."); return; }
+      setErr("");
+      setBusy(true);
+      const resp = await MeetUp.authLogin(login.trim(), pass);
+      setBusy(false);
+      if (resp.status === 501) setErr("Вход по аккаунту пока недоступен — войдите без аккаунта.");
+      else if (resp.status === 0) setErr("Сервер недоступен. Попробуйте позже.");
+      else setErr("Неожиданный ответ сервера (" + resp.status + ").");
+    }
+
+    // Регистрация — такая же заглушка. TODO(auth): форма регистрации.
+    async function register() {
+      setErr("");
+      setBusy(true);
+      const resp = await MeetUp.authRegister(login.trim(), pass);
+      setBusy(false);
+      if (resp.status === 501) setErr("Регистрация пока недоступна — войдите без аккаунта.");
+      else if (resp.status === 0) setErr("Сервер недоступен. Попробуйте позже.");
+      else setErr("Неожиданный ответ сервера (" + resp.status + ").");
+    }
+
+    // Анонимный вход: логины и пароли не нужны, идём сразу в лобби.
+    function anonymous() {
+      location.href = "anon_lobby.html";
+    }
+
+    return (
+      <div className="page" style={{ background: "var(--bg)", color: "var(--text)", fontFamily: "var(--font-ui)" }}>
+        <div className="topbar">
+          <div className="wordmark">MeetUp</div>
+          <span style={{ flex: 1 }} />
+          <IconButton icon={theme === "dark" ? "sun" : "moon"} size="sm"
+                      label="Сменить тему" onClick={toggle} />
+        </div>
+
+        <div className="stagewrap">
+          <div className="stage">
+            <div className="hero">
+              <h1 className="hero-title">
+                С возвращением<br />в <span style={{ color: "var(--accent-ink)" }}>эфир</span>
+              </h1>
+              <p className="hero-sub">
+                Войдите в аккаунт, чтобы продолжить встречи, историю комнат и контакты.
+              </p>
+              <div className="hero-meta">
+                <span className="hero-dot" />
+                Открытая видеосвязь без установки
+              </div>
+            </div>
+
+            <div className="cardwrap">
+              <Card elevated width="100%">
+                <Field label="Логин или email" htmlFor="login">
+                  <Input id="login" value={login} autoComplete="username" maxLength={64}
+                         placeholder="anna@meetup.dev"
+                         onChange={(e) => { setLogin(e.target.value); setErr(""); }} />
+                </Field>
+
+                <Field label="Пароль" htmlFor="pass" style={{ marginTop: 18 }}>
+                  <Input id="pass" type="password" value={pass} autoComplete="current-password"
+                         placeholder="••••••••" maxLength={128}
+                         onChange={(e) => { setPass(e.target.value); setErr(""); }}
+                         onKeyDown={(e) => e.key === "Enter" && submit()} />
+                </Field>
+
+                <div style={{ marginTop: 10, textAlign: "right" }}>
+                  <a href="#" className="forgot"
+                     onClick={(e) => { e.preventDefault(); setErr("Восстановление пароля появится вместе с аккаунтами."); }}>
+                    Забыли пароль?
+                  </a>
+                </div>
+
+                <Button variant="primary" block iconRight="arrow-right" disabled={busy}
+                        style={{ marginTop: 20 }} onClick={submit}>
+                  Войти
+                </Button>
+                <Button variant="ghost" block icon="plus" style={{ marginTop: 10 }} disabled={busy}
+                        onClick={register}>
+                  Создать аккаунт
+                </Button>
+
+                <div className="divider"><span>или</span></div>
+
+                <Button variant="secondary" block icon="arrow-right" onClick={anonymous}>
+                  Войти без аккаунта
+                </Button>
+
+                <div className="msg" style={{ color: err ? "var(--danger)" : "var(--text-faint)" }}>
+                  {err || "Аккаунты в разработке. Анонимный вход уже работает."}
+                </div>
+              </Card>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  ReactDOM.createRoot(document.getElementById("root")).render(<LoginScreen />);
+</script>
+
+</body>
+</html>

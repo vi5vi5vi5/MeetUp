@@ -28,6 +28,13 @@ public:
     ConferenceRoom *room() const { return m_room; }
     void setRoom(ConferenceRoom *room) { m_room = room; }
 
+    // Состояние медиа участника (сообщение "state" от клиента); раздаётся
+    // остальным, чтобы вместо пустой плитки показывать заглушку и mic-off.
+    bool micOn() const { return m_micOn; }
+    void setMicOn(bool on) { m_micOn = on; }
+    bool camOn() const { return m_camOn; }
+    void setCamOn(bool on) { m_camOn = on; }
+
     // Отправка сообщений этому клиенту.
     void sendJson(const QJsonObject &obj);
     void sendBinary(const QByteArray &data);
@@ -47,4 +54,6 @@ private:
     quint32 m_id = 0;
     QString m_name;
     ConferenceRoom *m_room = nullptr;   // nullptr до join
+    bool m_micOn = true;
+    bool m_camOn = true;
 };

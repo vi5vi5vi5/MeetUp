@@ -1,0 +1,1018 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MeetUp — Конференция</title>
+<link rel="stylesheet" href="assets/fonts.css">
+<link rel="stylesheet" href="assets/theme.css">
+<style>
+  html, body { height: 100%; margin: 0; }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text); font-family: var(--font-ui);
+    font-size: var(--text-md); line-height: var(--leading-base);
+    transition: background .24s var(--ease);
+  }
+  #root { position: fixed; inset: 0; }
+  a { color: var(--accent-ink); text-decoration: none; }
+  a:hover { opacity: .8; }
+  ::selection { background: var(--accent); color: var(--on-accent); }
+
+  .conf { position: absolute; inset: 0; display: grid; grid-template-columns: 1fr 340px; }
+  .stage { display: flex; flex-direction: column; min-width: 0; position: relative; }
+
+  .confbar { display: flex; align-items: center; gap: 12px; padding: 20px 26px; flex-wrap: wrap; }
+  .conf-mark {
+    font-family: var(--font-label); font-weight: 700; font-size: 15px;
+    letter-spacing: 2px; text-transform: uppercase; color: var(--text-muted);
+  }
+  .conf-title { margin: 0; font-family: var(--font-display); font-weight: 700; font-size: 24px; letter-spacing: -.8px; }
+
+  .gridwrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .grid {
+    flex: 1; min-height: 0; display: grid; gap: var(--gap-grid);
+    grid-template-columns: 2fr 1fr; grid-template-rows: 1fr 1fr; padding: 4px 26px 128px;
+  }
+
+  /* видео/кадры внутри плитки */
+  .tile-media { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+  .mirror { transform: scaleX(-1); }
+
+  /* пагинация плиток: стрелки по краям + точки над доком */
+  .pager-dots {
+    position: absolute; left: 50%; transform: translateX(-50%); bottom: 108px;
+    display: flex; gap: 8px; z-index: 30;
+  }
+  .pager-dot {
+    width: 8px; height: 8px; border-radius: var(--radius-pill); border: none; padding: 0;
+    background: var(--border-strong); cursor: pointer; transition: var(--transition);
+  }
+  .pager-dot.on { background: var(--accent); width: 22px; }
+
+  .dock { position: absolute; left: 50%; bottom: 26px; transform: translateX(-50%); max-width: calc(100% - 32px); }
+
+  /* поповер «поделиться ссылкой» */
+  .share-scrim { position: fixed; inset: 0; z-index: 70; background: transparent; }
+  .share-pop { position: absolute; top: 72px; right: 26px; z-index: 80; width: 360px; max-width: calc(100vw - 32px); }
+  .share-label {
+    font-family: var(--font-label); font-weight: 700; font-size: 11px;
+    letter-spacing: 2px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 10px;
+  }
+  .share-hint { margin-top: 12px; font-size: var(--text-xs); color: var(--text-faint); }
+
+  /* оверлеи: гейт имени (вход по ссылке) и ошибка */
+  .overlay { position: absolute; inset: 0; z-index: 90; display: grid; place-items: center; background: var(--bg); padding: 20px; }
+  .overlay-card { width: 100%; max-width: 400px; }
+  .overlay-title { margin: 0 0 6px; font-family: var(--font-display); font-weight: 700; font-size: 24px; letter-spacing: -.8px; }
+  .overlay-sub { margin: 0 0 20px; color: var(--text-muted); font-size: var(--text-sm); overflow-wrap: anywhere; }
+
+  .side {
+    border-left: 1px solid var(--border); background: var(--surface);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  .side-head { display: none; align-items: center; justify-content: space-between; padding: 14px 16px 0; }
+  .tabs { display: flex; gap: 4px; padding: 16px 16px 0; }
+  .tab {
+    flex: 1; padding: 10px; border-radius: var(--radius-md); cursor: pointer;
+    font-family: var(--font-ui); font-weight: 700; font-size: 13px; transition: var(--transition);
+  }
+  .chatscroll { flex: 1; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+  .peoplescroll { flex: 1; overflow: auto; padding: 12px 8px; }
+  .composer { display: flex; gap: 8px; padding: 14px; border-top: 1px solid var(--border); }
+
+  .mobile-only { display: none !important; }
+
+  .chat-fab {
+    display: none; position: absolute; right: 20px; bottom: 96px; z-index: 40;
+    align-items: center; gap: 8px; padding: 12px 18px;
+    border: 1px solid transparent; border-radius: var(--radius-pill);
+    background: var(--accent); color: var(--on-accent);
+    font-family: var(--font-ui); font-weight: 700; font-size: 14px; cursor: pointer;
+    box-shadow: var(--shadow-pop);
+  }
+  .chat-fab .badge-n {
+    min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+    background: var(--on-accent); color: var(--accent-ink);
+    font-size: 11px; font-weight: 800; display: inline-flex; align-items: center; justify-content: center;
+  }
+
+  /* ---- Mobile ---- */
+  @media (max-width: 820px) {
+    .conf { grid-template-columns: 1fr; }
+    .confbar { padding: 14px 16px; gap: 10px; }
+    .conf-title { font-size: 19px; }
+    .grid { padding: 4px 16px 132px; }
+    .dock { bottom: 20px; }
+    .pager-dots { bottom: 102px; }
+    .share-pop { right: 16px; top: 64px; }
+    .side {
+      position: fixed; inset: 0; z-index: 60; border-left: none;
+      transform: translateX(100%); transition: transform .2s var(--ease);
+    }
+    .side.open { transform: none; }
+    .side-head { display: flex; }
+    .tabs { padding: 8px 16px 0; }
+    .mobile-only { display: inline-flex !important; }
+    .chat-fab { display: inline-flex; }
+  }
+</style>
+</head>
+<body>
+
+<div id="root"></div>
+<script src="assets/react.js"></script>
+<script src="assets/react-dom.js"></script>
+<script src="assets/babel.js"></script>
+<script src="assets/meetup-ds.js"></script>
+<script src="assets/meetup-common.js"></script>
+<script type="text/babel">
+  const { useState, useRef, useEffect } = React;
+  const { Badge, Icon, IconButton, Input, Field, Button, Card, VideoTile, ParticipantRow, ChatMessage, ControlDock } =
+    window.MeetUpDesignSystem_2584b5;
+
+  // ---- Протокол (см. docs/meetup-server-spec.md) ----
+  const MSG_VIDEO = 1;
+  const MSG_AUDIO = 2;
+  const AUDIO_RATE = 16000;             // PCM 16 кГц / 16 бит / моно
+
+  const roomCode = new URLSearchParams(location.search).get("room") || "";
+
+  function fmtTime(ms) {
+    return new Date(Number(ms)).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  }
+
+  // [type:1][timestamp_ms:8 LE][payload] — заголовок клиента.
+  function packMedia(type, payloadU8) {
+    const out = new Uint8Array(9 + payloadU8.length);
+    const dv = new DataView(out.buffer);
+    dv.setUint8(0, type);
+    dv.setBigUint64(1, BigInt(Date.now()), true);
+    out.set(payloadU8, 9);
+    return out.buffer;
+  }
+
+  // Понижение частоты до 16 кГц усреднением (box-фильтр) + перевод в Int16.
+  function downsample(f32, fromRate) {
+    const ratio = fromRate / AUDIO_RATE;
+    const outLen = Math.floor(f32.length / ratio);
+    const out = new Int16Array(outLen);
+    for (let i = 0; i < outLen; i++) {
+      const start = Math.floor(i * ratio);
+      const end = Math.min(f32.length, Math.max(start + 1, Math.floor((i + 1) * ratio)));
+      let sum = 0;
+      for (let j = start; j < end; j++) sum += f32[j];
+      const v = Math.max(-1, Math.min(1, sum / (end - start)));
+      out[i] = v < 0 ? v * 0x8000 : v * 0x7FFF;
+    }
+    return out;
+  }
+
+  function ConferenceScreen() {
+    const savedName = MeetUp.savedName();
+
+    // ---- UI-состояние ----
+    const [theme, setTheme] = useState("dark");
+    const [phase, setPhase] = useState(savedName ? "connecting" : "gate"); // gate|connecting|live|error
+    const [errText, setErrText] = useState("");
+    const [gateName, setGateName] = useState("");
+    const [myId, setMyId] = useState(null);
+    const [peers, setPeers] = useState([]);          // {id, name, mic, cam}
+    const [messages, setMessages] = useState([]);    // {key, author, time, text, self}
+    const [unread, setUnread] = useState(0);
+    const [draft, setDraft] = useState("");
+    const [mic, setMic] = useState(true);
+    const [cam, setCam] = useState(true);
+    const [sharing, setSharing] = useState(false);
+    const [tab, setTab] = useState("chat");
+    const [panelOpen, setPanelOpen] = useState(false);
+    const [isMobile, setIsMobile] = useState(false);
+    const [page, setPage] = useState(0);
+    const [hasFrame, setHasFrame] = useState(() => new Set());
+    const [speaking, setSpeaking] = useState(() => new Set());
+    const [shareOpen, setShareOpen] = useState(false);
+    const [copied, setCopied] = useState(false);
+    const [elapsed, setElapsed] = useState("00:00");
+    const [reconnecting, setReconnecting] = useState(false);
+
+    const msgRef = useRef(null);
+    const selfVideoRef = useRef(null);
+    const touchX = useRef(null);
+
+    // Зеркало актуального состояния для обработчиков вне рендера
+    // (наполняется эффектом ниже по файлу, после вычисления pages).
+    const stateRef = useRef({});
+
+    // Имя участника (подтверждается на гейте или берётся из sessionStorage).
+    const nameRef = useRef(savedName);
+
+    // ---- Сеть и медиа (императивная часть, живёт в ref) ----
+    const mediaRef = useRef(null);
+    if (mediaRef.current === null) {
+      mediaRef.current = {
+        ws: null, myId: null, manualClose: false, fatal: false, attempts: 0,
+        camStream: null, micStream: null, displayStream: null,
+        audioCtx: null, masterGain: null, micSrcNode: null, procNode: null,
+        captureVideo: null, canvas: null, captureTimer: 0,
+        remoteImgs: new Map(), remoteUrls: new Map(), lastFrameAt: new Map(),
+        imgRefCbs: new Map(), players: new Map(), speakingUntil: new Map(),
+        mediaStarted: false, joinedAt: 0,
+      };
+    }
+    const M = mediaRef.current;
+
+    useEffect(() => { document.documentElement.setAttribute("data-theme", theme); }, [theme]);
+    const toggleTheme = () => setTheme(t => (t === "dark" ? "light" : "dark"));
+
+    // ================= Подключение =================
+
+    function openSocket() {
+      const ws = new WebSocket(MeetUp.wsUrl());
+      ws.binaryType = "arraybuffer";
+      M.ws = ws;
+      ws.onopen = () => ws.send(JSON.stringify({ type: "join", room: roomCode, name: nameRef.current }));
+      ws.onmessage = onWsMessage;
+      ws.onclose = onWsClose;
+    }
+
+    function fatal(text) {
+      M.fatal = true;
+      try { if (M.ws) M.ws.close(); } catch (e) {}
+      setErrText(text);
+      setPhase("error");
+    }
+
+    function onWsClose() {
+      if (M.manualClose || M.fatal) return;
+      M.attempts += 1;
+      if (M.attempts > 8) {
+        fatal("Соединение с сервером потеряно. Проверьте сеть и попробуйте ещё раз.");
+        return;
+      }
+      setReconnecting(true);
+      setTimeout(() => {
+        if (!M.manualClose && !M.fatal) openSocket();
+      }, Math.min(M.attempts, 4) * 1500);
+    }
+
+    function onWsMessage(event) {
+      if (typeof event.data === "string") {
+        onJson(JSON.parse(event.data));
+        return;
+      }
+      const buf = event.data;
+      if (buf.byteLength < 13) return;
+      const dv = new DataView(buf);
+      const type = dv.getUint8(0);
+      const senderId = dv.getUint32(1, true);
+      const payload = buf.slice(13);
+      if (type === MSG_VIDEO) onFrame(senderId, payload);
+      else if (type === MSG_AUDIO) onAudio(senderId, payload);
+    }
+
+    function onJson(msg) {
+      switch (msg.type) {
+        case "join_ok": {
+          M.myId = msg.sender_id;
+          M.attempts = 0;
+          if (!M.joinedAt) M.joinedAt = Date.now();
+          setMyId(msg.sender_id);
+          setReconnecting(false);
+          setPhase("live");
+          setPeers((msg.participants || []).map(p => ({
+            id: p.id, name: p.name, mic: p.mic !== false, cam: p.cam !== false,
+          })));
+          // История чата: новый участник видит разговор, который шёл до него.
+          setMessages((msg.history || []).map((h, i) => ({
+            key: "h" + i + "-" + h.timestamp_ms,
+            author: h.sender_name || ("Участник " + h.sender_id),
+            time: fmtTime(h.timestamp_ms),
+            text: h.text,
+            self: h.sender_id === msg.sender_id,
+          })));
+          clearRemoteMedia();
+          pushState(stateRef.current.mic, stateRef.current.sharing ? true : stateRef.current.cam);
+          if (!M.mediaStarted) { M.mediaStarted = true; startMedia(); }
+          break;
+        }
+        case "participant_joined":
+          setPeers(prev => prev.some(p => p.id === msg.id) ? prev : [...prev, {
+            id: msg.id, name: msg.name, mic: msg.mic !== false, cam: msg.cam !== false,
+          }]);
+          break;
+        case "participant_left":
+          setPeers(prev => prev.filter(p => p.id !== msg.id));
+          dropPeerMedia(msg.id);
+          break;
+        case "participant_state":
+          setPeers(prev => prev.map(p => p.id === msg.id ? { ...p, mic: !!msg.mic, cam: !!msg.cam } : p));
+          if (!msg.cam) dropPeerFrames(msg.id);
+          break;
+        case "chat": {
+          const self = msg.sender_id === M.myId;
+          setMessages(prev => [...prev, {
+            key: msg.timestamp_ms + "-" + msg.sender_id + "-" + prev.length,
+            author: msg.sender_name || ("Участник " + msg.sender_id),
+            time: fmtTime(msg.timestamp_ms),
+            text: msg.text,
+            self,
+          }]);
+          const s = stateRef.current;
+          const chatVisible = s.isMobile ? (s.panelOpen && s.tab === "chat") : s.tab === "chat";
+          if (!self && !chatVisible) setUnread(u => u + 1);
+          break;
+        }
+        case "error":
+          if (msg.reason === "room_not_found") {
+            M.manualClose = true;
+            fatal("Комната не найдена или уже закрыта. Проверьте ссылку либо создайте новую комнату в лобби.");
+          } else {
+            console.warn("Ошибка сервера:", msg.reason);
+          }
+          break;
+      }
+    }
+
+    function pushState(micVal, camVal) {
+      if (M.ws && M.ws.readyState === 1)
+        M.ws.send(JSON.stringify({ type: "state", mic: micVal, cam: camVal }));
+    }
+
+    // ================= Приём медиа =================
+
+    const hasFrameRef = useRef(hasFrame);
+    useEffect(() => { hasFrameRef.current = hasFrame; }, [hasFrame]);
+
+    function onFrame(senderId, payload) {
+      M.lastFrameAt.set(senderId, Date.now());
+      const url = URL.createObjectURL(new Blob([payload], { type: "image/jpeg" }));
+      const prev = M.remoteUrls.get(senderId);
+      if (prev) URL.revokeObjectURL(prev);
+      M.remoteUrls.set(senderId, url);
+      const img = M.remoteImgs.get(senderId);
+      if (img) img.src = url;
+      if (!hasFrameRef.current.has(senderId))
+        setHasFrame(prev => { const n = new Set(prev); n.add(senderId); return n; });
+    }
+
+    function onAudio(senderId, payload) {
+      const samples = Math.floor(payload.byteLength / 2);
+      if (!samples) return;
+      const i16 = new Int16Array(payload, 0, samples);
+      // Индикатор «говорит» по громкости.
+      let sum = 0, n = 0;
+      for (let i = 0; i < samples; i += 4) { const v = i16[i] / 32768; sum += v * v; n++; }
+      if (n && Math.sqrt(sum / n) > 0.02) markSpeaking(senderId);
+
+      const ctx = M.audioCtx;
+      if (!ctx || ctx.state !== "running") return;
+      const buf = ctx.createBuffer(1, samples, AUDIO_RATE);
+      const ch = buf.getChannelData(0);
+      for (let i = 0; i < samples; i++) ch[i] = i16[i] / 32768;
+
+      let p = M.players.get(senderId);
+      if (!p) { p = { cursor: 0 }; M.players.set(senderId, p); }
+      const now = ctx.currentTime;
+      if (p.cursor < now + 0.06) p.cursor = now + 0.06;   // отстали — подтягиваемся
+      if (p.cursor > now + 0.7) p.cursor = now + 0.1;     // накопилась задержка — сброс
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(M.masterGain);
+      src.start(p.cursor);
+      p.cursor += buf.duration;
+    }
+
+    function markSpeaking(id) {
+      M.speakingUntil.set(id, Date.now() + 450);
+    }
+
+    function dropPeerFrames(id) {
+      const url = M.remoteUrls.get(id);
+      if (url) URL.revokeObjectURL(url);
+      M.remoteUrls.delete(id);
+      M.lastFrameAt.delete(id);
+      setHasFrame(prev => {
+        if (!prev.has(id)) return prev;
+        const n = new Set(prev); n.delete(id); return n;
+      });
+    }
+
+    function dropPeerMedia(id) {
+      dropPeerFrames(id);
+      M.players.delete(id);
+      M.speakingUntil.delete(id);
+    }
+
+    function clearRemoteMedia() {
+      for (const url of M.remoteUrls.values()) URL.revokeObjectURL(url);
+      M.remoteUrls.clear();
+      M.lastFrameAt.clear();
+      M.players.clear();
+      M.speakingUntil.clear();
+      setHasFrame(new Set());
+    }
+
+    // ref-колбэки для <img> плиток: кадры пишутся в элемент напрямую,
+    // без прохода через React (10 кадров/с на участника).
+    function remoteImgRef(id) {
+      let cb = M.imgRefCbs.get(id);
+      if (!cb) {
+        cb = (el) => {
+          if (el) {
+            M.remoteImgs.set(id, el);
+            const url = M.remoteUrls.get(id);
+            if (url) el.src = url;
+          } else {
+            M.remoteImgs.delete(id);
+          }
+        };
+        M.imgRefCbs.set(id, cb);
+      }
+      return cb;
+    }
+
+    // ================= Захват медиа =================
+
+    async function startMedia() {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (AC) {
+        M.audioCtx = new AC();
+        M.masterGain = M.audioCtx.createGain();
+        M.masterGain.connect(M.audioCtx.destination);
+        if (M.audioCtx.state === "suspended") {
+          // Autoplay-policy: без жеста звук не стартует (например, после F5).
+          const resume = () => {
+            M.audioCtx.resume();
+            document.removeEventListener("pointerdown", resume);
+          };
+          document.addEventListener("pointerdown", resume);
+        }
+      }
+      M.canvas = document.createElement("canvas");
+      // Скрытый <video> для захвата: живёт вне DOM, чтобы кадры снимались,
+      // даже когда своя плитка на другой странице пагинации.
+      M.captureVideo = document.createElement("video");
+      M.captureVideo.muted = true;
+      M.captureVideo.playsInline = true;
+      M.captureVideo.autoplay = true;
+
+      await startMic();
+      await startCamera();
+      M.captureTimer = setInterval(captureFrame, 100);   // ~10 кадров/с
+    }
+
+    async function startMic() {
+      if (!M.micStream) {
+        try {
+          M.micStream = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+          });
+        } catch (e) {
+          setMic(false);
+          pushState(false, stateRef.current.sharing ? true : stateRef.current.cam);
+          return false;
+        }
+      }
+      if (!M.audioCtx || M.procNode) return !!M.audioCtx;
+      M.micSrcNode = M.audioCtx.createMediaStreamSource(M.micStream);
+      M.procNode = M.audioCtx.createScriptProcessor(2048, 1, 1);
+      // ScriptProcessor молчит, если не подключён к выходу — глушим нулевым гейном.
+      const muteGain = M.audioCtx.createGain();
+      muteGain.gain.value = 0;
+      M.micSrcNode.connect(M.procNode);
+      M.procNode.connect(muteGain);
+      muteGain.connect(M.audioCtx.destination);
+      M.procNode.onaudioprocess = (e) => {
+        if (!stateRef.current.mic) return;
+        const input = e.inputBuffer.getChannelData(0);
+        let sum = 0, n = 0;
+        for (let i = 0; i < input.length; i += 8) { sum += input[i] * input[i]; n++; }
+        if (n && Math.sqrt(sum / n) > 0.02 && M.myId != null) markSpeaking(M.myId);
+        if (!M.ws || M.ws.readyState !== 1) return;
+        const pcm = downsample(input, e.inputBuffer.sampleRate);
+        M.ws.send(packMedia(MSG_AUDIO, new Uint8Array(pcm.buffer)));
+      };
+      return true;
+    }
+
+    async function startCamera() {
+      if (!M.camStream) {
+        try {
+          M.camStream = await navigator.mediaDevices.getUserMedia({
+            video: { width: 480, height: 360 },
+          });
+        } catch (e) {
+          setCam(false);
+          pushState(stateRef.current.mic, stateRef.current.sharing ? true : false);
+          return false;
+        }
+      }
+      attachCapture(M.camStream);
+      return true;
+    }
+
+    function attachCapture(stream) {
+      if (!M.captureVideo) return;
+      M.captureVideo.srcObject = stream;
+      const p = M.captureVideo.play();
+      if (p && p.catch) p.catch(() => {});
+    }
+
+    function captureFrame() {
+      const s = stateRef.current;
+      const active = M.displayStream || (s.cam ? M.camStream : null);
+      const v = M.captureVideo;
+      if (!active || !v || v.readyState < 2) return;
+      if (!M.ws || M.ws.readyState !== 1) return;
+      // Холст под аспект источника: камера 4:3, экран обычно 16:9.
+      const vw = v.videoWidth || 480, vh = v.videoHeight || 360;
+      const scale = Math.min(480 / vw, 360 / vh, 1);
+      const cw = Math.max(2, Math.round(vw * scale));
+      const ch = Math.max(2, Math.round(vh * scale));
+      if (M.canvas.width !== cw || M.canvas.height !== ch) { M.canvas.width = cw; M.canvas.height = ch; }
+      M.canvas.getContext("2d").drawImage(v, 0, 0, cw, ch);
+      M.canvas.toBlob((blob) => {
+        if (!blob || !M.ws || M.ws.readyState !== 1) return;
+        blob.arrayBuffer().then((ab) => {
+          if (M.ws && M.ws.readyState === 1)
+            M.ws.send(packMedia(MSG_VIDEO, new Uint8Array(ab)));
+        });
+      }, "image/jpeg", 0.7);
+    }
+
+    // ================= Кнопки дока =================
+
+    async function toggleMic() {
+      const next = !stateRef.current.mic;
+      if (next && !M.micStream) {
+        // Разрешения не было — пробуем запросить ещё раз.
+        const ok = await startMic();
+        if (!ok) return;
+      }
+      if (M.micStream) M.micStream.getAudioTracks().forEach(t => { t.enabled = next; });
+      setMic(next);
+      pushState(next, stateRef.current.sharing ? true : stateRef.current.cam);
+    }
+
+    async function toggleCamera() {
+      const s = stateRef.current;
+      if (s.sharing) stopSharing(false);
+      const next = !s.cam;
+      if (next) {
+        if (!M.camStream) {
+          const ok = await startCamera();   // startCamera сам подключит превью
+          if (!ok) return;
+        } else {
+          attachCapture(M.camStream);
+        }
+      } else if (M.camStream) {
+        // Останавливаем дорожки, а не просто глушим — гаснет индикатор камеры.
+        M.camStream.getTracks().forEach(t => t.stop());
+        M.camStream = null;
+      }
+      setCam(next);
+      pushState(s.mic, next);
+    }
+
+    async function toggleShare() {
+      const s = stateRef.current;
+      if (s.sharing) { stopSharing(true); return; }
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) return;
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      } catch (e) {
+        return;   // пользователь отменил выбор
+      }
+      M.displayStream = stream;
+      const track = stream.getVideoTracks()[0];
+      if (track) track.onended = () => stopSharing(true);   // «Прекратить доступ»
+      attachCapture(stream);
+      setSharing(true);
+      pushState(s.mic, true);
+    }
+
+    function stopSharing(push) {
+      const s = stateRef.current;
+      if (M.displayStream) {
+        M.displayStream.getTracks().forEach(t => t.stop());
+        M.displayStream = null;
+      }
+      if (M.camStream && s.cam) attachCapture(M.camStream);
+      setSharing(false);
+      if (push) pushState(s.mic, s.cam);
+    }
+
+    function stopEverything() {
+      clearInterval(M.captureTimer);
+      [M.camStream, M.micStream, M.displayStream].forEach(st => {
+        if (st) st.getTracks().forEach(t => t.stop());
+      });
+      if (M.audioCtx) { const p = M.audioCtx.close(); if (p && p.catch) p.catch(() => {}); }
+    }
+
+    function leave() {
+      M.manualClose = true;
+      try { if (M.ws) M.ws.close(); } catch (e) {}
+      stopEverything();
+      location.href = "anon_lobby.html";
+    }
+
+    // ================= Чат =================
+
+    function sendChat() {
+      const text = draft.trim();
+      if (!text || !M.ws || M.ws.readyState !== 1) return;
+      M.ws.send(JSON.stringify({ type: "chat", text }));
+      setDraft("");
+    }
+
+    useEffect(() => {
+      if (msgRef.current) msgRef.current.scrollTop = msgRef.current.scrollHeight;
+    }, [messages, tab, panelOpen]);
+
+    // Сбрасываем счётчик непрочитанного, когда чат на виду.
+    useEffect(() => {
+      const chatVisible = isMobile ? (panelOpen && tab === "chat") : tab === "chat";
+      if (chatVisible) setUnread(0);
+    }, [messages, tab, panelOpen, isMobile]);
+
+    // ================= Гейт имени (вход по ссылке) =================
+
+    function gateSubmit() {
+      const name = gateName.trim();
+      if (!name) return;
+      MeetUp.saveName(name);
+      nameRef.current = name;
+      setPhase("connecting");
+      openSocket();
+    }
+
+    // ================= Ссылка-приглашение =================
+
+    const inviteUrl = location.origin + location.pathname + "?room=" + encodeURIComponent(roomCode);
+
+    function fallbackCopy(text, done) {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); done(); } catch (e) {}
+      document.body.removeChild(ta);
+    }
+
+    function copyInvite() {
+      const done = () => { setCopied(true); setTimeout(() => setCopied(false), 1800); };
+      if (navigator.clipboard && window.isSecureContext)
+        navigator.clipboard.writeText(inviteUrl).then(done, () => fallbackCopy(inviteUrl, done));
+      else
+        fallbackCopy(inviteUrl, done);
+    }
+
+    function openShare() {
+      setShareOpen(true);
+      copyInvite();   // показываем и сразу копируем в буфер
+    }
+
+    // ================= Эффекты монтирования =================
+
+    useEffect(() => {
+      if (!roomCode) { location.replace("anon_lobby.html"); return; }
+
+      if (savedName) openSocket();
+
+      const mq = window.matchMedia("(max-width: 820px)");
+      const updMq = () => setIsMobile(mq.matches);
+      updMq();
+      mq.addEventListener("change", updMq);
+
+      // Устаревшие кадры (участник завис/пропал) — возвращаем заглушку.
+      const staleTimer = setInterval(() => {
+        const now = Date.now();
+        const stale = [];
+        hasFrameRef.current.forEach((id) => {
+          const at = M.lastFrameAt.get(id) || 0;
+          if (now - at > 5000) stale.push(id);
+        });
+        if (stale.length)
+          setHasFrame(prev => { const n = new Set(prev); stale.forEach(id => n.delete(id)); return n; });
+      }, 3000);
+
+      // Индикатор «говорит»: по громкости, с затуханием.
+      let prevSpeakingKey = "";
+      const speakTimer = setInterval(() => {
+        const now = Date.now();
+        const ids = [];
+        M.speakingUntil.forEach((until, id) => { if (until > now) ids.push(id); });
+        ids.sort((a, b) => a - b);
+        const key = ids.join(",");
+        if (key !== prevSpeakingKey) {
+          prevSpeakingKey = key;
+          setSpeaking(new Set(ids));
+        }
+      }, 250);
+
+      // Таймер «в эфире».
+      const elapsedTimer = setInterval(() => {
+        if (!M.joinedAt) return;
+        const total = Math.floor((Date.now() - M.joinedAt) / 1000);
+        const h = Math.floor(total / 3600);
+        const m = Math.floor((total % 3600) / 60);
+        const sec = total % 60;
+        const pad = (x) => String(x).padStart(2, "0");
+        setElapsed(h > 0 ? h + ":" + pad(m) + ":" + pad(sec) : pad(m) + ":" + pad(sec));
+      }, 1000);
+
+      // Листание страниц плиток стрелками клавиатуры.
+      const onKey = (e) => {
+        const tag = (e.target && e.target.tagName) || "";
+        if (tag === "INPUT" || tag === "TEXTAREA") return;
+        if (e.key === "ArrowLeft") setPage(p => Math.max(0, p - 1));
+        if (e.key === "ArrowRight") setPage(p => Math.min(stateRef.current.pages - 1, p + 1));
+      };
+      window.addEventListener("keydown", onKey);
+
+      return () => {
+        mq.removeEventListener("change", updMq);
+        clearInterval(staleTimer);
+        clearInterval(speakTimer);
+        clearInterval(elapsedTimer);
+        window.removeEventListener("keydown", onKey);
+        M.manualClose = true;
+        try { if (M.ws) M.ws.close(); } catch (e) {}
+        stopEverything();
+      };
+    }, []);
+
+    // Своя плитка: превью пере-присваивается после каждого рендера,
+    // потому что <video> размонтируется при листании страниц.
+    useEffect(() => {
+      const el = selfVideoRef.current;
+      const stream = M.displayStream || (cam ? M.camStream : null);
+      if (el && stream && el.srcObject !== stream) {
+        el.srcObject = stream;
+        const p = el.play();
+        if (p && p.catch) p.catch(() => {});
+      }
+    });
+
+    // ================= Плитки и страницы =================
+
+    const selfHasVideo = sharing || cam;
+    const tiles = [{
+      key: "self", id: myId, name: nameRef.current || "Вы", self: true,
+      mic, cam: selfHasVideo, speaking: myId != null && speaking.has(myId), hasFrame: true,
+    }].concat(peers.map(p => ({
+      key: "p" + p.id, id: p.id, name: p.name, self: false,
+      mic: p.mic, cam: p.cam, speaking: speaking.has(p.id), hasFrame: hasFrame.has(p.id),
+    })));
+
+    const perPage = isMobile ? 6 : 9;
+    const pages = Math.max(1, Math.ceil(tiles.length / perPage));
+    const curPage = Math.min(page, pages - 1);
+    const visible = tiles.slice(curPage * perPage, curPage * perPage + perPage);
+
+    // Актуальный снимок состояния для обработчиков вне рендера
+    // (WS-сообщения, таймеры, аудио-callback).
+    useEffect(() => {
+      stateRef.current = { phase, mic, cam, sharing, tab, panelOpen, isMobile, pages };
+    });
+
+    // До трёх участников на широком экране — «дизайнерская» раскладка
+    // (своя плитка крупнее); дальше — равномерная сетка страницами.
+    const featured = !isMobile && tiles.length <= 3;
+    let gridStyle;
+    if (featured) {
+      gridStyle = tiles.length === 1
+        ? { gridTemplateColumns: "1fr", gridTemplateRows: "1fr" }
+        : tiles.length === 2
+          ? { gridTemplateColumns: "1fr 1fr", gridTemplateRows: "1fr" }
+          : { gridTemplateColumns: "2fr 1fr", gridTemplateRows: "1fr 1fr" };
+    } else {
+      const k = Math.max(1, visible.length);
+      const cols = isMobile ? (k <= 2 ? 1 : 2) : Math.ceil(Math.sqrt(k));
+      const rows = Math.ceil(k / cols);
+      gridStyle = {
+        gridTemplateColumns: "repeat(" + cols + ", 1fr)",
+        gridTemplateRows: "repeat(" + rows + ", 1fr)",
+        overflow: "hidden",
+      };
+    }
+
+    function renderTile(t, idx) {
+      let media = null;
+      if (t.self) {
+        if (selfHasVideo)
+          media = <video ref={selfVideoRef} className={"tile-media" + (sharing ? "" : " mirror")}
+                         autoPlay muted playsInline />;
+      } else if (t.cam && t.hasFrame) {
+        media = <img alt="" className="tile-media" ref={remoteImgRef(t.id)} />;
+      }
+      const spanSelf = featured && tiles.length === 3 && idx === 0;
+      return (
+        <div key={t.key} style={{ minHeight: 0, ...(spanSelf ? { gridRow: "1 / 3" } : null) }}>
+          <VideoTile name={t.name} self={t.self} muted={!t.mic} speaking={t.speaking}
+                     style={{ aspectRatio: "auto", height: "100%" }}>
+            {media}
+          </VideoTile>
+        </div>
+      );
+    }
+
+    function onTouchStart(e) { touchX.current = e.touches[0].clientX; }
+    function onTouchEnd(e) {
+      if (touchX.current == null) return;
+      const dx = e.changedTouches[0].clientX - touchX.current;
+      touchX.current = null;
+      if (Math.abs(dx) < 60) return;
+      if (dx < 0) setPage(p => Math.min(pages - 1, p + 1));
+      else setPage(p => Math.max(0, p - 1));
+    }
+
+    function tabStyle(k) {
+      const on = tab === k;
+      return {
+        border: "1px solid " + (on ? "transparent" : "var(--border)"),
+        background: on ? "var(--accent)" : "transparent",
+        color: on ? "var(--on-accent)" : "var(--text-muted)",
+      };
+    }
+
+    const shortCode = roomCode.length > 10 ? roomCode.slice(0, 8) + "…" : roomCode;
+    const participantRows = [{ id: "self", name: nameRef.current || "Вы", you: true, muted: !mic }]
+      .concat(peers.map(p => ({ id: p.id, name: p.name, you: false, muted: !p.mic })));
+
+    return (
+      <div className="conf" style={{ background: "var(--bg)", color: "var(--text)", fontFamily: "var(--font-ui)" }}>
+        {/* stage */}
+        <div className="stage">
+          <div className="confbar">
+            <div className="conf-mark">MeetUp</div>
+            <h1 className="conf-title">Комната <span style={{ color: "var(--accent-ink)" }}>#{roomCode.slice(0, 6)}</span></h1>
+            <span style={{ flex: 1 }} />
+            {phase === "live" && !reconnecting &&
+              <Badge tone="live" dot>в эфире · {elapsed}</Badge>}
+            {reconnecting &&
+              <Badge tone="danger" dot>переподключение…</Badge>}
+            {phase === "connecting" && !reconnecting &&
+              <Badge tone="muted" dot>подключение…</Badge>}
+            <span title={roomCode}><Badge tone="accent">{shortCode}</Badge></span>
+            <IconButton icon="copy" size="sm" label="Скопировать ссылку-приглашение" onClick={openShare} />
+            <IconButton icon={theme === "dark" ? "sun" : "moon"} size="sm" label="Сменить тему" onClick={toggleTheme} />
+          </div>
+
+          <div className="gridwrap"
+               onTouchStart={pages > 1 ? onTouchStart : undefined}
+               onTouchEnd={pages > 1 ? onTouchEnd : undefined}>
+            <div className="grid" style={gridStyle}>
+              {visible.map(renderTile)}
+            </div>
+
+            {pages > 1 && <>
+              <IconButton icon="arrow-right" label="Предыдущая страница" disabled={curPage === 0}
+                          onClick={() => setPage(p => Math.max(0, p - 1))}
+                          style={{ position: "absolute", left: 34, top: "50%",
+                                   transform: "translateY(-50%) rotate(180deg)", zIndex: 30 }} />
+              <IconButton icon="arrow-right" label="Следующая страница" disabled={curPage === pages - 1}
+                          onClick={() => setPage(p => Math.min(pages - 1, p + 1))}
+                          style={{ position: "absolute", right: 34, top: "50%",
+                                   transform: "translateY(-50%)", zIndex: 30 }} />
+              <div className="pager-dots">
+                {Array.from({ length: pages }).map((_, i) => (
+                  <button key={i} className={"pager-dot" + (i === curPage ? " on" : "")}
+                          aria-label={"Страница " + (i + 1)} onClick={() => setPage(i)} />
+                ))}
+              </div>
+            </>}
+          </div>
+
+          <div className="dock">
+            <ControlDock
+              micOn={mic} cameraOn={cam} sharing={sharing} extras={!isMobile}
+              onToggleMic={toggleMic}
+              onToggleCamera={toggleCamera}
+              onToggleShare={toggleShare}
+              onLeave={leave}
+            />
+          </div>
+
+          <button className="chat-fab" onClick={() => { setPanelOpen(true); setTab("chat"); }}>
+            <Icon name="chat" size={18} />
+            Чат
+            {unread > 0 && <span className="badge-n">{unread}</span>}
+          </button>
+
+          {/* поповер «поделиться» */}
+          {shareOpen && <>
+            <div className="share-scrim" onClick={() => setShareOpen(false)} />
+            <div className="share-pop">
+              <Card elevated width="100%">
+                <div className="share-label">Ссылка-приглашение</div>
+                <Input readOnly value={inviteUrl} onFocus={(e) => e.target.select()} />
+                <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                  <Button variant="primary" block icon={copied ? "check" : "copy"} onClick={copyInvite}>
+                    {copied ? "Скопировано" : "Копировать"}
+                  </Button>
+                  {navigator.share &&
+                    <IconButton icon="arrow-right" label="Поделиться…"
+                                onClick={() => navigator.share({ title: "MeetUp — конференция", url: inviteUrl }).catch(() => {})} />}
+                </div>
+                <div className="share-hint">По ссылке входят без аккаунта: имя — и сразу в эфир.</div>
+              </Card>
+            </div>
+          </>}
+        </div>
+
+        {/* side panel */}
+        <div className={"side" + (panelOpen ? " open" : "")}>
+          <div className="side-head">
+            <span style={{ fontFamily: "var(--font-label)", fontWeight: 700, fontSize: 12,
+                           letterSpacing: 2, textTransform: "uppercase", color: "var(--text-muted)" }}>Панель</span>
+            <IconButton icon="x" size="sm" label="Закрыть" onClick={() => setPanelOpen(false)} />
+          </div>
+          <div className="tabs">
+            <button className="tab" style={tabStyle("chat")} onClick={() => setTab("chat")}>
+              Чат{unread > 0 && tab !== "chat" ? " (" + unread + ")" : ""}
+            </button>
+            <button className="tab" style={tabStyle("people")} onClick={() => setTab("people")}>
+              Участники ({participantRows.length})
+            </button>
+          </div>
+
+          {tab === "people" ? (
+            <div className="peoplescroll">
+              {participantRows.map(p => (
+                <ParticipantRow key={p.id} name={p.name} you={p.you} muted={p.muted} />
+              ))}
+            </div>
+          ) : (
+            <>
+              <div ref={msgRef} className="chatscroll">
+                {messages.map(m => (
+                  <ChatMessage key={m.key} author={m.author} time={m.time} text={m.text} self={m.self} />
+                ))}
+              </div>
+              <div className="composer">
+                <Input value={draft} placeholder="Сообщение…" autoComplete="off" maxLength={2000}
+                       onChange={e => setDraft(e.target.value)}
+                       onKeyDown={e => e.key === "Enter" && sendChat()} />
+                <IconButton icon="send" variant="accent" label="Отправить" onClick={sendChat} />
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* гейт имени: вход по ссылке-приглашению */}
+        {phase === "gate" &&
+          <div className="overlay">
+            <div className="overlay-card">
+              <Card elevated width="100%">
+                <h2 className="overlay-title">Присоединиться</h2>
+                <p className="overlay-sub">Комната <b>#{roomCode.slice(0, 6)}</b>. Представьтесь — и вы в эфире.</p>
+                <Field label="Ваше имя" htmlFor="gate-name">
+                  <Input id="gate-name" autoFocus value={gateName} maxLength={40} placeholder="Анна"
+                         autoComplete="name"
+                         onChange={e => setGateName(e.target.value)}
+                         onKeyDown={e => e.key === "Enter" && gateSubmit()} />
+                </Field>
+                <Button variant="primary" block iconRight="arrow-right" style={{ marginTop: 20 }}
+                        disabled={!gateName.trim()} onClick={gateSubmit}>
+                  Подключиться
+                </Button>
+                <Button variant="ghost" block style={{ marginTop: 10 }}
+                        onClick={() => { location.href = "anon_lobby.html"; }}>
+                  В лобби
+                </Button>
+              </Card>
+            </div>
+          </div>}
+
+        {/* ошибка подключения */}
+        {phase === "error" &&
+          <div className="overlay">
+            <div className="overlay-card">
+              <Card elevated width="100%">
+                <h2 className="overlay-title">Не получилось</h2>
+                <p className="overlay-sub">{errText}</p>
+                <Button variant="primary" block style={{ marginTop: 8 }}
+                        onClick={() => location.reload()}>
+                  Попробовать снова
+                </Button>
+                <Button variant="ghost" block style={{ marginTop: 10 }}
+                        onClick={() => { location.href = "anon_lobby.html"; }}>
+                  В лобби
+                </Button>
+              </Card>
+            </div>
+          </div>}
+      </div>
+    );
+  }
+
+  ReactDOM.createRoot(document.getElementById("root")).render(<ConferenceScreen />);
+</script>
+
+</body>
+</html>
