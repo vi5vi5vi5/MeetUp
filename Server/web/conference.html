@@ -120,6 +120,16 @@
     border-radius: var(--radius-pill); transition: width .08s linear;
   }
 
+  /* плитка участника, чей поток зашифрован чужим ключом */
+  .tile-lock {
+    position: absolute; inset: 0; z-index: 2;
+    display: grid; place-items: center; text-align: center; padding: 12px;
+    background: color-mix(in srgb, var(--bg) 55%, transparent);
+    color: var(--text-muted); font-size: var(--text-xs);
+    font-weight: var(--weight-semibold);
+  }
+  .tile-lock b { display: block; font-size: 26px; margin-bottom: 6px; }
+
   .side {
     border-left: 1px solid var(--border); background: var(--surface);
     display: flex; flex-direction: column; min-height: 0;
@@ -179,16 +189,13 @@
 <script src="assets/babel.js"></script>
 <script src="assets/meetup-ds.js"></script>
 <script src="assets/meetup-common.js"></script>
+<script src="assets/meetup-media.js?v=1"></script>
 <script type="text/babel">
   const { useState, useRef, useEffect } = React;
   const { Badge, Icon, IconButton, Input, Field, Button, Card, VideoTile, ParticipantRow, ChatMessage, ControlDock } =
     window.MeetUpDesignSystem_2584b5;
 
-  // ---- Протокол (см. docs/meetup-server-spec.md) ----
-  const MSG_VIDEO = 1;
-  const MSG_AUDIO = 2;
-  const AUDIO_RATE = 16000;             // PCM 16 кГц / 16 бит / моно
-
+  // Бинарный протокол, кодеки и E2E-шифрование живут в assets/meetup-media.js.
   const roomCode = new URLSearchParams(location.search).get("room") || "";
 
   function fmtTime(ms) {
@@ -217,31 +224,15 @@
   // есть в Chrome/Edge/Firefox, в Safari пока нет.
   const sinkSupported = !!(window.AudioContext && "setSinkId" in AudioContext.prototype);
 
-  // [type:1][timestamp_ms:8 LE][payload] — заголовок клиента.
-  function packMedia(type, payloadU8) {
-    const out = new Uint8Array(9 + payloadU8.length);
-    const dv = new DataView(out.buffer);
-    dv.setUint8(0, type);
-    dv.setBigUint64(1, BigInt(Date.now()), true);
-    out.set(payloadU8, 9);
-    return out.buffer;
+  // Секрет E2E на комнату (только в этой вкладке, на сервер не уходит):
+  // "p:<фраза>" или "k:<base64-ключ из ссылки>".
+  const E2E_KEY = "meetup.e2e." + roomCode;
+  function loadE2eSecret() {
+    try { return sessionStorage.getItem(E2E_KEY) || ""; } catch (e) { return ""; }
   }
-
-  // Понижение частоты до 16 кГц усреднением (box-фильтр) + перевод в Int16.
-  // gain — чувствительность микрофона (1 = как есть), с защитой от клиппинга.
-  function downsample(f32, fromRate, gain = 1) {
-    const ratio = fromRate / AUDIO_RATE;
-    const outLen = Math.floor(f32.length / ratio);
-    const out = new Int16Array(outLen);
-    for (let i = 0; i < outLen; i++) {
-      const start = Math.floor(i * ratio);
-      const end = Math.min(f32.length, Math.max(start + 1, Math.floor((i + 1) * ratio)));
-      let sum = 0;
-      for (let j = start; j < end; j++) sum += f32[j];
-      const v = Math.max(-1, Math.min(1, (sum / (end - start)) * gain));
-      out[i] = v < 0 ? v * 0x8000 : v * 0x7FFF;
-    }
-    return out;
+  function saveE2eSecret(v) {
+    try { v ? sessionStorage.setItem(E2E_KEY, v) : sessionStorage.removeItem(E2E_KEY); }
+    catch (e) { /* приватный режим */ }
   }
 
   function ConferenceScreen() {
@@ -289,14 +280,12 @@
       mediaRef.current = {
         ws: null, myId: null, manualClose: false, fatal: false, attempts: 0,
         camStream: null, micStream: null, displayStream: null,
-        audioCtx: null, masterGain: null, micSrcNode: null, procNode: null,
-        captureVideo: null, canvas: null, captureTimer: 0,
-        remoteImgs: new Map(), remoteUrls: new Map(), lastFrameAt: new Map(),
-        imgRefCbs: new Map(), players: new Map(), speakingUntil: new Map(),
+        speakingUntil: new Map(), chatChain: Promise.resolve(),
         mediaStarted: false, joinedAt: 0,
-        // Настройки звука: pref — выбранные устройства, volume/sens — гейны
-        // (1 = 100%), micLevel — RMS для индикатора уровня в настройках.
-        pref: av, volume: av.volume / 100, sens: av.sens / 100, micLevel: 0,
+        // pref — выбранные устройства и гейны из localStorage.
+        pref: av,
+        // Медиадвижок (кодеки, приём, E2E) и ключ шифрования — только на клиенте.
+        engine: null, e2eKey: null,
       };
     }
     const M = mediaRef.current;
@@ -310,6 +299,37 @@
     const [volume, setVolume] = useState(M.pref.volume);
     const [sens, setSens] = useState(M.pref.sens);
     const [micLevel, setMicLevel] = useState(0);
+
+    // ---- E2E-шифрование ----
+    const [lockedIds, setLockedIds] = useState(() => new Set());
+    const [e2eOn, setE2eOn] = useState(false);
+    const [e2ePhrase, setE2ePhrase] = useState("");
+    const [e2eBusy, setE2eBusy] = useState(false);
+
+    // Движок создаётся один раз; колбэки замыкают только стабильные ссылки
+    // (setState, ref-ы, function-декларации), пересоздание на рендерах не нужно.
+    if (!M.engine) {
+      M.engine = MeetUpMedia.create({
+        send: (buf) => { if (M.ws && M.ws.readyState === 1) M.ws.send(buf); },
+        buffered: () => (M.ws ? M.ws.bufferedAmount : 0),
+        micOn: () => !!stateRef.current.mic,
+        onSelfSpeaking: () => { if (M.myId != null) markSpeaking(M.myId); },
+        onSpeaking: (id) => markSpeaking(id),
+        onFrameActivity: (id) => {
+          if (!hasFrameRef.current.has(id))
+            setHasFrame(prev => { const n = new Set(prev); n.add(id); return n; });
+        },
+        onLocked: (id, locked) => {
+          setLockedIds(prev => {
+            if (prev.has(id) === locked) return prev;
+            const n = new Set(prev);
+            if (locked) n.add(id); else n.delete(id);
+            return n;
+          });
+        },
+      });
+    }
+    const engine = M.engine;
 
     useEffect(() => { document.documentElement.setAttribute("data-theme", theme); }, [theme]);
     const toggleTheme = () => setTheme(t => (t === "dark" ? "light" : "dark"));
@@ -346,18 +366,17 @@
     }
 
     function onWsMessage(event) {
-      if (typeof event.data === "string") {
-        onJson(JSON.parse(event.data));
-        return;
-      }
-      const buf = event.data;
-      if (buf.byteLength < 13) return;
-      const dv = new DataView(buf);
-      const type = dv.getUint8(0);
-      const senderId = dv.getUint32(1, true);
-      const payload = buf.slice(13);
-      if (type === MSG_VIDEO) onFrame(senderId, payload);
-      else if (type === MSG_AUDIO) onAudio(senderId, payload);
+      if (typeof event.data === "string") onJson(JSON.parse(event.data));
+      else engine.onBinary(event.data);
+    }
+
+    // Текст чата: расшифровка "🔒e2e:..." при наличии ключа. raw хранится,
+    // чтобы перечитать сообщение, когда пользователь введёт ключ позже.
+    async function renderChatText(raw) {
+      const res = await engine.openText(raw);
+      if (!res.encrypted) return { raw, text: raw, locked: false };
+      if (res.text != null) return { raw, text: res.text, locked: false };
+      return { raw, text: "Зашифрованное сообщение — нужен ключ", locked: true };
     }
 
     function onJson(msg) {
@@ -372,15 +391,17 @@
           setPeers((msg.participants || []).map(p => ({
             id: p.id, name: p.name, mic: p.mic !== false, cam: p.cam !== false,
           })));
-          // История чата: новый участник видит разговор, который шёл до него.
-          setMessages((msg.history || []).map((h, i) => ({
+          // История чата: новый участник видит разговор, который шёл до него
+          // (зашифрованные сообщения читаются при наличии ключа).
+          Promise.all((msg.history || []).map(async (h, i) => ({
             key: "h" + i + "-" + h.timestamp_ms,
             author: h.sender_name || ("Участник " + h.sender_id),
             time: fmtTime(h.timestamp_ms),
-            text: h.text,
             self: h.sender_id === msg.sender_id,
-          })));
-          clearRemoteMedia();
+            ...(await renderChatText(h.text)),
+          }))).then(setMessages);
+          engine.clearPeers();
+          engine.requestKeyframe();   // просим у вещающих опорные кадры
           pushState(stateRef.current.mic, stateRef.current.sharing ? true : stateRef.current.cam);
           if (!M.mediaStarted) { M.mediaStarted = true; startMedia(); }
           break;
@@ -389,24 +410,35 @@
           setPeers(prev => prev.some(p => p.id === msg.id) ? prev : [...prev, {
             id: msg.id, name: msg.name, mic: msg.mic !== false, cam: msg.cam !== false,
           }]);
+          engine.forceKeyframe();   // новичку нужен опорный кадр, не ждать 3 с
           break;
         case "participant_left":
           setPeers(prev => prev.filter(p => p.id !== msg.id));
-          dropPeerMedia(msg.id);
+          engine.dropPeer(msg.id);
+          M.speakingUntil.delete(msg.id);
+          dropFromSet(setHasFrame, msg.id);
+          dropFromSet(setLockedIds, msg.id);
           break;
         case "participant_state":
           setPeers(prev => prev.map(p => p.id === msg.id ? { ...p, mic: !!msg.mic, cam: !!msg.cam } : p));
-          if (!msg.cam) dropPeerFrames(msg.id);
+          if (!msg.cam) {
+            engine.lastFrameAt.delete(msg.id);
+            dropFromSet(setHasFrame, msg.id);
+          }
           break;
         case "chat": {
           const self = msg.sender_id === M.myId;
-          setMessages(prev => [...prev, {
-            key: msg.timestamp_ms + "-" + msg.sender_id + "-" + prev.length,
-            author: msg.sender_name || ("Участник " + msg.sender_id),
-            time: fmtTime(msg.timestamp_ms),
-            text: msg.text,
-            self,
-          }]);
+          // Расшифровка асинхронная — цепочка сохраняет порядок сообщений.
+          M.chatChain = M.chatChain.then(async () => {
+            const body = await renderChatText(msg.text);
+            setMessages(prev => [...prev, {
+              key: msg.timestamp_ms + "-" + msg.sender_id + "-" + prev.length,
+              author: msg.sender_name || ("Участник " + msg.sender_id),
+              time: fmtTime(msg.timestamp_ms),
+              self,
+              ...body,
+            }]);
+          });
           const s = stateRef.current;
           const chatVisible = s.isMobile ? (s.panelOpen && s.tab === "chat") : s.tab === "chat";
           if (!self && !chatVisible) setUnread(u => u + 1);
@@ -428,140 +460,44 @@
         M.ws.send(JSON.stringify({ type: "state", mic: micVal, cam: camVal }));
     }
 
-    // ================= Приём медиа =================
-
-    const hasFrameRef = useRef(hasFrame);
-    useEffect(() => { hasFrameRef.current = hasFrame; }, [hasFrame]);
-
-    function onFrame(senderId, payload) {
-      M.lastFrameAt.set(senderId, Date.now());
-      const url = URL.createObjectURL(new Blob([payload], { type: "image/jpeg" }));
-      const prev = M.remoteUrls.get(senderId);
-      if (prev) URL.revokeObjectURL(prev);
-      M.remoteUrls.set(senderId, url);
-      const img = M.remoteImgs.get(senderId);
-      if (img) img.src = url;
-      if (!hasFrameRef.current.has(senderId))
-        setHasFrame(prev => { const n = new Set(prev); n.add(senderId); return n; });
-    }
-
-    function onAudio(senderId, payload) {
-      const samples = Math.floor(payload.byteLength / 2);
-      if (!samples) return;
-      const i16 = new Int16Array(payload, 0, samples);
-      // Индикатор «говорит» по громкости.
-      let sum = 0, n = 0;
-      for (let i = 0; i < samples; i += 4) { const v = i16[i] / 32768; sum += v * v; n++; }
-      if (n && Math.sqrt(sum / n) > 0.02) markSpeaking(senderId);
-
-      const ctx = M.audioCtx;
-      if (!ctx || ctx.state !== "running") return;
-      const buf = ctx.createBuffer(1, samples, AUDIO_RATE);
-      const ch = buf.getChannelData(0);
-      for (let i = 0; i < samples; i++) ch[i] = i16[i] / 32768;
-
-      let p = M.players.get(senderId);
-      if (!p) { p = { cursor: 0 }; M.players.set(senderId, p); }
-      const now = ctx.currentTime;
-      if (p.cursor < now + 0.06) p.cursor = now + 0.06;   // отстали — подтягиваемся
-      if (p.cursor > now + 0.7) p.cursor = now + 0.1;     // накопилась задержка — сброс
-      const src = ctx.createBufferSource();
-      src.buffer = buf;
-      src.connect(M.masterGain);
-      src.start(p.cursor);
-      p.cursor += buf.duration;
-    }
-
-    function markSpeaking(id) {
-      M.speakingUntil.set(id, Date.now() + 450);
-    }
-
-    function dropPeerFrames(id) {
-      const url = M.remoteUrls.get(id);
-      if (url) URL.revokeObjectURL(url);
-      M.remoteUrls.delete(id);
-      M.lastFrameAt.delete(id);
-      setHasFrame(prev => {
+    // Убрать id из Set-состояния (hasFrame, lockedIds), не трогая лишний рендер.
+    function dropFromSet(setter, id) {
+      setter(prev => {
         if (!prev.has(id)) return prev;
         const n = new Set(prev); n.delete(id); return n;
       });
     }
 
-    function dropPeerMedia(id) {
-      dropPeerFrames(id);
-      M.players.delete(id);
-      M.speakingUntil.delete(id);
-    }
+    // ================= Приём медиа =================
+    // Кадры и звук разбирает движок (assets/meetup-media.js) — страница
+    // получает события: активность кадров, «говорит», «зашифровано».
 
-    function clearRemoteMedia() {
-      for (const url of M.remoteUrls.values()) URL.revokeObjectURL(url);
-      M.remoteUrls.clear();
-      M.lastFrameAt.clear();
-      M.players.clear();
-      M.speakingUntil.clear();
-      setHasFrame(new Set());
-    }
+    const hasFrameRef = useRef(hasFrame);
+    useEffect(() => { hasFrameRef.current = hasFrame; }, [hasFrame]);
 
-    // ref-колбэки для <img> плиток: кадры пишутся в элемент напрямую,
-    // без прохода через React (10 кадров/с на участника).
-    function remoteImgRef(id) {
-      let cb = M.imgRefCbs.get(id);
-      if (!cb) {
-        cb = (el) => {
-          if (el) {
-            M.remoteImgs.set(id, el);
-            const url = M.remoteUrls.get(id);
-            if (url) el.src = url;
-          } else {
-            M.remoteImgs.delete(id);
-          }
-        };
-        M.imgRefCbs.set(id, cb);
-      }
-      return cb;
+    const messagesRef = useRef(messages);
+    useEffect(() => { messagesRef.current = messages; }, [messages]);
+
+    function markSpeaking(id) {
+      M.speakingUntil.set(id, Date.now() + 450);
     }
 
     // ================= Захват медиа =================
 
     async function startMedia() {
-      const AC = window.AudioContext || window.webkitAudioContext;
-      if (AC) {
-        M.audioCtx = new AC();
-        M.masterGain = M.audioCtx.createGain();
-        M.masterGain.gain.value = M.volume;
-        M.masterGain.connect(M.audioCtx.destination);
-        if (M.pref.outId && M.audioCtx.setSinkId) {
-          // Сохранённое устройство вывода могло пропасть — тогда остаётся системное.
-          const p = M.audioCtx.setSinkId(M.pref.outId);
-          if (p && p.catch) p.catch(() => {});
-        }
-        if (M.audioCtx.state === "suspended") {
-          // Autoplay-policy: без жеста звук не стартует (например, после F5).
-          const resume = () => {
-            M.audioCtx.resume();
-            document.removeEventListener("pointerdown", resume);
-          };
-          document.addEventListener("pointerdown", resume);
-        }
-      }
-      M.canvas = document.createElement("canvas");
-      // Скрытый <video> для захвата: живёт вне DOM, чтобы кадры снимались,
-      // даже когда своя плитка на другой странице пагинации.
-      M.captureVideo = document.createElement("video");
-      M.captureVideo.muted = true;
-      M.captureVideo.playsInline = true;
-      M.captureVideo.autoplay = true;
-
+      await engine.ensureAudio();
+      engine.setVolume(M.pref.volume / 100);
+      engine.setSensitivity(M.pref.sens / 100);
+      if (M.pref.outId) engine.setSinkId(M.pref.outId);
       await startMic();
       await startCamera();
-      M.captureTimer = setInterval(captureFrame, 100);   // ~10 кадров/с
     }
 
     // getUserMedia с выбранным устройством; если оно пропало — системное.
     function mediaConstraints(kind, id) {
       const base = kind === "audio"
         ? { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
-        : { width: 480, height: 360 };
+        : { width: 1280, height: 720 };
       if (id) base.deviceId = { exact: id };
       return { [kind]: base };
     }
@@ -585,29 +521,7 @@
           return false;
         }
       }
-      if (!M.audioCtx || M.procNode) return !!M.audioCtx;
-      M.micSrcNode = M.audioCtx.createMediaStreamSource(M.micStream);
-      M.procNode = M.audioCtx.createScriptProcessor(2048, 1, 1);
-      // ScriptProcessor молчит, если не подключён к выходу — глушим нулевым гейном.
-      const muteGain = M.audioCtx.createGain();
-      muteGain.gain.value = 0;
-      M.micSrcNode.connect(M.procNode);
-      M.procNode.connect(muteGain);
-      muteGain.connect(M.audioCtx.destination);
-      M.procNode.onaudioprocess = (e) => {
-        const input = e.inputBuffer.getChannelData(0);
-        let sum = 0, n = 0;
-        for (let i = 0; i < input.length; i += 8) { const v = input[i] * M.sens; sum += v * v; n++; }
-        const rms = n ? Math.sqrt(sum / n) : 0;
-        // Уровень для индикатора в настройках (при выключенном микрофоне
-        // дорожка отдаёт тишину, так что индикатор честно падает в ноль).
-        M.micLevel = rms;
-        if (!stateRef.current.mic) return;
-        if (rms > 0.02 && M.myId != null) markSpeaking(M.myId);
-        if (!M.ws || M.ws.readyState !== 1) return;
-        const pcm = downsample(input, e.inputBuffer.sampleRate, M.sens);
-        M.ws.send(packMedia(MSG_AUDIO, new Uint8Array(pcm.buffer)));
-      };
+      await engine.startMic(M.micStream);
       return true;
     }
 
@@ -621,37 +535,9 @@
           return false;
         }
       }
-      attachCapture(M.camStream);
+      // Во время демонстрации экрана в эфир идёт displayStream.
+      if (!M.displayStream) engine.startVideo(M.camStream, { screen: false });
       return true;
-    }
-
-    function attachCapture(stream) {
-      if (!M.captureVideo) return;
-      M.captureVideo.srcObject = stream;
-      const p = M.captureVideo.play();
-      if (p && p.catch) p.catch(() => {});
-    }
-
-    function captureFrame() {
-      const s = stateRef.current;
-      const active = M.displayStream || (s.cam ? M.camStream : null);
-      const v = M.captureVideo;
-      if (!active || !v || v.readyState < 2) return;
-      if (!M.ws || M.ws.readyState !== 1) return;
-      // Холст под аспект источника: камера 4:3, экран обычно 16:9.
-      const vw = v.videoWidth || 480, vh = v.videoHeight || 360;
-      const scale = Math.min(480 / vw, 360 / vh, 1);
-      const cw = Math.max(2, Math.round(vw * scale));
-      const ch = Math.max(2, Math.round(vh * scale));
-      if (M.canvas.width !== cw || M.canvas.height !== ch) { M.canvas.width = cw; M.canvas.height = ch; }
-      M.canvas.getContext("2d").drawImage(v, 0, 0, cw, ch);
-      M.canvas.toBlob((blob) => {
-        if (!blob || !M.ws || M.ws.readyState !== 1) return;
-        blob.arrayBuffer().then((ab) => {
-          if (M.ws && M.ws.readyState === 1)
-            M.ws.send(packMedia(MSG_VIDEO, new Uint8Array(ab)));
-        });
-      }, "image/jpeg", 0.7);
     }
 
     // ================= Кнопки дока =================
@@ -674,15 +560,16 @@
       const next = !s.cam;
       if (next) {
         if (!M.camStream) {
-          const ok = await startCamera();   // startCamera сам подключит превью
+          const ok = await startCamera();
           if (!ok) return;
         } else {
-          attachCapture(M.camStream);
+          engine.startVideo(M.camStream, { screen: false });
         }
       } else if (M.camStream) {
         // Останавливаем дорожки, а не просто глушим — гаснет индикатор камеры.
         M.camStream.getTracks().forEach(t => t.stop());
         M.camStream = null;
+        engine.stopVideo();
       }
       setCam(next);
       pushState(s.mic, next);
@@ -701,7 +588,7 @@
       M.displayStream = stream;
       const track = stream.getVideoTracks()[0];
       if (track) track.onended = () => stopSharing(true);   // «Прекратить доступ»
-      attachCapture(stream);
+      engine.startVideo(stream, { screen: true });
       setSharing(true);
       pushState(s.mic, true);
     }
@@ -712,17 +599,17 @@
         M.displayStream.getTracks().forEach(t => t.stop());
         M.displayStream = null;
       }
-      if (M.camStream && s.cam) attachCapture(M.camStream);
+      if (M.camStream && s.cam) engine.startVideo(M.camStream, { screen: false });
+      else engine.stopVideo();
       setSharing(false);
       if (push) pushState(s.mic, s.cam);
     }
 
     function stopEverything() {
-      clearInterval(M.captureTimer);
+      engine.stop();
       [M.camStream, M.micStream, M.displayStream].forEach(st => {
         if (st) st.getTracks().forEach(t => t.stop());
       });
-      if (M.audioCtx) { const p = M.audioCtx.close(); if (p && p.catch) p.catch(() => {}); }
     }
 
     function leave() {
@@ -763,11 +650,7 @@
       M.micStream.getTracks().forEach(t => t.stop());
       M.micStream = stream;
       stream.getAudioTracks().forEach(t => { t.enabled = stateRef.current.mic; });
-      if (M.audioCtx && M.procNode) {
-        if (M.micSrcNode) { try { M.micSrcNode.disconnect(); } catch (e) {} }
-        M.micSrcNode = M.audioCtx.createMediaStreamSource(stream);
-        M.micSrcNode.connect(M.procNode);
-      }
+      await engine.startMic(stream);
     }
 
     async function selectCam(id) {
@@ -779,31 +662,89 @@
       try { stream = await grabStream("video", id); } catch (e) { refreshDevices(); return; }
       M.camStream.getTracks().forEach(t => t.stop());
       M.camStream = stream;
-      // Во время демонстрации экрана захват остаётся на displayStream.
-      if (!M.displayStream && stateRef.current.cam) attachCapture(stream);
+      // Во время демонстрации экрана в эфире остаётся displayStream.
+      if (!M.displayStream && stateRef.current.cam) engine.startVideo(stream, { screen: false });
     }
 
     function selectOut(id) {
       setOutId(id);
       M.pref.outId = id;
       saveAvSettings({ outId: id });
-      if (M.audioCtx && M.audioCtx.setSinkId) {
-        const p = M.audioCtx.setSinkId(id);
-        if (p && p.catch) p.catch(() => {});
-      }
+      engine.setSinkId(id);
     }
 
     function changeVolume(v) {
       setVolume(v);
-      M.volume = v / 100;
       saveAvSettings({ volume: v });
-      if (M.masterGain) M.masterGain.gain.value = M.volume;
+      engine.setVolume(v / 100);
     }
 
     function changeSens(v) {
       setSens(v);
-      M.sens = v / 100;
       saveAvSettings({ sens: v });
+      engine.setSensitivity(v / 100);
+    }
+
+    // ================= E2E-шифрование =================
+
+    // Единая точка включения/выключения: ключ в движок, секрет в sessionStorage,
+    // уже полученный чат — перечитать с новым ключом.
+    async function applyE2eKey(key, secretToStore, phraseForUi) {
+      M.e2eKey = key;
+      engine.setKey(key);
+      saveE2eSecret(key ? secretToStore : "");
+      setE2eOn(!!key);
+      setE2ePhrase(phraseForUi || "");
+      M.chatChain = M.chatChain.then(async () => {
+        const updated = await Promise.all(
+          messagesRef.current.map(async (m) => ({ ...m, ...(await renderChatText(m.raw)) })));
+        setMessages(updated);
+      });
+    }
+
+    // Восстановление ключа при загрузке: #k= из ссылки важнее сохранённого.
+    async function applySavedE2e() {
+      try {
+        const fromHash = location.hash.match(/[#&]k=([A-Za-z0-9_-]+)/);
+        if (fromHash) {
+          await applyE2eKey(await MeetUpMedia.importKeyB64(fromHash[1]), "k:" + fromHash[1], "");
+          return;
+        }
+        const saved = loadE2eSecret();
+        if (saved.startsWith("k:"))
+          await applyE2eKey(await MeetUpMedia.importKeyB64(saved.slice(2)), saved, "");
+        else if (saved.startsWith("p:"))
+          await applyE2eKey(await MeetUpMedia.deriveKeyFromPhrase(saved.slice(2), roomCode),
+                            saved, saved.slice(2));
+      } catch (e) { /* битый ключ в ссылке или хранилище — просто без E2E */ }
+    }
+
+    async function applyPhrase() {
+      const phrase = e2ePhrase.trim();
+      setE2eBusy(true);
+      try {
+        if (!phrase) await applyE2eKey(null, "", "");
+        else await applyE2eKey(await MeetUpMedia.deriveKeyFromPhrase(phrase, roomCode),
+                               "p:" + phrase, phrase);
+      } finally {
+        setE2eBusy(false);
+      }
+    }
+
+    async function disableE2e() {
+      await applyE2eKey(null, "", "");
+    }
+
+    // Ссылка-приглашение с ключом: ключ уезжает во fragment (#k=…) —
+    // эта часть адреса на сервер не отправляется.
+    async function copyKeyInvite() {
+      if (!M.e2eKey) return;
+      const url = inviteUrl + "#k=" + (await MeetUpMedia.exportKeyB64(M.e2eKey));
+      const done = () => { setCopied(true); setTimeout(() => setCopied(false), 1800); };
+      if (navigator.clipboard && window.isSecureContext)
+        navigator.clipboard.writeText(url).then(done, () => fallbackCopy(url, done));
+      else
+        fallbackCopy(url, done);
     }
 
     // ================= Чат =================
@@ -811,8 +752,16 @@
     function sendChat() {
       const text = draft.trim();
       if (!text || !M.ws || M.ws.readyState !== 1) return;
-      M.ws.send(JSON.stringify({ type: "chat", text }));
       setDraft("");
+      if (engine.encrypted()) {
+        // Сервер хранит и ретранслирует шифротекст — прочитают только с ключом.
+        engine.sealText(text).then(sealed => {
+          if (sealed && M.ws && M.ws.readyState === 1)
+            M.ws.send(JSON.stringify({ type: "chat", text: sealed }));
+        });
+      } else {
+        M.ws.send(JSON.stringify({ type: "chat", text }));
+      }
     }
 
     useEffect(() => {
@@ -869,7 +818,12 @@
     useEffect(() => {
       if (!roomCode) { location.replace("anon_lobby.html"); return; }
 
-      if (savedName) openSocket();
+      // Сначала восстанавливаем ключ E2E (ссылка/хранилище), потом коннект —
+      // иначе история чата из join_ok расшифруется без ключа.
+      (async () => {
+        await applySavedE2e();
+        if (savedName) openSocket();
+      })();
 
       const mq = window.matchMedia("(max-width: 820px)");
       const updMq = () => setIsMobile(mq.matches);
@@ -881,7 +835,7 @@
         const now = Date.now();
         const stale = [];
         hasFrameRef.current.forEach((id) => {
-          const at = M.lastFrameAt.get(id) || 0;
+          const at = engine.lastFrameAt.get(id) || 0;
           if (now - at > 5000) stale.push(id);
         });
         if (stale.length)
@@ -981,7 +935,7 @@
     // Индикатор уровня микрофона — обновляется только при открытых настройках.
     useEffect(() => {
       if (!settingsOpen) return;
-      const t = setInterval(() => setMicLevel(M.micLevel), 100);
+      const t = setInterval(() => setMicLevel(engine.micLevel()), 100);
       return () => clearInterval(t);
     }, [settingsOpen]);
 
@@ -1007,20 +961,27 @@
     }
 
     function renderTile(t, idx) {
+      const locked = !t.self && lockedIds.has(t.id);
       let media = null;
       if (t.self) {
         if (selfHasVideo)
           media = <video ref={selfVideoRef} className={"tile-media" + (sharing ? "" : " mirror")}
                          autoPlay muted playsInline />;
-      } else if (t.cam && t.hasFrame) {
-        media = <img alt="" className="tile-media" ref={remoteImgRef(t.id)} />;
+      } else if (t.cam && t.hasFrame && !locked) {
+        media = <canvas className="tile-media" ref={engine.videoSinkRef(t.id)} />;
       }
       const spanSelf = featured && tiles.length === 3 && idx === 0;
       return (
         <div key={t.key} style={{ minHeight: 0, ...(spanSelf ? { gridRow: "1 / 3" } : null) }}>
           <VideoTile name={t.name} self={t.self} muted={!t.mic} speaking={t.speaking}
                      style={{ aspectRatio: "auto", height: "100%" }}>
-            {media}
+            {(media || locked) ? <>
+              {media}
+              {locked &&
+                <div className="tile-lock">
+                  <div><b>🔒</b>Зашифровано — нужен ключ</div>
+                </div>}
+            </> : null}
           </VideoTile>
         </div>
       );
@@ -1063,6 +1024,10 @@
               <Badge tone="danger" dot>переподключение…</Badge>}
             {phase === "connecting" && !reconnecting &&
               <Badge tone="muted" dot>подключение…</Badge>}
+            {e2eOn &&
+              <span title="Сквозное шифрование включено: видео, голос и чат зашифрованы ключом участников">
+                <Badge tone="accent">E2E 🔒</Badge>
+              </span>}
             <span title={roomCode}><Badge tone="accent">{shortCode}</Badge></span>
             <IconButton icon="copy" size="sm" label="Скопировать ссылку-приглашение" onClick={openShare} />
             <IconButton icon={theme === "dark" ? "sun" : "moon"} size="sm" label="Сменить тему" onClick={toggleTheme} />
@@ -1126,7 +1091,16 @@
                     <IconButton icon="arrow-right" label="Поделиться…"
                                 onClick={() => navigator.share({ title: "MeetUp — конференция", url: inviteUrl }).catch(() => {})} />}
                 </div>
-                <div className="share-hint">По ссылке входят без аккаунта: имя — и сразу в эфир.</div>
+                {e2eOn &&
+                  <Button variant="secondary" block icon="copy" style={{ marginTop: 8 }}
+                          onClick={copyKeyInvite}>
+                    Ссылка с ключом E2E
+                  </Button>}
+                <div className="share-hint">
+                  {e2eOn
+                    ? "Обычная ссылка не содержит ключ: вошедший по ней увидит «зашифровано»."
+                    : "По ссылке входят без аккаунта: имя — и сразу в эфир."}
+                </div>
               </Card>
             </div>
           </>}
@@ -1229,6 +1203,26 @@
                          min="0" max="200" step="5" value={sens}
                          style={{ background: "linear-gradient(90deg, var(--accent) " + (sens / 2) + "%, var(--surface-3) " + (sens / 2) + "%)" }}
                          onChange={e => changeSens(Number(e.target.value))} />
+                </Field>
+
+                <Field label={"Сквозное шифрование" + (e2eOn ? " · включено" : "")} htmlFor="set-e2e"
+                       hint="Одна фраза у всех участников. Ключ не покидает браузер — сервер видит только шифрованные данные."
+                       style={{ marginTop: 18 }}>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <Input id="set-e2e" type="password" value={e2ePhrase} autoComplete="off"
+                           placeholder={e2eOn && !e2ePhrase ? "Ключ загружен из ссылки" : "Фраза-ключ"}
+                           onChange={e => setE2ePhrase(e.target.value)}
+                           onKeyDown={e => e.key === "Enter" && applyPhrase()} />
+                    <Button variant={e2eOn ? "secondary" : "primary"} disabled={e2eBusy}
+                            onClick={applyPhrase}>
+                      {e2eOn ? "Сменить" : "Включить"}
+                    </Button>
+                  </div>
+                  {e2eOn &&
+                    <Button variant="ghost" block size="sm" style={{ marginTop: 8 }}
+                            onClick={disableE2e}>
+                      Отключить шифрование
+                    </Button>}
                 </Field>
               </Card>
             </div>
