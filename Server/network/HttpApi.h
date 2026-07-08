@@ -1,7 +1,7 @@
 #pragma once
 
+#include <functional>
 #include <memory>
-#include <optional>
 
 #include <QByteArray>
 #include <QJsonObject>
@@ -23,17 +23,23 @@ struct ApiResponse
 // Маршрутизация /api/*: разбирает запрос, зовёт сервисы, собирает JSON.
 // Про сокеты не знает — транспортом занимается HttpFileServer. Бизнес-логики
 // здесь тоже нет: только перевод HTTP <-> вызовы сервисов.
+//
+// Ответ уходит через respond-колбэк: register/login хешируют пароль в пуле
+// потоков и отвечают позже, остальные маршруты зовут respond сразу.
 class HttpApi
 {
 public:
+    using Respond = std::function<void(const ApiResponse &)>;
+
     HttpApi(std::shared_ptr<AuthService> auth, RoomRegistry *rooms);
 
-    // std::nullopt — путь не из /api, пусть обрабатывает статика.
-    std::optional<ApiResponse> route(const HttpRequest &req);
+    // false — путь не из /api, пусть обрабатывает статика. true — маршрут
+    // взят в работу и respond будет позван (возможно, уже позван).
+    bool route(const HttpRequest &req, const Respond &respond);
 
 private:
-    ApiResponse handleRegister(const HttpRequest &req);
-    ApiResponse handleLogin(const HttpRequest &req);
+    void handleRegister(const HttpRequest &req, const Respond &respond);
+    void handleLogin(const HttpRequest &req, const Respond &respond);
     ApiResponse handleLogout(const HttpRequest &req);
     ApiResponse handleMe(const HttpRequest &req);
     ApiResponse handlePatchMe(const HttpRequest &req);

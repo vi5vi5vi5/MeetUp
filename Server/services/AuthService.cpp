@@ -1,17 +1,21 @@
 #include "services/AuthService.h"
 
+#include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDateTime>
+#include <QMetaObject>
 #include <QPasswordDigestor>
 #include <QRandomGenerator>
 #include <QRegularExpression>
+#include <QThreadPool>
 
 namespace {
 
-// OWASP-ориентир для PBKDF2-HMAC-SHA512 — 210 тысяч итераций (~0.1 с на
-// вход). Число хранится в User::passIters: поднять стоимость можно в любой
-// момент, старые хеши продолжат проверяться со своим значением.
-constexpr int kPassIters = 210000;
+// Стоимость PBKDF2-HMAC-SHA512 подобрана под ~0.1–0.3 с на обычном железе:
+// вход не раздражает, а перебор утёкших хешей всё ещё дорог. Число хранится
+// в User::passIters — его можно поднять в любой момент: старые хеши
+// проверяются со своей стоимостью и тихо перевариваются при входе (rehash).
+constexpr int kPassIters = 64000;
 constexpr int kSaltLen = 16;
 constexpr int kHashLen = 64;
 
@@ -88,61 +92,122 @@ Session AuthService::createSession(int userId)
     return s;
 }
 
-AuthResult AuthService::registerUser(const QString &rawLogin, const QString &password,
-                                     const QString &rawDisplayName)
+void AuthService::hashInPool(std::function<QByteArray()> hashFn,
+                             std::function<void(const QByteArray &)> then)
 {
-    const QString login = normalizeLogin(rawLogin);
-    if (!validLogin(login))
-        return AuthResult::fail("invalid_login");
-
-    const QString displayName = rawDisplayName.trimmed();
-    if (!validDisplayName(displayName))
-        return AuthResult::fail("invalid_display_name");
-
-    if (password.size() < kMinPasswordLen || password.size() > kMaxPasswordLen)
-        return AuthResult::fail("weak_password");
-
-    if (m_users->findByLogin(login).has_value())
-        return AuthResult::fail("login_taken");
-
-    User u;
-    u.login = login;
-    u.displayName = displayName;
-    u.passIters = kPassIters;
-    u.passSalt = randomBytes(kSaltLen);
-    u.passHash = hashPassword(password, u.passSalt, u.passIters);
-    u.createdAtMs = QDateTime::currentMSecsSinceEpoch();
-    m_users->save(u);
-
-    AuthResult r;
-    r.ok = true;
-    r.user = u;
-    r.session = createSession(u.id);
-    return r;
+    // AuthService живёт до конца программы (main держит shared_ptr), поэтому
+    // захват this в продолжениях безопасен.
+    QThreadPool::globalInstance()->start([hashFn, then] {
+        const QByteArray hash = hashFn();
+        // Продолжение — в главном потоке: репозитории не потокобезопасны.
+        QMetaObject::invokeMethod(QCoreApplication::instance(),
+                                  [then, hash] { then(hash); },
+                                  Qt::QueuedConnection);
+    });
 }
 
-AuthResult AuthService::login(const QString &rawLogin, const QString &password)
+void AuthService::registerUserAsync(const QString &rawLogin, const QString &password,
+                                    const QString &rawDisplayName, AuthCallback done)
 {
     const QString login = normalizeLogin(rawLogin);
-    const std::optional<User> user = m_users->findByLogin(login);
-
-    if (!user.has_value()) {
-        // Считаем хеш и для несуществующего логина: иначе по мгновенному
-        // ответу можно перечислять занятые логины (timing-оракул).
-        static const QByteArray dummySalt(kSaltLen, '\0');
-        hashPassword(password, dummySalt, kPassIters);
-        return AuthResult::fail("wrong_credentials");
+    if (!validLogin(login)) {
+        done(AuthResult::fail("invalid_login"));
+        return;
     }
 
-    const QByteArray hash = hashPassword(password, user->passSalt, user->passIters);
-    if (!constantTimeEquals(hash, user->passHash))
-        return AuthResult::fail("wrong_credentials");
+    const QString displayName = rawDisplayName.trimmed();
+    if (!validDisplayName(displayName)) {
+        done(AuthResult::fail("invalid_display_name"));
+        return;
+    }
 
-    AuthResult r;
-    r.ok = true;
-    r.user = *user;
-    r.session = createSession(user->id);
-    return r;
+    if (password.size() < kMinPasswordLen || password.size() > kMaxPasswordLen) {
+        done(AuthResult::fail("weak_password"));
+        return;
+    }
+
+    if (m_users->findByLogin(login).has_value()) {
+        done(AuthResult::fail("login_taken"));
+        return;
+    }
+
+    const QByteArray salt = randomBytes(kSaltLen);
+    hashInPool(
+        [this, password, salt] { return hashPassword(password, salt, kPassIters); },
+        [this, login, displayName, salt, done](const QByteArray &hash) {
+            // Пока хеш считался, логин могли занять параллельным запросом.
+            if (m_users->findByLogin(login).has_value()) {
+                done(AuthResult::fail("login_taken"));
+                return;
+            }
+
+            User u;
+            u.login = login;
+            u.displayName = displayName;
+            u.passIters = kPassIters;
+            u.passSalt = salt;
+            u.passHash = hash;
+            u.createdAtMs = QDateTime::currentMSecsSinceEpoch();
+            m_users->save(u);
+
+            AuthResult r;
+            r.ok = true;
+            r.user = u;
+            r.session = createSession(u.id);
+            done(r);
+        });
+}
+
+void AuthService::loginAsync(const QString &rawLogin, const QString &password, AuthCallback done)
+{
+    const QString login = normalizeLogin(rawLogin);
+    const std::optional<User> found = m_users->findByLogin(login);
+
+    if (!found.has_value()) {
+        // Хеш считаем и для неизвестного логина: иначе по мгновенному отказу
+        // можно перечислять занятые логины (timing-оракул).
+        static const QByteArray dummySalt(kSaltLen, '\0');
+        hashInPool([this, password] { return hashPassword(password, dummySalt, kPassIters); },
+                   [done](const QByteArray &) { done(AuthResult::fail("wrong_credentials")); });
+        return;
+    }
+
+    const User u = *found;
+    hashInPool(
+        [this, password, u] { return hashPassword(password, u.passSalt, u.passIters); },
+        [this, u, password, done](const QByteArray &hash) {
+            if (!constantTimeEquals(hash, u.passHash)) {
+                done(AuthResult::fail("wrong_credentials"));
+                return;
+            }
+
+            // Стоимость хеша устарела (kPassIters подняли) — переварим пароль
+            // с актуальной, пока он в руках. Пользователя это не задерживает.
+            if (u.passIters != kPassIters)
+                rehash(u.id, password);
+
+            AuthResult r;
+            r.ok = true;
+            r.user = m_users->findById(u.id).value_or(u);
+            r.session = createSession(u.id);
+            done(r);
+        });
+}
+
+void AuthService::rehash(int userId, const QString &password)
+{
+    const QByteArray salt = randomBytes(kSaltLen);
+    hashInPool(
+        [this, password, salt] { return hashPassword(password, salt, kPassIters); },
+        [this, userId, salt](const QByteArray &hash) {
+            std::optional<User> u = m_users->findById(userId);
+            if (!u.has_value())
+                return;   // пользователя успели удалить
+            u->passSalt = salt;
+            u->passHash = hash;
+            u->passIters = kPassIters;
+            m_users->save(*u);
+        });
 }
 
 void AuthService::logout(const QString &token)

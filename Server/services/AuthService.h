@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -29,14 +30,20 @@ struct AuthResult
 // Регистрация, вход и сессии. Пароли аккаунтов хранятся только как
 // PBKDF2-HMAC-SHA512 (соль на пользователя, сравнение за константное время);
 // сам пароль восстановить нельзя. Про HTTP этот класс не знает.
+//
+// PBKDF2 намеренно дорогой, поэтому register/login асинхронные: хеш считается
+// в пуле потоков, event loop (и видео-релей) не блокируется; done зовётся
+// в главном потоке. Репозитории трогаем только из главного потока.
 class AuthService
 {
 public:
+    using AuthCallback = std::function<void(const AuthResult &)>;
+
     AuthService(std::shared_ptr<IUsers> users, std::shared_ptr<ISessions> sessions);
 
-    AuthResult registerUser(const QString &rawLogin, const QString &password,
-                            const QString &rawDisplayName);
-    AuthResult login(const QString &rawLogin, const QString &password);
+    void registerUserAsync(const QString &rawLogin, const QString &password,
+                           const QString &rawDisplayName, AuthCallback done);
+    void loginAsync(const QString &rawLogin, const QString &password, AuthCallback done);
     void logout(const QString &token);
 
     // Пользователь по токену сессии; сессия скользяще продлевается.
@@ -57,6 +64,13 @@ public:
 private:
     QByteArray hashPassword(const QString &password, const QByteArray &salt, int iters) const;
     Session createSession(int userId);
+
+    // hashFn — в пуле потоков, then(hash) — обратно в главном потоке.
+    void hashInPool(std::function<QByteArray()> hashFn,
+                    std::function<void(const QByteArray &)> then);
+
+    // Тихо переварить пароль с актуальной стоимостью (после смены kPassIters).
+    void rehash(int userId, const QString &password);
 
     std::shared_ptr<IUsers> m_users;
     std::shared_ptr<ISessions> m_sessions;

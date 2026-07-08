@@ -4,6 +4,7 @@
 
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QPointer>
 #include <QHostAddress>
 #include <QFile>
 #include <QFileInfo>
@@ -91,13 +92,17 @@ void HttpFileServer::dispatch(QTcpSocket *socket, HttpRequestParser *parser)
 {
     const HttpRequest &req = parser->request();
 
-    // Сначала API: HttpApi вернёт ответ для любого пути внутри /api.
+    // Сначала API: HttpApi берёт на себя любой путь внутри /api. Ответ может
+    // прийти позже (register/login хешируют пароль в пуле потоков) — к этому
+    // моменту клиент мог отвалиться, QPointer это заметит.
     if (m_api) {
-        const std::optional<ApiResponse> resp = m_api->route(req);
-        if (resp.has_value()) {
-            sendApiResponse(socket, *resp);
+        QPointer<QTcpSocket> guard(socket);
+        const bool handled = m_api->route(req, [this, guard](const ApiResponse &resp) {
+            if (guard)
+                sendApiResponse(guard, resp);
+        });
+        if (handled)
             return;
-        }
     }
 
     if (req.method != "GET") {

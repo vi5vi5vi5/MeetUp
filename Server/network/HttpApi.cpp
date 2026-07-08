@@ -17,78 +17,104 @@ HttpApi::HttpApi(std::shared_ptr<AuthService> auth, RoomRegistry *rooms)
 {
 }
 
-std::optional<ApiResponse> HttpApi::route(const HttpRequest &req)
+bool HttpApi::route(const HttpRequest &req, const Respond &respond)
 {
     const QString &p = req.path;
     if (p != QLatin1String("/api") && !p.startsWith(QLatin1String("/api/")))
-        return std::nullopt;
+        return false;
 
     const QByteArray &m = req.method;
 
-    if (p == QLatin1String("/api/auth/register"))
-        return m == "POST" ? handleRegister(req) : err(405, QStringLiteral("method_not_allowed"));
-    if (p == QLatin1String("/api/auth/login"))
-        return m == "POST" ? handleLogin(req) : err(405, QStringLiteral("method_not_allowed"));
-    if (p == QLatin1String("/api/auth/logout"))
-        return m == "POST" ? handleLogout(req) : err(405, QStringLiteral("method_not_allowed"));
-
-    if (p == QLatin1String("/api/me")) {
-        if (m == "GET")   return handleMe(req);
-        if (m == "PATCH") return handlePatchMe(req);
-        return err(405, QStringLiteral("method_not_allowed"));
+    if (p == QLatin1String("/api/auth/register")) {
+        if (m == "POST") handleRegister(req, respond);
+        else respond(err(405, QStringLiteral("method_not_allowed")));
+        return true;
+    }
+    if (p == QLatin1String("/api/auth/login")) {
+        if (m == "POST") handleLogin(req, respond);
+        else respond(err(405, QStringLiteral("method_not_allowed")));
+        return true;
+    }
+    if (p == QLatin1String("/api/auth/logout")) {
+        respond(m == "POST" ? handleLogout(req) : err(405, QStringLiteral("method_not_allowed")));
+        return true;
     }
 
-    if (p == QLatin1String("/api/rooms"))
-        return m == "POST" ? handleCreateRoom() : err(405, QStringLiteral("method_not_allowed"));
-    if (p.startsWith(QLatin1String("/api/rooms/")))
-        return m == "GET" ? handleCheckRoom(p.mid(int(qstrlen("/api/rooms/"))))
-                          : err(405, QStringLiteral("method_not_allowed"));
+    if (p == QLatin1String("/api/me")) {
+        if (m == "GET")        respond(handleMe(req));
+        else if (m == "PATCH") respond(handlePatchMe(req));
+        else respond(err(405, QStringLiteral("method_not_allowed")));
+        return true;
+    }
 
-    return err(404, QStringLiteral("unknown_endpoint"));
+    if (p == QLatin1String("/api/rooms")) {
+        respond(m == "POST" ? handleCreateRoom() : err(405, QStringLiteral("method_not_allowed")));
+        return true;
+    }
+    if (p.startsWith(QLatin1String("/api/rooms/"))) {
+        respond(m == "GET" ? handleCheckRoom(p.mid(int(qstrlen("/api/rooms/"))))
+                           : err(405, QStringLiteral("method_not_allowed")));
+        return true;
+    }
+
+    respond(err(404, QStringLiteral("unknown_endpoint")));
+    return true;
 }
 
 // ---------- Аккаунты ----------
 
-ApiResponse HttpApi::handleRegister(const HttpRequest &req)
+// Ответ с пользователем и свежей кукой сессии (register и login).
+static ApiResponse sessionResponse(const AuthResult &res, const QByteArray &cookie)
 {
-    bool okJson = false;
-    const QJsonObject body = req.jsonBody(&okJson);
-    if (!okJson)
-        return err(400, QStringLiteral("invalid_json"));
-
-    const AuthResult res = m_auth->registerUser(body.value(QLatin1String("login")).toString(),
-                                                body.value(QLatin1String("password")).toString(),
-                                                body.value(QLatin1String("display_name")).toString());
-    if (!res.ok)
-        return err(statusForError(res.error), res.error);
-
-    qInfo().noquote() << QStringLiteral("auth: registered '%1' (id=%2)")
-                             .arg(res.user.login).arg(res.user.id);
-
     ApiResponse resp;
     resp.body = QJsonObject{{"user", res.user.publicJson()}};
-    resp.headers.append({QByteArrayLiteral("Set-Cookie"),
-                         sessionCookie(res.session.token, kCookieMaxAgeS)});
+    resp.headers.append({QByteArrayLiteral("Set-Cookie"), cookie});
     return resp;
 }
 
-ApiResponse HttpApi::handleLogin(const HttpRequest &req)
+void HttpApi::handleRegister(const HttpRequest &req, const Respond &respond)
 {
     bool okJson = false;
     const QJsonObject body = req.jsonBody(&okJson);
-    if (!okJson)
-        return err(400, QStringLiteral("invalid_json"));
+    if (!okJson) {
+        respond(err(400, QStringLiteral("invalid_json")));
+        return;
+    }
 
-    const AuthResult res = m_auth->login(body.value(QLatin1String("login")).toString(),
-                                         body.value(QLatin1String("password")).toString());
-    if (!res.ok)
-        return err(statusForError(res.error), res.error);
+    m_auth->registerUserAsync(
+        body.value(QLatin1String("login")).toString(),
+        body.value(QLatin1String("password")).toString(),
+        body.value(QLatin1String("display_name")).toString(),
+        [respond](const AuthResult &res) {
+            if (!res.ok) {
+                respond(err(statusForError(res.error), res.error));
+                return;
+            }
+            qInfo().noquote() << QStringLiteral("auth: registered '%1' (id=%2)")
+                                     .arg(res.user.login).arg(res.user.id);
+            respond(sessionResponse(res, sessionCookie(res.session.token, kCookieMaxAgeS)));
+        });
+}
 
-    ApiResponse resp;
-    resp.body = QJsonObject{{"user", res.user.publicJson()}};
-    resp.headers.append({QByteArrayLiteral("Set-Cookie"),
-                         sessionCookie(res.session.token, kCookieMaxAgeS)});
-    return resp;
+void HttpApi::handleLogin(const HttpRequest &req, const Respond &respond)
+{
+    bool okJson = false;
+    const QJsonObject body = req.jsonBody(&okJson);
+    if (!okJson) {
+        respond(err(400, QStringLiteral("invalid_json")));
+        return;
+    }
+
+    m_auth->loginAsync(
+        body.value(QLatin1String("login")).toString(),
+        body.value(QLatin1String("password")).toString(),
+        [respond](const AuthResult &res) {
+            if (!res.ok) {
+                respond(err(statusForError(res.error), res.error));
+                return;
+            }
+            respond(sessionResponse(res, sessionCookie(res.session.token, kCookieMaxAgeS)));
+        });
 }
 
 ApiResponse HttpApi::handleLogout(const HttpRequest &req)
