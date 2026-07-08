@@ -12,13 +12,28 @@ find_package(Qt6 REQUIRED COMPONENTS Core Network WebSockets)
 add_executable(MeetUpServer
     main.cpp
 
+    # models/ — структуры данных (пользователь, сессия)
+    models/User.h
+    models/Session.h
+
+    # interface/ — доступ к данным: Abstract (контракты) + реализации
+    interface/Abstract/IUsers.h
+    interface/Abstract/ISessions.h
+    interface/InMemory/InMemoryUsers.h
+    interface/InMemory/InMemorySessions.h
+
+    # services/ — бизнес-логика
+    services/AuthService.h     services/AuthService.cpp
+
     # core/ — модель времени выполнения: сессии, комнаты, реестр комнат
     core/ClientSession.h       core/ClientSession.cpp
     core/ConferenceRoom.h      core/ConferenceRoom.cpp
     core/RoomRegistry.h        core/RoomRegistry.cpp
 
-    # network/ — входные точки: WebSocket-relay и HTTP-раздача статики
+    # network/ — входные точки: WebSocket-relay, HTTP (статика + JSON API)
     network/ConferenceServer.h network/ConferenceServer.cpp
+    network/HttpRequest.h      network/HttpRequest.cpp
+    network/HttpApi.h          network/HttpApi.cpp
     network/HttpFileServer.h   network/HttpFileServer.cpp
 )
 

@@ -707,17 +707,21 @@ Object.assign(__ds_scope, { IconButton });
 try { (() => {
 /**
  * ControlDock — the floating conference control bar. Composes IconButtons
- * for mic / camera / screen-share / (extras) / leave. Controlled toggles.
+ * for mic / camera / screen-share (optional) / settings / leave. Controlled
+ * toggles; `showShare={false}` hides screen-share (mobile), `settingsOpen`
+ * highlights the settings button while the settings dialog is open.
  */
 function ControlDock({
   micOn = true,
   cameraOn = true,
   sharing = false,
+  settingsOpen = false,
   onToggleMic,
   onToggleCamera,
   onToggleShare,
+  onOpenSettings,
   onLeave,
-  extras = true,
+  showShare = true,
   floating = true,
   style
 }) {
@@ -744,20 +748,17 @@ function ControlDock({
     variant: cameraOn ? "neutral" : "off",
     label: cameraOn ? "Выключить камеру" : "Включить камеру",
     onClick: onToggleCamera
-  }), /*#__PURE__*/React.createElement(__ds_scope.IconButton, {
+  }), showShare && /*#__PURE__*/React.createElement(__ds_scope.IconButton, {
     icon: "screen",
     variant: sharing ? "active" : "neutral",
     label: "\u0414\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0430\u0446\u0438\u044F \u044D\u043A\u0440\u0430\u043D\u0430",
     onClick: onToggleShare
-  }), extras && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(__ds_scope.IconButton, {
-    icon: "hand",
-    variant: "neutral",
-    label: "\u041F\u043E\u0434\u043D\u044F\u0442\u044C \u0440\u0443\u043A\u0443"
   }), /*#__PURE__*/React.createElement(__ds_scope.IconButton, {
-    icon: "more",
-    variant: "neutral",
-    label: "\u0415\u0449\u0451"
-  })), /*#__PURE__*/React.createElement("span", {
+    icon: "settings",
+    variant: settingsOpen ? "active" : "neutral",
+    label: "\u041D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438",
+    onClick: onOpenSettings
+  }), /*#__PURE__*/React.createElement("span", {
     style: {
       width: "1px",
       alignSelf: "stretch",

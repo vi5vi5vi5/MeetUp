@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MeetUp — Вход</title>
+<title>MeetUp — Регистрация</title>
 <link rel="stylesheet" href="assets/fonts.css">
 <link rel="stylesheet" href="assets/theme.css">
 <style>
@@ -30,7 +30,7 @@
     letter-spacing: 2px; text-transform: uppercase;
   }
 
-  .stagewrap { flex: 1; display: grid; place-items: center; padding: 0 28px 40px; }
+  .stagewrap { flex: 1; display: grid; place-items: center; padding: 0 28px 40px; overflow: auto; }
   .stage {
     display: grid; grid-template-columns: 1.05fr .95fr; gap: 56px;
     align-items: center; max-width: 900px; width: 100%;
@@ -53,17 +53,7 @@
 
   .cardwrap { justify-self: end; width: 100%; max-width: 380px; }
 
-  .row-between { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-  .forgot { font-size: 12px; color: var(--accent-ink); }
-
-  .divider { display: flex; align-items: center; gap: 12px; margin: 20px 0 16px; }
-  .divider::before, .divider::after {
-    content: ""; flex: 1; height: 1px; background: var(--border);
-  }
-  .divider span {
-    font-family: var(--font-label); font-size: 10px; letter-spacing: 2px;
-    text-transform: uppercase; color: var(--text-faint);
-  }
+  .signin { margin-top: 14px; text-align: center; font-size: 12px; color: var(--text-faint); }
 
   .msg { margin-top: 14px; text-align: center; font-size: 12px; }
 
@@ -99,10 +89,20 @@
   const { useState, useEffect } = React;
   const { Card, Button, Input, Field, IconButton } = window.MeetUpDesignSystem_2584b5;
 
-  function LoginScreen() {
+  // Тексты ошибок по машинным кодам сервера (body.error).
+  const ERRORS = {
+    invalid_login: "Логин: 3–32 символа — латиница, цифры, точка, дефис, подчёркивание.",
+    invalid_display_name: "Отображаемое имя: от 1 до 40 символов.",
+    weak_password: "Пароль слишком короткий — минимум 8 символов.",
+    login_taken: "Такой логин уже занят. Попробуйте другой.",
+  };
+
+  function RegisterScreen() {
     const [theme, setTheme] = useState("dark");
     const [login, setLogin] = useState("");
+    const [name, setName] = useState("");
     const [pass, setPass] = useState("");
+    const [pass2, setPass2] = useState("");
     const [err, setErr] = useState("");
     const [busy, setBusy] = useState(false);
 
@@ -111,34 +111,34 @@
     }, [theme]);
     const toggle = () => setTheme(t => (t === "dark" ? "light" : "dark"));
 
-    // Живая сессия в куке — сразу в лобби, логин не нужен.
+    // Уже вошли — регистрация не нужна, сразу в лобби.
     useEffect(() => {
       MeetUp.authMe().then(resp => {
         if (resp.ok && resp.body && resp.body.user) enterLobby(resp.body.user);
       });
     }, []);
 
-    // Отображаемое имя аккаунта подставляется в лобби и конференцию.
     function enterLobby(user) {
       MeetUp.saveName(user.display_name);
       location.href = "anon_lobby.html";
     }
 
     async function submit() {
-      if (!login.trim() || !pass) { setErr("Введите логин и пароль."); return; }
+      const loginNorm = login.trim().toLowerCase();
+      if (!loginNorm || !name.trim() || !pass) { setErr("Заполните все поля."); return; }
+      if (!/^[a-z0-9_.-]{3,32}$/.test(loginNorm)) { setErr(ERRORS.invalid_login); return; }
+      if (pass.length < 8) { setErr(ERRORS.weak_password); return; }
+      if (pass !== pass2) { setErr("Пароли не совпадают."); return; }
+
       setErr("");
       setBusy(true);
-      const resp = await MeetUp.authLogin(login.trim(), pass);
+      const resp = await MeetUp.authRegister(loginNorm, pass, name.trim());
       if (resp.ok && resp.body && resp.body.user) { enterLobby(resp.body.user); return; }
       setBusy(false);
-      if (resp.status === 401) setErr("Неверный логин или пароль.");
+      const code = resp.body && resp.body.error;
+      if (ERRORS[code]) setErr(ERRORS[code]);
       else if (resp.status === 0) setErr("Сервер недоступен. Попробуйте позже.");
       else setErr("Ошибка сервера (" + resp.status + ").");
-    }
-
-    // Анонимный вход: логины и пароли не нужны, идём сразу в лобби.
-    function anonymous() {
-      location.href = "anon_lobby.html";
     }
 
     return (
@@ -154,10 +154,11 @@
           <div className="stage">
             <div className="hero">
               <h1 className="hero-title">
-                С возвращением<br />в <span style={{ color: "var(--accent-ink)" }}>эфир</span>
+                Свой аккаунт —<br />своя <span style={{ color: "var(--accent-ink)" }}>комната</span>
               </h1>
               <p className="hero-sub">
-                Войдите в аккаунт, чтобы продолжить встречи, историю комнат и контакты.
+                Логин и пароль — для входа. Отображаемое имя увидят собеседники,
+                его можно поменять в любой момент.
               </p>
               <div className="hero-meta">
                 <span className="hero-dot" />
@@ -167,43 +168,43 @@
 
             <div className="cardwrap">
               <Card elevated width="100%">
-                <Field label="Логин или email" htmlFor="login">
-                  <Input id="login" value={login} autoComplete="username" maxLength={64}
-                         placeholder="anna@meetup.dev"
+                <Field label="Логин" htmlFor="login">
+                  <Input id="login" value={login} autoComplete="username" maxLength={32}
+                         placeholder="anna"
                          onChange={(e) => { setLogin(e.target.value); setErr(""); }} />
                 </Field>
 
-                <Field label="Пароль" htmlFor="pass" style={{ marginTop: 18 }}>
-                  <Input id="pass" type="password" value={pass} autoComplete="current-password"
+                <Field label="Отображаемое имя" htmlFor="name" style={{ marginTop: 18 }}>
+                  <Input id="name" value={name} autoComplete="name" maxLength={40}
+                         placeholder="Анна"
+                         onChange={(e) => { setName(e.target.value); setErr(""); }} />
+                </Field>
+
+                <Field label="Пароль" htmlFor="pass" style={{ marginTop: 18 }}
+                       hint="Минимум 8 символов">
+                  <Input id="pass" type="password" value={pass} autoComplete="new-password"
                          placeholder="••••••••" maxLength={128}
-                         onChange={(e) => { setPass(e.target.value); setErr(""); }}
+                         onChange={(e) => { setPass(e.target.value); setErr(""); }} />
+                </Field>
+
+                <Field label="Повторите пароль" htmlFor="pass2" style={{ marginTop: 18 }}>
+                  <Input id="pass2" type="password" value={pass2} autoComplete="new-password"
+                         placeholder="••••••••" maxLength={128}
+                         onChange={(e) => { setPass2(e.target.value); setErr(""); }}
                          onKeyDown={(e) => e.key === "Enter" && submit()} />
                 </Field>
 
-                <div style={{ marginTop: 10, textAlign: "right" }}>
-                  <a href="#" className="forgot"
-                     onClick={(e) => { e.preventDefault(); setErr("Восстановление пароля появится вместе с аккаунтами."); }}>
-                    Забыли пароль?
-                  </a>
-                </div>
-
                 <Button variant="primary" block iconRight="arrow-right" disabled={busy}
                         style={{ marginTop: 20 }} onClick={submit}>
-                  Войти
-                </Button>
-                <Button variant="ghost" block icon="plus" style={{ marginTop: 10 }} disabled={busy}
-                        onClick={() => { location.href = "register.html"; }}>
                   Создать аккаунт
                 </Button>
 
-                <div className="divider"><span>или</span></div>
-
-                <Button variant="secondary" block icon="arrow-right" onClick={anonymous}>
-                  Войти без аккаунта
-                </Button>
+                <div className="signin">
+                  Уже есть аккаунт? <a href="login.html">Войти</a>
+                </div>
 
                 <div className="msg" style={{ color: err ? "var(--danger)" : "var(--text-faint)" }}>
-                  {err || "Аккаунт хранит ваше имя между встречами."}
+                  {err || "Пароль хранится только в виде хеша."}
                 </div>
               </Card>
             </div>
@@ -213,7 +214,7 @@
     );
   }
 
-  ReactDOM.createRoot(document.getElementById("root")).render(<LoginScreen />);
+  ReactDOM.createRoot(document.getElementById("root")).render(<RegisterScreen />);
 </script>
 
 </body>

@@ -1,10 +1,17 @@
 #include <QCoreApplication>
 #include <QCommandLineParser>
 #include <QDir>
+#include <QTimer>
+
+#include <memory>
 
 #include "core/RoomRegistry.h"
+#include "interface/InMemory/InMemorySessions.h"
+#include "interface/InMemory/InMemoryUsers.h"
 #include "network/ConferenceServer.h"
+#include "network/HttpApi.h"
 #include "network/HttpFileServer.h"
+#include "services/AuthService.h"
 
 #ifndef WEB_ROOT_DEFAULT
 #define WEB_ROOT_DEFAULT ""
@@ -54,11 +61,26 @@ int main(int argc, char *argv[])
     // подключает в них участников.
     RoomRegistry registry;
 
+    // Хранилища и сервисы (как в MedFlow: репозитории → сервисы → серверы).
+    // Пока InMemory — данные живут до перезапуска; SQLite подключится позже
+    // заменой этих двух строк, интерфейсы и сервисы не изменятся.
+    auto users = std::make_shared<InMemoryUsers>();
+    auto sessions = std::make_shared<InMemorySessions>();
+    auto auth = std::make_shared<AuthService>(users, sessions);
+
+    HttpApi api(auth, &registry);
     ConferenceServer conference(wsPort, &registry);
-    HttpFileServer http(httpPort, webRoot, &registry);
+    HttpFileServer http(httpPort, webRoot, &api);
 
     if (!conference.isListening() || !http.isListening())
         return 1;
+
+    // Протухшие сессии чистим раз в час; актуальность конкретной сессии
+    // AuthService и так проверяет при каждом обращении.
+    QTimer purgeSessionsTimer;
+    QObject::connect(&purgeSessionsTimer, &QTimer::timeout,
+                     [&auth] { auth->purgeExpiredSessions(); });
+    purgeSessionsTimer.start(60 * 60 * 1000);
 
     qInfo().noquote() << QStringLiteral("Ready. Open http://localhost:%1 in your browser.").arg(httpPort);
     return app.exec();

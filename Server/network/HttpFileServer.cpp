@@ -1,6 +1,6 @@
 #include "network/HttpFileServer.h"
-#include "core/ConferenceRoom.h"
-#include "core/RoomRegistry.h"
+#include "network/HttpApi.h"
+#include "network/HttpRequest.h"
 
 #include <QTcpServer>
 #include <QTcpSocket>
@@ -8,15 +8,14 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QDir>
-#include <QUrl>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QDebug>
 
 HttpFileServer::HttpFileServer(quint16 port, const QString &rootDir,
-                               RoomRegistry *registry, QObject *parent)
+                               HttpApi *api, QObject *parent)
     : QObject(parent),
-      m_registry(registry),
+      m_api(api),
       m_root(QDir(rootDir).absolutePath()),
       m_port(port)
 {
@@ -32,6 +31,12 @@ HttpFileServer::HttpFileServer(quint16 port, const QString &rootDir,
                                      .arg(port).arg(m_server->errorString());
 }
 
+HttpFileServer::~HttpFileServer()
+{
+    qDeleteAll(m_parsers);
+    m_parsers.clear();
+}
+
 bool HttpFileServer::isListening() const
 {
     return m_server->isListening();
@@ -42,7 +47,10 @@ void HttpFileServer::onNewConnection()
     while (m_server->hasPendingConnections()) {
         QTcpSocket *socket = m_server->nextPendingConnection();
         connect(socket, &QTcpSocket::readyRead, this, &HttpFileServer::onReadyRead);
-        connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
+        connect(socket, &QTcpSocket::disconnected, this, [this, socket] {
+            delete m_parsers.take(socket);
+            socket->deleteLater();
+        });
     }
 }
 
@@ -52,82 +60,53 @@ void HttpFileServer::onReadyRead()
     if (!socket)
         return;
 
-    // Запрос помещается в один-два пакета; для этого стенда достаточно
-    // разобрать первую строку: "GET /path HTTP/1.1". Тело запроса API
-    // не читаем — создание комнаты и заглушки авторизации без параметров.
-    const QByteArray request = socket->readAll();
-    const int lineEnd = request.indexOf('\n');
-    const QByteArray requestLine = (lineEnd >= 0 ? request.left(lineEnd) : request).trimmed();
-
-    const QList<QByteArray> parts = requestLine.split(' ');
-    if (parts.size() < 2) {
-        socket->disconnectFromHost();
-        return;
+    // Запрос может приходить кусками (особенно POST с телом) — парсер копит
+    // байты между вызовами readyRead, пока не соберёт запрос целиком.
+    HttpRequestParser *parser = m_parsers.value(socket);
+    if (!parser) {
+        parser = new HttpRequestParser;
+        m_parsers.insert(socket, parser);
     }
 
-    const QByteArray method = parts.at(0);
-    QString path = QString::fromUtf8(parts.at(1));
-    const int query = path.indexOf('?');
-    if (query >= 0)
-        path = path.left(query);
-    path = QUrl::fromPercentEncoding(path.toUtf8());
-
-    if (path == QLatin1String("/api") || path.startsWith(QLatin1String("/api/"))) {
-        handleApi(socket, method, path);
+    switch (parser->feed(socket->readAll())) {
+    case HttpRequestParser::State::NeedMore:
         return;
+    case HttpRequestParser::State::Error: {
+        const int code = parser->errorStatus();
+        sendResponse(socket, code, statusText(code), "text/plain; charset=utf-8",
+                     QByteArray::number(code) + ' ' + statusText(code));
+        break;
+    }
+    case HttpRequestParser::State::Done:
+        dispatch(socket, parser);
+        break;
     }
 
-    if (method != "GET") {
-        sendResponse(socket, 405, statusText(405), "text/plain; charset=utf-8", "405 Method Not Allowed");
-        return;
-    }
-
-    serveFile(socket, path);
+    // Ответ отправлен, соединение закрывается — байты, досланные клиентом
+    // до фактического закрытия, не должны диспетчеризоваться повторно.
+    delete m_parsers.take(socket);
 }
 
-void HttpFileServer::handleApi(QTcpSocket *socket, const QByteArray &method, const QString &path)
+void HttpFileServer::dispatch(QTcpSocket *socket, HttpRequestParser *parser)
 {
-    // POST /api/rooms — новая комната; код генерирует сервер (см. RoomRegistry).
-    if (path == QLatin1String("/api/rooms")) {
-        if (method != "POST") {
-            sendJson(socket, 405, QJsonObject{{"error", "method_not_allowed"}});
+    const HttpRequest &req = parser->request();
+
+    // Сначала API: HttpApi вернёт ответ для любого пути внутри /api.
+    if (m_api) {
+        const std::optional<ApiResponse> resp = m_api->route(req);
+        if (resp.has_value()) {
+            sendApiResponse(socket, *resp);
             return;
         }
-        ConferenceRoom *room = m_registry->createRoom();
-        qInfo().noquote() << QStringLiteral("API: room created '%1' (total %2)")
-                                 .arg(room->code()).arg(m_registry->roomCount());
-        sendJson(socket, 200, QJsonObject{{"room", room->code()}});
+    }
+
+    if (req.method != "GET") {
+        sendResponse(socket, 405, statusText(405), "text/plain; charset=utf-8",
+                     "405 Method Not Allowed");
         return;
     }
 
-    // GET /api/rooms/<code> — существует ли комната (проверка кода в лобби).
-    if (path.startsWith(QLatin1String("/api/rooms/"))) {
-        if (method != "GET") {
-            sendJson(socket, 405, QJsonObject{{"error", "method_not_allowed"}});
-            return;
-        }
-        const QString code = path.mid(int(qstrlen("/api/rooms/")));
-        ConferenceRoom *room = m_registry->find(code);
-        if (!room) {
-            sendJson(socket, 404, QJsonObject{{"error", "room_not_found"}});
-            return;
-        }
-        sendJson(socket, 200, QJsonObject{
-            {"room", room->code()},
-            {"participants", int(room->sessions().size())},
-        });
-        return;
-    }
-
-    // Заглушки входа по аккаунту: маршруты зарезервированы, логики нет.
-    // TODO(auth): реальные вход/регистрация появятся вместе с хранилищем
-    // пользователей (БД); тогда здесь будут проверка пароля и выдача сессии.
-    if (path == QLatin1String("/api/auth/login") || path == QLatin1String("/api/auth/register")) {
-        sendJson(socket, 501, QJsonObject{{"error", "not_implemented"}});
-        return;
-    }
-
-    sendJson(socket, 404, QJsonObject{{"error", "unknown_endpoint"}});
+    serveFile(socket, req.path);
 }
 
 void HttpFileServer::serveFile(QTcpSocket *socket, const QString &urlPath)
@@ -159,6 +138,14 @@ void HttpFileServer::serveFile(QTcpSocket *socket, const QString &urlPath)
     sendResponse(socket, 200, statusText(200), mimeFor(full), file.readAll(), cache);
 }
 
+void HttpFileServer::sendApiResponse(QTcpSocket *socket, const ApiResponse &resp)
+{
+    sendResponse(socket, resp.status, statusText(resp.status),
+                 "application/json; charset=utf-8",
+                 QJsonDocument(resp.body).toJson(QJsonDocument::Compact),
+                 QByteArrayLiteral("no-store"), resp.headers);
+}
+
 void HttpFileServer::sendJson(QTcpSocket *socket, int code, const QJsonObject &body)
 {
     sendResponse(socket, code, statusText(code), "application/json; charset=utf-8",
@@ -167,13 +154,16 @@ void HttpFileServer::sendJson(QTcpSocket *socket, int code, const QJsonObject &b
 
 void HttpFileServer::sendResponse(QTcpSocket *socket, int code, const QByteArray &status,
                                   const QByteArray &contentType, const QByteArray &body,
-                                  const QByteArray &cacheControl)
+                                  const QByteArray &cacheControl,
+                                  const QList<QPair<QByteArray, QByteArray>> &extraHeaders)
 {
     QByteArray header;
     header += "HTTP/1.1 " + QByteArray::number(code) + ' ' + status + "\r\n";
     header += "Content-Type: " + contentType + "\r\n";
     header += "Content-Length: " + QByteArray::number(body.size()) + "\r\n";
     header += "Cache-Control: " + cacheControl + "\r\n";
+    for (const auto &kv : extraHeaders)
+        header += kv.first + ": " + kv.second + "\r\n";
     header += "Connection: close\r\n\r\n";
 
     socket->write(header);
@@ -186,9 +176,14 @@ QByteArray HttpFileServer::statusText(int code)
 {
     switch (code) {
     case 200: return "OK";
+    case 400: return "Bad Request";
+    case 401: return "Unauthorized";
     case 403: return "Forbidden";
     case 404: return "Not Found";
     case 405: return "Method Not Allowed";
+    case 409: return "Conflict";
+    case 413: return "Content Too Large";
+    case 431: return "Request Header Fields Too Large";
     case 501: return "Not Implemented";
     default:  return "Unknown";
     }

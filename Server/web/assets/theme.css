@@ -4,6 +4,9 @@
    the lime accent is the only chroma in the system. */
 
 :root {
+  /* Нативные контролы (select, range, скроллбары) в цвет темы */
+  color-scheme: dark;
+
   /* ---- Surfaces (dark, default) ---- */
   --bg:          #0e0e10;
   --surface:     #161619;   /* cards, panels, controls */
@@ -42,6 +45,8 @@
 }
 
 :root[data-theme="light"] {
+  color-scheme: light;
+
   /* ---- Surfaces (warm off-white) ---- */
   --bg:          #f4f3ee;
   --surface:     #ffffff;

@@ -67,6 +67,59 @@
   .overlay-title { margin: 0 0 6px; font-family: var(--font-display); font-weight: 700; font-size: 24px; letter-spacing: -.8px; }
   .overlay-sub { margin: 0 0 20px; color: var(--text-muted); font-size: var(--text-sm); overflow-wrap: anywhere; }
 
+  /* модалка настроек: устройства, громкость, чувствительность */
+  .settings-scrim {
+    position: fixed; inset: 0; z-index: 95;
+    background: color-mix(in srgb, var(--bg) 62%, transparent);
+  }
+  .settings-pop {
+    position: fixed; inset: 0; z-index: 96; display: grid; place-items: center;
+    padding: 20px; pointer-events: none;
+  }
+  .settings-card {
+    width: 100%; max-width: 440px; pointer-events: auto;
+    max-height: calc(100dvh - 40px); overflow: auto;
+  }
+  .set-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+  .set-title { margin: 0; font-family: var(--font-display); font-weight: 700; font-size: 20px; letter-spacing: -.5px; }
+  .set-select {
+    width: 100%; padding: var(--pad-input);
+    background: var(--surface-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: var(--radius-md);
+    font-size: var(--text-md); font-family: var(--font-ui); font-weight: var(--weight-medium);
+    outline: none; transition: var(--transition);
+  }
+  .set-select:focus { border-color: var(--accent-ink); }
+  .set-select:disabled { opacity: .55; cursor: not-allowed; }
+  /* Ползунок: трек рисуем сами (accent-color в Chrome даёт грязный трек
+     на светлой теме); заполненная часть — инлайн-градиент от значения. */
+  .set-range {
+    -webkit-appearance: none; appearance: none;
+    width: 100%; height: 6px; margin: 12px 0 4px;
+    border-radius: var(--radius-pill); border: 1px solid var(--border);
+    background: var(--surface-3);
+    outline: none; cursor: pointer;
+  }
+  .set-range::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 18px; height: 18px; border-radius: 50%;
+    background: var(--accent); border: 2px solid var(--surface);
+    box-shadow: var(--shadow-pop); cursor: grab;
+  }
+  .set-range::-moz-range-thumb {
+    width: 14px; height: 14px; border-radius: 50%;
+    background: var(--accent); border: 2px solid var(--surface);
+    box-shadow: var(--shadow-pop); cursor: grab;
+  }
+  .mic-meter {
+    height: 6px; margin-top: 10px; border-radius: var(--radius-pill);
+    background: var(--surface-2); border: 1px solid var(--border); overflow: hidden;
+  }
+  .mic-meter-fill {
+    height: 100%; width: 0; background: var(--accent);
+    border-radius: var(--radius-pill); transition: width .08s linear;
+  }
+
   .side {
     border-left: 1px solid var(--border); background: var(--surface);
     display: flex; flex-direction: column; min-height: 0;
@@ -142,6 +195,28 @@
     return new Date(Number(ms)).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
   }
 
+  // ---- Локальные настройки звука и устройств (общие для всех комнат) ----
+  const AV_KEY = "meetup.av";
+  const clampPct = (v) => Math.max(0, Math.min(200, Number(v) || 0));
+
+  function loadAvSettings() {
+    const def = { micId: "", camId: "", outId: "", volume: 100, sens: 100 };
+    let s = def;
+    try { s = { ...def, ...JSON.parse(localStorage.getItem(AV_KEY) || "{}") }; } catch (e) {}
+    s.volume = clampPct(s.volume);
+    s.sens = clampPct(s.sens);
+    return s;
+  }
+
+  function saveAvSettings(patch) {
+    try { localStorage.setItem(AV_KEY, JSON.stringify({ ...loadAvSettings(), ...patch })); }
+    catch (e) { /* приватный режим — настройки живут до перезагрузки */ }
+  }
+
+  // Выбор устройства вывода работает через AudioContext.setSinkId —
+  // есть в Chrome/Edge/Firefox, в Safari пока нет.
+  const sinkSupported = !!(window.AudioContext && "setSinkId" in AudioContext.prototype);
+
   // [type:1][timestamp_ms:8 LE][payload] — заголовок клиента.
   function packMedia(type, payloadU8) {
     const out = new Uint8Array(9 + payloadU8.length);
@@ -153,7 +228,8 @@
   }
 
   // Понижение частоты до 16 кГц усреднением (box-фильтр) + перевод в Int16.
-  function downsample(f32, fromRate) {
+  // gain — чувствительность микрофона (1 = как есть), с защитой от клиппинга.
+  function downsample(f32, fromRate, gain = 1) {
     const ratio = fromRate / AUDIO_RATE;
     const outLen = Math.floor(f32.length / ratio);
     const out = new Int16Array(outLen);
@@ -162,7 +238,7 @@
       const end = Math.min(f32.length, Math.max(start + 1, Math.floor((i + 1) * ratio)));
       let sum = 0;
       for (let j = start; j < end; j++) sum += f32[j];
-      const v = Math.max(-1, Math.min(1, sum / (end - start)));
+      const v = Math.max(-1, Math.min(1, (sum / (end - start)) * gain));
       out[i] = v < 0 ? v * 0x8000 : v * 0x7FFF;
     }
     return out;
@@ -209,6 +285,7 @@
     // ---- Сеть и медиа (императивная часть, живёт в ref) ----
     const mediaRef = useRef(null);
     if (mediaRef.current === null) {
+      const av = loadAvSettings();
       mediaRef.current = {
         ws: null, myId: null, manualClose: false, fatal: false, attempts: 0,
         camStream: null, micStream: null, displayStream: null,
@@ -217,9 +294,22 @@
         remoteImgs: new Map(), remoteUrls: new Map(), lastFrameAt: new Map(),
         imgRefCbs: new Map(), players: new Map(), speakingUntil: new Map(),
         mediaStarted: false, joinedAt: 0,
+        // Настройки звука: pref — выбранные устройства, volume/sens — гейны
+        // (1 = 100%), micLevel — RMS для индикатора уровня в настройках.
+        pref: av, volume: av.volume / 100, sens: av.sens / 100, micLevel: 0,
       };
     }
     const M = mediaRef.current;
+
+    // ---- Настройки: устройства и звук ----
+    const [settingsOpen, setSettingsOpen] = useState(false);
+    const [devices, setDevices] = useState({ mics: [], cams: [], outs: [] });
+    const [micId, setMicId] = useState(M.pref.micId);
+    const [camId, setCamId] = useState(M.pref.camId);
+    const [outId, setOutId] = useState(M.pref.outId);
+    const [volume, setVolume] = useState(M.pref.volume);
+    const [sens, setSens] = useState(M.pref.sens);
+    const [micLevel, setMicLevel] = useState(0);
 
     useEffect(() => { document.documentElement.setAttribute("data-theme", theme); }, [theme]);
     const toggleTheme = () => setTheme(t => (t === "dark" ? "light" : "dark"));
@@ -438,7 +528,13 @@
       if (AC) {
         M.audioCtx = new AC();
         M.masterGain = M.audioCtx.createGain();
+        M.masterGain.gain.value = M.volume;
         M.masterGain.connect(M.audioCtx.destination);
+        if (M.pref.outId && M.audioCtx.setSinkId) {
+          // Сохранённое устройство вывода могло пропасть — тогда остаётся системное.
+          const p = M.audioCtx.setSinkId(M.pref.outId);
+          if (p && p.catch) p.catch(() => {});
+        }
         if (M.audioCtx.state === "suspended") {
           // Autoplay-policy: без жеста звук не стартует (например, после F5).
           const resume = () => {
@@ -461,12 +557,28 @@
       M.captureTimer = setInterval(captureFrame, 100);   // ~10 кадров/с
     }
 
+    // getUserMedia с выбранным устройством; если оно пропало — системное.
+    function mediaConstraints(kind, id) {
+      const base = kind === "audio"
+        ? { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+        : { width: 480, height: 360 };
+      if (id) base.deviceId = { exact: id };
+      return { [kind]: base };
+    }
+
+    async function grabStream(kind, id) {
+      try {
+        return await navigator.mediaDevices.getUserMedia(mediaConstraints(kind, id));
+      } catch (e) {
+        if (!id) throw e;
+        return navigator.mediaDevices.getUserMedia(mediaConstraints(kind, ""));
+      }
+    }
+
     async function startMic() {
       if (!M.micStream) {
         try {
-          M.micStream = await navigator.mediaDevices.getUserMedia({
-            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-          });
+          M.micStream = await grabStream("audio", M.pref.micId);
         } catch (e) {
           setMic(false);
           pushState(false, stateRef.current.sharing ? true : stateRef.current.cam);
@@ -483,13 +595,17 @@
       M.procNode.connect(muteGain);
       muteGain.connect(M.audioCtx.destination);
       M.procNode.onaudioprocess = (e) => {
-        if (!stateRef.current.mic) return;
         const input = e.inputBuffer.getChannelData(0);
         let sum = 0, n = 0;
-        for (let i = 0; i < input.length; i += 8) { sum += input[i] * input[i]; n++; }
-        if (n && Math.sqrt(sum / n) > 0.02 && M.myId != null) markSpeaking(M.myId);
+        for (let i = 0; i < input.length; i += 8) { const v = input[i] * M.sens; sum += v * v; n++; }
+        const rms = n ? Math.sqrt(sum / n) : 0;
+        // Уровень для индикатора в настройках (при выключенном микрофоне
+        // дорожка отдаёт тишину, так что индикатор честно падает в ноль).
+        M.micLevel = rms;
+        if (!stateRef.current.mic) return;
+        if (rms > 0.02 && M.myId != null) markSpeaking(M.myId);
         if (!M.ws || M.ws.readyState !== 1) return;
-        const pcm = downsample(input, e.inputBuffer.sampleRate);
+        const pcm = downsample(input, e.inputBuffer.sampleRate, M.sens);
         M.ws.send(packMedia(MSG_AUDIO, new Uint8Array(pcm.buffer)));
       };
       return true;
@@ -498,9 +614,7 @@
     async function startCamera() {
       if (!M.camStream) {
         try {
-          M.camStream = await navigator.mediaDevices.getUserMedia({
-            video: { width: 480, height: 360 },
-          });
+          M.camStream = await grabStream("video", M.pref.camId);
         } catch (e) {
           setCam(false);
           pushState(stateRef.current.mic, stateRef.current.sharing ? true : false);
@@ -618,6 +732,80 @@
       location.href = "anon_lobby.html";
     }
 
+    // ================= Настройки =================
+
+    async function refreshDevices() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+      let list = [];
+      try { list = await navigator.mediaDevices.enumerateDevices(); } catch (e) { return; }
+      const mics = [], cams = [], outs = [];
+      for (const d of list) {
+        // Без разрешения на медиа label пустой — подписываем по номеру.
+        if (d.kind === "audioinput") mics.push({ id: d.deviceId, label: d.label || ("Микрофон " + (mics.length + 1)) });
+        else if (d.kind === "videoinput") cams.push({ id: d.deviceId, label: d.label || ("Камера " + (cams.length + 1)) });
+        else if (d.kind === "audiooutput") outs.push({ id: d.deviceId, label: d.label || ("Динамики " + (outs.length + 1)) });
+      }
+      setDevices({ mics, cams, outs });
+    }
+
+    function openSettings() {
+      refreshDevices();
+      setSettingsOpen(true);
+    }
+
+    async function selectMic(id) {
+      setMicId(id);
+      M.pref.micId = id;
+      saveAvSettings({ micId: id });
+      if (!M.micStream) return;   // микрофон не захвачен — применится при включении
+      let stream;
+      try { stream = await grabStream("audio", id); } catch (e) { refreshDevices(); return; }
+      M.micStream.getTracks().forEach(t => t.stop());
+      M.micStream = stream;
+      stream.getAudioTracks().forEach(t => { t.enabled = stateRef.current.mic; });
+      if (M.audioCtx && M.procNode) {
+        if (M.micSrcNode) { try { M.micSrcNode.disconnect(); } catch (e) {} }
+        M.micSrcNode = M.audioCtx.createMediaStreamSource(stream);
+        M.micSrcNode.connect(M.procNode);
+      }
+    }
+
+    async function selectCam(id) {
+      setCamId(id);
+      M.pref.camId = id;
+      saveAvSettings({ camId: id });
+      if (!M.camStream) return;   // камера выключена — применится при включении
+      let stream;
+      try { stream = await grabStream("video", id); } catch (e) { refreshDevices(); return; }
+      M.camStream.getTracks().forEach(t => t.stop());
+      M.camStream = stream;
+      // Во время демонстрации экрана захват остаётся на displayStream.
+      if (!M.displayStream && stateRef.current.cam) attachCapture(stream);
+    }
+
+    function selectOut(id) {
+      setOutId(id);
+      M.pref.outId = id;
+      saveAvSettings({ outId: id });
+      if (M.audioCtx && M.audioCtx.setSinkId) {
+        const p = M.audioCtx.setSinkId(id);
+        if (p && p.catch) p.catch(() => {});
+      }
+    }
+
+    function changeVolume(v) {
+      setVolume(v);
+      M.volume = v / 100;
+      saveAvSettings({ volume: v });
+      if (M.masterGain) M.masterGain.gain.value = M.volume;
+    }
+
+    function changeSens(v) {
+      setSens(v);
+      M.sens = v / 100;
+      saveAvSettings({ sens: v });
+    }
+
     // ================= Чат =================
 
     function sendChat() {
@@ -725,14 +913,22 @@
         setElapsed(h > 0 ? h + ":" + pad(m) + ":" + pad(sec) : pad(m) + ":" + pad(sec));
       }, 1000);
 
-      // Листание страниц плиток стрелками клавиатуры.
+      // Esc закрывает поповеры; стрелки листают страницы плиток
+      // (кроме случаев, когда фокус в поле ввода или открыты настройки).
       const onKey = (e) => {
+        if (e.key === "Escape") { setSettingsOpen(false); setShareOpen(false); return; }
         const tag = (e.target && e.target.tagName) || "";
-        if (tag === "INPUT" || tag === "TEXTAREA") return;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        if (stateRef.current.settingsOpen) return;
         if (e.key === "ArrowLeft") setPage(p => Math.max(0, p - 1));
         if (e.key === "ArrowRight") setPage(p => Math.min(stateRef.current.pages - 1, p + 1));
       };
       window.addEventListener("keydown", onKey);
+
+      // Подключили/выдернули устройство — обновляем списки в настройках.
+      const onDevChange = () => { if (stateRef.current.settingsOpen) refreshDevices(); };
+      if (navigator.mediaDevices && navigator.mediaDevices.addEventListener)
+        navigator.mediaDevices.addEventListener("devicechange", onDevChange);
 
       return () => {
         mq.removeEventListener("change", updMq);
@@ -740,6 +936,8 @@
         clearInterval(speakTimer);
         clearInterval(elapsedTimer);
         window.removeEventListener("keydown", onKey);
+        if (navigator.mediaDevices && navigator.mediaDevices.removeEventListener)
+          navigator.mediaDevices.removeEventListener("devicechange", onDevChange);
         M.manualClose = true;
         try { if (M.ws) M.ws.close(); } catch (e) {}
         stopEverything();
@@ -777,8 +975,15 @@
     // Актуальный снимок состояния для обработчиков вне рендера
     // (WS-сообщения, таймеры, аудио-callback).
     useEffect(() => {
-      stateRef.current = { phase, mic, cam, sharing, tab, panelOpen, isMobile, pages };
+      stateRef.current = { phase, mic, cam, sharing, tab, panelOpen, isMobile, pages, settingsOpen };
     });
+
+    // Индикатор уровня микрофона — обновляется только при открытых настройках.
+    useEffect(() => {
+      if (!settingsOpen) return;
+      const t = setInterval(() => setMicLevel(M.micLevel), 100);
+      return () => clearInterval(t);
+    }, [settingsOpen]);
 
     // До трёх участников на широком экране — «дизайнерская» раскладка
     // (своя плитка крупнее); дальше — равномерная сетка страницами.
@@ -890,10 +1095,12 @@
 
           <div className="dock">
             <ControlDock
-              micOn={mic} cameraOn={cam} sharing={sharing} extras={!isMobile}
+              micOn={mic} cameraOn={cam} sharing={sharing}
+              settingsOpen={settingsOpen} showShare={!isMobile}
               onToggleMic={toggleMic}
               onToggleCamera={toggleCamera}
               onToggleShare={toggleShare}
+              onOpenSettings={openSettings}
               onLeave={leave}
             />
           </div>
@@ -963,6 +1170,70 @@
             </>
           )}
         </div>
+
+        {/* настройки: устройства, громкость, чувствительность */}
+        {settingsOpen && <>
+          <div className="settings-scrim" onClick={() => setSettingsOpen(false)} />
+          <div className="settings-pop" role="dialog" aria-modal="true" aria-label="Настройки">
+            <div className="settings-card">
+              <Card elevated width="100%">
+                <div className="set-head">
+                  <h2 className="set-title">Настройки</h2>
+                  <IconButton icon="x" size="sm" label="Закрыть" onClick={() => setSettingsOpen(false)} />
+                </div>
+
+                <Field label="Микрофон" htmlFor="set-mic">
+                  <select id="set-mic" className="set-select" value={micId}
+                          onChange={e => selectMic(e.target.value)}>
+                    {!devices.mics.some(d => d.id === micId) &&
+                      <option value={micId}>Системный по умолчанию</option>}
+                    {devices.mics.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
+                  </select>
+                  <div className="mic-meter" aria-hidden="true">
+                    <div className="mic-meter-fill"
+                         style={{ width: Math.round(Math.min(1, micLevel * 3) * 100) + "%" }} />
+                  </div>
+                </Field>
+
+                <Field label="Камера" htmlFor="set-cam" style={{ marginTop: 16 }}>
+                  <select id="set-cam" className="set-select" value={camId}
+                          onChange={e => selectCam(e.target.value)}>
+                    {!devices.cams.some(d => d.id === camId) &&
+                      <option value={camId}>Системная по умолчанию</option>}
+                    {devices.cams.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
+                  </select>
+                </Field>
+
+                <Field label="Динамики" htmlFor="set-out" style={{ marginTop: 16 }}
+                       hint={sinkSupported ? undefined : "Браузер не поддерживает выбор устройства вывода."}>
+                  <select id="set-out" className="set-select" value={outId} disabled={!sinkSupported}
+                          onChange={e => selectOut(e.target.value)}>
+                    {!devices.outs.some(d => d.id === outId) &&
+                      <option value={outId}>Системные по умолчанию</option>}
+                    {devices.outs.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
+                  </select>
+                </Field>
+
+                <Field label={"Громкость воспроизведения · " + volume + "%"} htmlFor="set-volume"
+                       style={{ marginTop: 18 }}>
+                  <input id="set-volume" className="set-range" type="range"
+                         min="0" max="200" step="5" value={volume}
+                         style={{ background: "linear-gradient(90deg, var(--accent) " + (volume / 2) + "%, var(--surface-3) " + (volume / 2) + "%)" }}
+                         onChange={e => changeVolume(Number(e.target.value))} />
+                </Field>
+
+                <Field label={"Чувствительность микрофона · " + sens + "%"} htmlFor="set-sens"
+                       hint="Влияет на громкость вашего голоса у собеседников."
+                       style={{ marginTop: 14 }}>
+                  <input id="set-sens" className="set-range" type="range"
+                         min="0" max="200" step="5" value={sens}
+                         style={{ background: "linear-gradient(90deg, var(--accent) " + (sens / 2) + "%, var(--surface-3) " + (sens / 2) + "%)" }}
+                         onChange={e => changeSens(Number(e.target.value))} />
+                </Field>
+              </Card>
+            </div>
+          </div>
+        </>}
 
         {/* гейт имени: вход по ссылке-приглашению */}
         {phase === "gate" &&
