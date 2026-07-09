@@ -55,33 +55,19 @@ public:
     QLabel* hint;
 };
 
-class MUUpperWidgets: public QWidget
-{
-    Q_OBJECT
-
-public:
-    MUUpperWidgets(QWidget *parent);
-    ~MUUpperWidgets();
-
-    QLabel* appName;
-    QLabel* image;
-    QPushButton* switchThemeBtn;
-};
-
 class MUAuthPage: public QWidget
 {
     Q_OBJECT
 
-    MUAuthPage(QWidget *parent = nullptr);
+public:
+    MUAuthPage(QWidget *parent);
     ~MUAuthPage();
 
-
     MUAuthForm* authForm;
-
+    QLabel* appName;
+    QLabel* image;
+    QPushButton* switchThemeBtn;
 };
-
-
-
 
 
 #endif
