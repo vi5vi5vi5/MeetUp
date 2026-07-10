@@ -224,6 +224,18 @@
   // есть в Chrome/Edge/Firefox, в Safari пока нет.
   const sinkSupported = !!(window.AudioContext && "setSinkId" in AudioContext.prototype);
 
+  // История посещённых комнат для главной страницы (localStorage, общий
+  // на все вкладки). Хранится только в браузере — сервер её не ведёт.
+  const HISTORY_KEY = "meetup.history";
+  function recordVisit(code) {
+    try {
+      const list = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]")
+        .filter(e => e && e.code !== code);
+      list.unshift({ code, at: Date.now() });
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, 8)));
+    } catch (e) { /* приватный режим */ }
+  }
+
   // Секрет E2E на комнату (только в этой вкладке, на сервер не уходит):
   // "p:<фраза>" или "k:<base64-ключ из ссылки>".
   const E2E_KEY = "meetup.e2e." + roomCode;
@@ -240,7 +252,10 @@
 
     // ---- UI-состояние ----
     const [theme, setTheme] = useState("dark");
-    const [phase, setPhase] = useState(savedName ? "connecting" : "gate"); // gate|connecting|live|error
+    // Стартуем с "connecting": гейт показывается только после того, как
+    // /api/me ответил, что живой сессии аккаунта нет (и имени в запасе тоже).
+    const [phase, setPhase] = useState("connecting"); // gate|connecting|live|error
+    const [isAccount, setIsAccount] = useState(false);
     const [errText, setErrText] = useState("");
     const [gateName, setGateName] = useState("");
     const [myId, setMyId] = useState(null);
@@ -384,7 +399,10 @@
         case "join_ok": {
           M.myId = msg.sender_id;
           M.attempts = 0;
-          if (!M.joinedAt) M.joinedAt = Date.now();
+          if (!M.joinedAt) {
+            M.joinedAt = Date.now();
+            recordVisit(roomCode);   // история комнат на главной (не реконнект)
+          }
           setMyId(msg.sender_id);
           setReconnecting(false);
           setPhase("live");
@@ -448,6 +466,13 @@
           if (msg.reason === "room_not_found") {
             M.manualClose = true;
             fatal("Комната не найдена или уже закрыта. Проверьте ссылку либо создайте новую комнату в лобби.");
+          } else if (msg.reason === "session_replaced") {
+            // Тот же аккаунт вошёл в комнату ещё раз — работает новое
+            // подключение, это останавливаем (без реконнекта, иначе
+            // два окна выбивали бы друг друга по кругу).
+            M.manualClose = true;
+            stopEverything();
+            fatal("Вы подключились к этой комнате в другом окне или на другом устройстве. Здесь соединение остановлено.");
           } else {
             console.warn("Ошибка сервера:", msg.reason);
           }
@@ -612,11 +637,15 @@
       });
     }
 
+    // Куда уводить из конференции: авторизованного — на главную, анонима — в лобби.
+    const exitHref = isAccount ? "home.html" : "anon_lobby.html";
+    const exitLabel = isAccount ? "На главную" : "В лобби";
+
     function leave() {
       M.manualClose = true;
       try { if (M.ws) M.ws.close(); } catch (e) {}
       stopEverything();
-      location.href = "anon_lobby.html";
+      location.href = exitHref;
     }
 
     // ================= Настройки =================
@@ -822,7 +851,20 @@
       // иначе история чата из join_ok расшифруется без ключа.
       (async () => {
         await applySavedE2e();
-        if (savedName) openSocket();
+        // Вошедший по ссылке с живой сессией аккаунта попадает в эфир сразу:
+        // имя из профиля, гейт не показывается. Сам join сервер тоже свяжет
+        // с аккаунтом по куке в WS-хендшейке и выдаст постоянный id.
+        const me = await MeetUp.authMe();
+        if (me.ok && me.body && me.body.user) {
+          nameRef.current = me.body.user.display_name;
+          MeetUp.saveName(nameRef.current);
+          setIsAccount(true);
+          openSocket();
+        } else if (savedName) {
+          openSocket();
+        } else {
+          setPhase("gate");
+        }
       })();
 
       const mq = window.matchMedia("(max-width: 820px)");
@@ -1266,8 +1308,8 @@
                   Попробовать снова
                 </Button>
                 <Button variant="ghost" block style={{ marginTop: 10 }}
-                        onClick={() => { location.href = "anon_lobby.html"; }}>
-                  В лобби
+                        onClick={() => { location.href = exitHref; }}>
+                  {exitLabel}
                 </Button>
               </Card>
             </div>

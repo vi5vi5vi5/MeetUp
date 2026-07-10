@@ -25,6 +25,16 @@ public:
     QString name() const { return m_name; }
     void setName(const QString &name) { m_name = name; }
 
+    // Аккаунт, привязанный к соединению по куке сессии из WS-хендшейка.
+    // -1 — аноним. Авторизованный получает постоянный id и имя из профиля.
+    int userId() const { return m_userId; }
+    QString accountName() const { return m_accountName; }
+    void setAccount(int userId, const QString &displayName)
+    {
+        m_userId = userId;
+        m_accountName = displayName;
+    }
+
     ConferenceRoom *room() const { return m_room; }
     void setRoom(ConferenceRoom *room) { m_room = room; }
 
@@ -38,6 +48,9 @@ public:
     // Отправка сообщений этому клиенту.
     void sendJson(const QJsonObject &obj);
     void sendBinary(const QByteArray &data);
+
+    // Вежливое закрытие сокета; disconnected придёт обычным путём.
+    void close();
 
 signals:
     void textReceived(ClientSession *self, const QString &text);
@@ -53,6 +66,8 @@ private:
     QWebSocket *m_socket;
     quint32 m_id = 0;
     QString m_name;
+    int m_userId = -1;                  // id аккаунта; -1 — аноним
+    QString m_accountName;              // отображаемое имя из профиля
     ConferenceRoom *m_room = nullptr;   // nullptr до join
     bool m_micOn = true;
     bool m_camOn = true;

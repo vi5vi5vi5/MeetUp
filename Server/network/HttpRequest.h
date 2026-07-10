@@ -20,6 +20,9 @@ struct HttpRequest
     // Значение куки по имени из заголовка "Cookie: a=1; b=2".
     QByteArray cookie(const QByteArray &name) const;
 
+    // То же для «чужого» заголовка Cookie — например, из WS-хендшейка.
+    static QByteArray cookieValue(const QByteArray &cookieHeader, const QByteArray &name);
+
     // Тело как JSON-объект; *ok = false, если тело не валидный JSON-объект.
     QJsonObject jsonBody(bool *ok = nullptr) const;
 };

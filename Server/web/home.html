@@ -95,6 +95,17 @@
   .hu-divider span { font-family: var(--font-label); font-size: 10px; letter-spacing: 2px;
     text-transform: uppercase; color: var(--text-faint); }
 
+  /* ---- история конференций (localStorage) ---- */
+  .hist-list { display: flex; flex-direction: column; gap: 2px; margin: 0 -6px; }
+  .hist-row { display: flex; align-items: center; gap: 10px; padding: 8px 6px 8px 10px;
+    border: 0; background: transparent; width: 100%; text-align: left; cursor: pointer;
+    border-radius: var(--radius-md); color: var(--text); font-family: var(--font-ui);
+    transition: var(--transition); }
+  .hist-row:hover { background: var(--surface-2); }
+  .hist-code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; font-family: var(--font-mono); font-size: 13px; }
+  .hist-when { flex: none; font-size: 11.5px; color: var(--text-faint); }
+
   /* ---- Mobile ---- */
   @media (max-width: 780px) {
     .topbar { padding: 18px 18px; }
@@ -129,6 +140,28 @@
   }
   function loadRoomDraft() {
     try { return JSON.parse(lsGet(ROOM_KEY) || "null"); } catch (e) { return null; }
+  }
+
+  // История конференций: пишет conference.html при входе в комнату
+  // (localStorage, ключ meetup.history) — на сервере её нет.
+  const HISTORY_KEY = "meetup.history";
+  function loadHistory() {
+    try {
+      const list = JSON.parse(lsGet(HISTORY_KEY) || "[]");
+      return Array.isArray(list)
+        ? list.filter(e => e && typeof e.code === "string" && e.code)
+        : [];
+    } catch (e) { return []; }
+  }
+  function fmtWhen(ms) {
+    const at = Number(ms);
+    if (!at) return "";
+    const min = Math.floor((Date.now() - at) / 60000);
+    if (min < 1) return "только что";
+    if (min < 60) return min + " мин назад";
+    const h = Math.floor(min / 60);
+    if (h < 24) return h + " ч назад";
+    return new Date(at).toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
   }
 
   function initials(name) {
@@ -473,6 +506,54 @@
     );
   }
 
+  // Недавние конференции из истории браузера: клик — снова в комнату.
+  function HistoryCard() {
+    const [items, setItems] = useState(loadHistory);
+
+    // Вход в комнату в другой вкладке дописывает историю — обновляемся,
+    // когда пользователь возвращается на главную.
+    useEffect(() => {
+      const upd = () => setItems(loadHistory());
+      window.addEventListener("focus", upd);
+      window.addEventListener("storage", upd);
+      return () => {
+        window.removeEventListener("focus", upd);
+        window.removeEventListener("storage", upd);
+      };
+    }, []);
+
+    function save(list) {
+      setItems(list);
+      lsSet(HISTORY_KEY, list.length ? JSON.stringify(list) : null);
+    }
+
+    if (!items.length) return null;
+    return (
+      <Card>
+        <div className="room-head">
+          <h2 className="card-title">Недавние конференции</h2>
+          <button className="hu-textbtn" onClick={() => save([])}>Очистить</button>
+        </div>
+        <div className="hist-list">
+          {items.map(e => {
+            const join = () => { location.href = "conference.html?room=" + encodeURIComponent(e.code); };
+            return (
+              <div key={e.code} className="hist-row" role="button" tabIndex={0}
+                   title={"Подключиться к " + e.code} onClick={join}
+                   onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); join(); } }}>
+                <Icon name="video" size={16} style={{ color: "var(--text-muted)" }} />
+                <span className="hist-code">{e.code}</span>
+                <span className="hist-when">{fmtWhen(e.at)}</span>
+                <IconButton icon="x" size="sm" label={"Убрать " + e.code + " из истории"}
+                            onClick={(ev) => { ev.stopPropagation(); save(items.filter(x => x.code !== e.code)); }} />
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+    );
+  }
+
   function HomeScreen() {
     const [user, setUser] = useState(null);
     const [theme, setTheme] = useState(lsGet(THEME_KEY) === "light" ? "light" : "dark");
@@ -578,6 +659,12 @@
                 <h2 className="card-title" style={{ marginBottom: 16 }}>Другая встреча</h2>
                 <QuickActions />
               </Card>
+
+              <HistoryCard />
+              <div className="room-note" style={{ marginTop: 0 }}>
+                Никто не запоминает, к каким комнатам вы подключались, —
+                вся история хранится только в этом браузере.
+              </div>
             </div>
           </div>
         </div>

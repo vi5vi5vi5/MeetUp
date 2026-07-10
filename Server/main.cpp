@@ -69,7 +69,7 @@ int main(int argc, char *argv[])
     auto auth = std::make_shared<AuthService>(users, sessions);
 
     HttpApi api(auth, &registry);
-    ConferenceServer conference(wsPort, &registry);
+    ConferenceServer conference(wsPort, &registry, auth);
     HttpFileServer http(httpPort, webRoot, &api);
 
     if (!conference.isListening() || !http.isListening())

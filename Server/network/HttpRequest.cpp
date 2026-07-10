@@ -6,7 +6,12 @@
 
 QByteArray HttpRequest::cookie(const QByteArray &name) const
 {
-    const QList<QByteArray> parts = header(QByteArrayLiteral("cookie")).split(';');
+    return cookieValue(header(QByteArrayLiteral("cookie")), name);
+}
+
+QByteArray HttpRequest::cookieValue(const QByteArray &cookieHeader, const QByteArray &name)
+{
+    const QList<QByteArray> parts = cookieHeader.split(';');
     for (const QByteArray &part : parts) {
         const QByteArray p = part.trimmed();
         const int eq = p.indexOf('=');

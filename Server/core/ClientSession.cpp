@@ -31,6 +31,11 @@ void ClientSession::sendBinary(const QByteArray &data)
     m_socket->sendBinaryMessage(data);
 }
 
+void ClientSession::close()
+{
+    m_socket->close();
+}
+
 void ClientSession::onTextMessageReceived(const QString &text)
 {
     emit textReceived(this, text);

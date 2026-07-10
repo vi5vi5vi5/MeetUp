@@ -3,9 +3,13 @@
 #include <QObject>
 #include <QSet>
 
+#include <memory>
+
 class QWebSocketServer;
 class QJsonObject;
+class AuthService;
 class ClientSession;
+class ConferenceRoom;
 class RoomRegistry;
 
 // Ядро сервера. Принимает WebSocket-соединения, заворачивает каждое в
@@ -14,11 +18,16 @@ class RoomRegistry;
 //   - бинарь: медиа-кадры, релеятся остальным участникам комнаты.
 // Комнаты создаёт HTTP API (POST /api/rooms) — join возможен только в
 // существующую. Реестром владеет main, он общий с HttpFileServer.
+//
+// Кука meetup_session в WS-хендшейке привязывает соединение к аккаунту:
+// авторизованный участник получает постоянный id (kAccountIdBase + user id)
+// и имя из профиля, аноним — очередной id со счётчика.
 class ConferenceServer : public QObject
 {
     Q_OBJECT
 public:
-    explicit ConferenceServer(quint16 port, RoomRegistry *registry, QObject *parent = nullptr);
+    ConferenceServer(quint16 port, RoomRegistry *registry,
+                     std::shared_ptr<AuthService> auth, QObject *parent = nullptr);
     ~ConferenceServer() override;
 
     bool isListening() const;
@@ -37,11 +46,20 @@ private:
     void handleState(ClientSession *session, const QJsonObject &msg);
     void sendError(ClientSession *session, const QString &reason);
 
+    // Выгнать из комнаты участника с тем же id (повторный вход с аккаунта:
+    // другая вкладка или реконнект, пока старый сокет ещё не умер).
+    void dropDuplicate(ConferenceRoom *room, quint32 id);
+
     QWebSocketServer *m_server;
     RoomRegistry *m_registry;           // не владеет (общий с HTTP API)
+    std::shared_ptr<AuthService> m_auth;
     QSet<ClientSession *> m_sessions;   // все живые сессии (сервер — владелец)
     quint16 m_port;
-    quint32 m_nextId = 1;               // раздаётся клиентам при join
+    quint32 m_nextId = 1;               // раздаётся анонимам при join
+
+    // id авторизованных живут в верхней половине диапазона quint32 —
+    // счётчик анонимов туда не дотянется, коллизий нет.
+    static constexpr quint32 kAccountIdBase = 0x80000000;
 
     // Пустые комнаты живут ещё 10 минут: обрыв связи последнего участника
     // или пауза между созданием комнаты и первым join не убивают её.

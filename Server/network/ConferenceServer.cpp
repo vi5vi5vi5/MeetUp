@@ -2,6 +2,8 @@
 #include "core/ClientSession.h"
 #include "core/ConferenceRoom.h"
 #include "core/RoomRegistry.h"
+#include "network/HttpRequest.h"
+#include "services/AuthService.h"
 
 #include <QWebSocketServer>
 #include <QWebSocket>
@@ -12,8 +14,14 @@
 #include <QTimer>
 #include <QDebug>
 
-ConferenceServer::ConferenceServer(quint16 port, RoomRegistry *registry, QObject *parent)
-    : QObject(parent), m_registry(registry), m_port(port)
+namespace {
+// Имя куки сессии — то же, что ставит HTTP API (см. network/HttpApi.cpp).
+const QByteArray kSessionCookieName = QByteArrayLiteral("meetup_session");
+} // namespace
+
+ConferenceServer::ConferenceServer(quint16 port, RoomRegistry *registry,
+                                   std::shared_ptr<AuthService> auth, QObject *parent)
+    : QObject(parent), m_registry(registry), m_auth(std::move(auth)), m_port(port)
 {
     m_server = new QWebSocketServer(QStringLiteral("MeetUp"),
                                     QWebSocketServer::NonSecureMode, this);
@@ -48,6 +56,15 @@ void ConferenceServer::onNewConnection()
         QWebSocket *socket = m_server->nextPendingConnection();
         auto *session = new ClientSession(socket, this);
         m_sessions.insert(session);
+
+        // Живая сессия аккаунта в куке хендшейка — запоминаем, кто это:
+        // join получит постоянный id и имя из профиля.
+        const QString token = QString::fromLatin1(HttpRequest::cookieValue(
+            socket->request().rawHeader(QByteArrayLiteral("Cookie")), kSessionCookieName));
+        if (!token.isEmpty()) {
+            if (const std::optional<User> user = m_auth->userByToken(token))
+                session->setAccount(user->id, user->displayName);
+        }
 
         connect(session, &ClientSession::textReceived,
                 this, &ConferenceServer::onText);
@@ -84,7 +101,13 @@ void ConferenceServer::onText(ClientSession *session, const QString &text)
 void ConferenceServer::handleJoin(ClientSession *session, const QJsonObject &msg)
 {
     const QString roomCode = msg.value(QStringLiteral("room")).toString().trimmed();
-    const QString name = msg.value(QStringLiteral("name")).toString().trimmed().left(64);
+    const bool account = session->userId() >= 0;
+
+    // Имя авторизованного берётся из профиля: оно авторитетнее присланного,
+    // и клиенту не нужно спрашивать его на гейте.
+    const QString name = account
+        ? session->accountName()
+        : msg.value(QStringLiteral("name")).toString().trimmed().left(64);
 
     if (roomCode.isEmpty() || name.isEmpty()) {
         sendError(session, QStringLiteral("invalid_join"));
@@ -102,7 +125,13 @@ void ConferenceServer::handleJoin(ClientSession *session, const QJsonObject &msg
         return;
     }
 
-    session->setId(m_nextId++);
+    if (account) {
+        // Постоянный id: тот же пользователь — тот же id в любой конференции.
+        session->setId(kAccountIdBase + quint32(session->userId()));
+        dropDuplicate(room, session->id());
+    } else {
+        session->setId(m_nextId++);
+    }
     session->setName(name);
 
     // join_ok — только вошедшему: список присутствующих и история чата,
@@ -129,6 +158,33 @@ void ConferenceServer::handleJoin(ClientSession *session, const QJsonObject &msg
     qInfo().noquote() << QStringLiteral("join: %1 (id=%2) -> room '%3', participants: %4")
                              .arg(name).arg(session->id()).arg(roomCode)
                              .arg(room->sessions().size());
+}
+
+void ConferenceServer::dropDuplicate(ConferenceRoom *room, quint32 id)
+{
+    ClientSession *dup = nullptr;
+    for (ClientSession *s : room->sessions()) {
+        if (s->id() == id) {
+            dup = s;
+            break;
+        }
+    }
+    if (!dup)
+        return;
+
+    // Старое соединение вытесняется новым: session_replaced говорит клиенту
+    // не переподключаться (иначе две вкладки выбивали бы друг друга вечно).
+    sendError(dup, QStringLiteral("session_replaced"));
+    room->removeParticipant(dup);
+    dup->setRoom(nullptr);
+    dup->close();
+    room->broadcastJson(QJsonObject{
+        {"type", "participant_left"},
+        {"id", qint64(id)},
+    });
+
+    qInfo().noquote() << QStringLiteral("join: id=%1 replaced by a new connection in room '%2'")
+                             .arg(id).arg(room->code());
 }
 
 void ConferenceServer::handleChat(ClientSession *session, const QJsonObject &msg)
