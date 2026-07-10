@@ -60,6 +60,7 @@
   function createMyRoom(data) { return api("POST", "/api/me/room", data); }
   function updateMyRoom(patch) { return api("PATCH", "/api/me/room", patch); }
   function deleteMyRoom() { return api("DELETE", "/api/me/room"); }
+  function closeMyRoom() { return api("POST", "/api/me/room/close"); }
 
   window.MeetUp = {
     wsUrl: wsUrl,
@@ -75,5 +76,6 @@
     createMyRoom: createMyRoom,
     updateMyRoom: updateMyRoom,
     deleteMyRoom: deleteMyRoom,
+    closeMyRoom: closeMyRoom,
   };
 })();

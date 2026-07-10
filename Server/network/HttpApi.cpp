@@ -1,6 +1,7 @@
 #include "network/HttpApi.h"
 
 #include <QDebug>
+#include <QJsonArray>
 
 #include "core/ClientSession.h"
 #include "core/ConferenceRoom.h"
@@ -52,6 +53,10 @@ bool HttpApi::route(const HttpRequest &req, const Respond &respond)
     }
     if (p == QLatin1String("/api/me/room")) {
         respond(handleMyRoom(req));
+        return true;
+    }
+    if (p == QLatin1String("/api/me/room/close")) {
+        respond(m == "POST" ? handleCloseMyRoom(req) : err(405, QStringLiteral("method_not_allowed")));
         return true;
     }
 
@@ -181,37 +186,41 @@ ApiResponse HttpApi::handleCheckRoom(const QString &code)
     }
 
     // Личная комната существует и вне эфира: клиенту нужны название,
-    // «в эфире ли владелец» и есть ли пароль — чтобы спросить его до join.
+    // активна ли она и есть ли пароль — чтобы спросить его до join.
     const std::optional<PersonalRoom> personal = m_personalRooms->byCode(code);
     if (!personal.has_value())
         return err(404, QStringLiteral("room_not_found"));
 
-    int participants = 0;
-    const bool online = personalRoomOnline(*personal, &participants);
-    return ApiResponse{200, QJsonObject{
+    QJsonObject j{
         {"room", personal->code},
         {"personal", true},
         {"title", personal->title},
         {"has_password", !personal->password.isEmpty()},
-        {"online", online},
-        {"participants", participants},
-    }, {}};
+    };
+    addLiveInfo(j, *personal, /*ownerView=*/false);
+    return ApiResponse{200, j, {}};
 }
 
 // ---------- Личная комната владельца ----------
 
-bool HttpApi::personalRoomOnline(const PersonalRoom &room, int *participants) const
+void HttpApi::addLiveInfo(QJsonObject &j, const PersonalRoom &room, bool ownerView) const
 {
     ConferenceRoom *live = m_rooms->find(room.code);
-    if (participants)
-        *participants = live ? int(live->sessions().size()) : 0;
-    if (!live)
-        return false;
-    for (ClientSession *s : live->sessions()) {
-        if (s->userId() == room.ownerId)
-            return true;
+    const bool online = live && !live->isEmpty();
+    j.insert(QStringLiteral("online"), online);
+    j.insert(QStringLiteral("participants"), online ? int(live->sessions().size()) : 0);
+    if (!ownerView)
+        return;
+
+    // Владелец с главной видит, что происходит в комнате: кто внутри
+    // и как давно идёт эфир.
+    QJsonArray names;
+    if (online) {
+        for (ClientSession *s : live->sessions())
+            names.append(s->name());
     }
-    return false;
+    j.insert(QStringLiteral("participant_names"), names);
+    j.insert(QStringLiteral("live_since_ms"), online ? live->liveSinceMs() : 0);
 }
 
 ApiResponse HttpApi::handleMyRoom(const HttpRequest &req)
@@ -223,10 +232,8 @@ ApiResponse HttpApi::handleMyRoom(const HttpRequest &req)
     // Ответ владельцу: комната целиком (включая пароль — он вправе его
     // посмотреть) плюс живое состояние эфира.
     const auto roomResponse = [this](const PersonalRoom &room) {
-        int participants = 0;
         QJsonObject j = room.ownerJson();
-        j.insert(QStringLiteral("online"), personalRoomOnline(room, &participants));
-        j.insert(QStringLiteral("participants"), participants);
+        addLiveInfo(j, room, /*ownerView=*/true);
         return ApiResponse{200, QJsonObject{{"room", j}}, {}};
     };
 
@@ -274,6 +281,31 @@ ApiResponse HttpApi::handleMyRoom(const HttpRequest &req)
     }
 
     return err(405, QStringLiteral("method_not_allowed"));
+}
+
+ApiResponse HttpApi::handleCloseMyRoom(const HttpRequest &req)
+{
+    const std::optional<User> user = m_auth->userByToken(sessionToken(req));
+    if (!user.has_value())
+        return err(401, QStringLiteral("no_session"));
+    const std::optional<PersonalRoom> room = m_personalRooms->byOwner(user->id);
+    if (!room.has_value())
+        return err(404, QStringLiteral("no_room"));
+
+    // «Завершить»: выгнать всех. Сокеты закрываются вежливо, отключения
+    // разберёт ConferenceServer; опустевшую комнату позже соберёт purge.
+    int kicked = 0;
+    if (ConferenceRoom *live = m_rooms->find(room->code)) {
+        const QList<ClientSession *> sessions = live->sessions();   // копия: close() меняет список
+        for (ClientSession *s : sessions) {
+            s->sendJson(QJsonObject{{"type", "error"}, {"reason", "room_closed"}});
+            s->close();
+            ++kicked;
+        }
+    }
+    qInfo().noquote() << QStringLiteral("API: personal room '%1' closed by owner, kicked %2")
+                             .arg(room->code).arg(kicked);
+    return ApiResponse{200, QJsonObject{{"kicked", kicked}}, {}};
 }
 
 // ---------- Помощники ----------

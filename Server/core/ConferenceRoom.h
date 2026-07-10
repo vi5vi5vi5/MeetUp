@@ -40,6 +40,10 @@ public:
     // метке RoomRegistry удаляет брошенные комнаты.
     qint64 emptySinceMs() const { return m_emptySinceMs; }
 
+    // С какого момента комната непрерывно не пуста; 0 — сейчас пусто.
+    // Главная показывает владельцу «в эфире · длительность».
+    qint64 liveSinceMs() const { return m_liveSinceMs; }
+
     void addParticipant(ClientSession *session);
     void removeParticipant(ClientSession *session);
 
@@ -61,6 +65,7 @@ private:
     QList<ClientSession *> m_sessions;   // не владеет сессиями
     QList<ChatEntry> m_history;
     qint64 m_emptySinceMs = 0;
+    qint64 m_liveSinceMs = 0;
 
     static constexpr int kMaxHistory = 500;
 };

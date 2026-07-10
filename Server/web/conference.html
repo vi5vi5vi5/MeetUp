@@ -496,6 +496,12 @@
             M.manualClose = true;
             stopEverything();
             fatal("Вы подключились к этой комнате в другом окне или на другом устройстве. Здесь соединение остановлено.");
+          } else if (msg.reason === "room_closed") {
+            // Владелец завершил конференцию с главной — расходимся без
+            // реконнекта.
+            M.manualClose = true;
+            stopEverything();
+            fatal("Владелец завершил конференцию.");
           } else if (msg.reason === "wrong_password") {
             // Личная комната с паролем: спрашиваем (или переспрашиваем) на гейте.
             setNeedPass(true);

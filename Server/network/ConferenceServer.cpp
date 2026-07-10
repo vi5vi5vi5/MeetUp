@@ -157,7 +157,10 @@ void ConferenceServer::handleJoin(ClientSession *session, const QJsonObject &msg
         }
         const bool isOwner = account && session->userId() == personal->ownerId;
         if (!isOwner) {
-            if (!hasAccountUser(room, personal->ownerId)) {
+            // Активной комнату делает вход владельца; дальше она живёт, пока
+            // в ней кто-то есть — гости входят и без владельца. Опустевшую
+            // заново открывает только владелец.
+            if (room->isEmpty()) {
                 sendError(session, QStringLiteral("room_offline"));
                 return;
             }
@@ -206,15 +209,6 @@ void ConferenceServer::handleJoin(ClientSession *session, const QJsonObject &msg
     qInfo().noquote() << QStringLiteral("join: %1 (id=%2) -> room '%3', participants: %4")
                              .arg(name).arg(session->id()).arg(roomCode)
                              .arg(room->sessions().size());
-}
-
-bool ConferenceServer::hasAccountUser(const ConferenceRoom *room, int userId)
-{
-    for (ClientSession *s : room->sessions()) {
-        if (s->userId() == userId)
-            return true;
-    }
-    return false;
 }
 
 void ConferenceServer::dropDuplicate(ConferenceRoom *room, quint32 id)

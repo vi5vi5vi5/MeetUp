@@ -50,11 +50,14 @@ private:
     ApiResponse handleCreateRoom();
     ApiResponse handleCheckRoom(const QString &code);
 
-    // Личная комната владельца: /api/me/room (GET/POST/PATCH/DELETE).
+    // Личная комната владельца: /api/me/room (GET/POST/PATCH/DELETE)
+    // и /api/me/room/close («Завершить» — выгоняет всех участников).
     ApiResponse handleMyRoom(const HttpRequest &req);
+    ApiResponse handleCloseMyRoom(const HttpRequest &req);
 
-    // «В эфире» — владелец сейчас в комнате; гостей без него не пускают.
-    bool personalRoomOnline(const PersonalRoom &room, int *participants = nullptr) const;
+    // Живое состояние личной комнаты: online («в эфире» — внутри кто-то
+    // есть), число участников; владельцу — ещё имена и старт эфира.
+    void addLiveInfo(QJsonObject &j, const PersonalRoom &room, bool ownerView) const;
 
     static ApiResponse err(int status, const QString &code);
     static int statusForError(const QString &code);

@@ -54,10 +54,6 @@ private:
     // другая вкладка или реконнект, пока старый сокет ещё не умер).
     void dropDuplicate(ConferenceRoom *room, quint32 id);
 
-    // Есть ли в комнате участник с этим аккаунтом (личная комната пускает
-    // гостей только при владельце внутри).
-    static bool hasAccountUser(const ConferenceRoom *room, int userId);
-
     QWebSocketServer *m_server;
     RoomRegistry *m_registry;           // не владеет (общий с HTTP API)
     std::shared_ptr<AuthService> m_auth;

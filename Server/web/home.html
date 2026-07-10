@@ -95,6 +95,9 @@
     border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-2); }
   .hu-link-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font-family: var(--font-mono); font-size: 12.5px; color: var(--text); }
+  .hu-stack { display: inline-flex; }
+  .hu-stack .hu-avatar { margin-left: -9px; box-shadow: 0 0 0 2px var(--surface); }
+  .hu-stack .hu-avatar:first-child { margin-left: 0; }
   .hu-empty { display: flex; flex-direction: column; align-items: center; justify-content: center;
     text-align: center; gap: 16px; padding: 36px 24px; border: 1.5px dashed var(--border-strong);
     border-radius: var(--radius-card); background: var(--surface); cursor: pointer; transition: var(--transition); }
@@ -197,6 +200,15 @@
         : [];
     } catch (e) { return []; }
   }
+  // Длительность эфира: мм:сс, после часа — ч:мм:сс.
+  function fmtDuration(ms) {
+    const s = Math.max(0, Math.floor(ms / 1000));
+    const two = (n) => String(n).padStart(2, "0");
+    const h = Math.floor(s / 3600);
+    const m = Math.floor(s / 60) % 60;
+    return (h ? h + ":" + two(m) : two(m)) + ":" + two(s % 60);
+  }
+
   function fmtWhen(ms) {
     const at = Number(ms);
     if (!at) return "";
@@ -382,6 +394,30 @@
     );
   }
 
+  // Стопка аватарок-инициалов: владелец с главной видит, кто сейчас в комнате.
+  function ParticipantsStack({ names, max = 4 }) {
+    const shown = names.slice(0, max);
+    const extra = names.length - shown.length;
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div className="hu-stack">
+          {shown.map((n, i) => <Avatar key={i} size={30} name={n} />)}
+        </div>
+        {extra > 0 && <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 600 }}>+{extra}</span>}
+      </div>
+    );
+  }
+
+  // Бейдж «в эфире · 05:32» — длительность тикает раз в секунду.
+  function LiveDuration({ sinceMs }) {
+    const [now, setNow] = useState(Date.now());
+    useEffect(() => {
+      const id = setInterval(() => setNow(Date.now()), 1000);
+      return () => clearInterval(id);
+    }, []);
+    return <Badge tone="live" dot>{"в эфире · " + fmtDuration(now - sinceMs)}</Badge>;
+  }
+
   function EmptyRoom({ onCreate }) {
     return (
       <div className="hu-empty" onClick={onCreate} role="button" tabIndex={0}
@@ -471,6 +507,7 @@
     }, [open]);
     if (!room) return null;
     const hasPass = !!room.password;
+    const live = !!room.online;
     // Каждое поле сохраняется отдельным PATCH; ошибка сервера — под формой.
     async function apply(patch) {
       const e = await onChange(patch);
@@ -490,10 +527,20 @@
       <Modal open={open} onClose={onClose} title="Настройки комнаты"
              subtitle="Ссылка, название и пароль для подключения." width={470}>
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-          <Field label="Ссылка для подключения" htmlFor="rs-code" hint={roomLinkText(slugify(code) || "…")}>
-            <Input id="rs-code" value={code} onChange={(e) => setCode(e.target.value)}
-                   onBlur={saveCode} onKeyDown={(e) => e.key === "Enter" && saveCode()} />
-          </Field>
+          {live ? (
+            <div>
+              <div className="hu-label" style={{ marginBottom: 8 }}>Ссылка для подключения</div>
+              <LinkRow code={room.code} />
+              <div style={{ fontSize: 12, color: "var(--text-faint)", marginTop: 8 }}>
+                Ссылку нельзя изменить, пока идёт конференция.
+              </div>
+            </div>
+          ) : (
+            <Field label="Ссылка для подключения" htmlFor="rs-code" hint={roomLinkText(slugify(code) || "…")}>
+              <Input id="rs-code" value={code} onChange={(e) => setCode(e.target.value)}
+                     onBlur={saveCode} onKeyDown={(e) => e.key === "Enter" && saveCode()} />
+            </Field>
+          )}
           <Field label="Название конференции" htmlFor="rs-title">
             <div style={{ display: "flex", gap: 8 }}>
               <Input id="rs-title" value={title} style={{ flex: 1, minWidth: 0 }}
@@ -678,15 +725,16 @@
       });
     }, []);
 
-    // Статус «в эфире» меняется, пока вкладка в фоне, — обновляем комнату,
-    // когда пользователь возвращается на главную.
+    // Владелец с главной наблюдает за комнатой: участники и статус эфира
+    // обновляются раз в 10 секунд (пока вкладка видима) и при возврате на неё.
     useEffect(() => {
       const upd = () => MeetUp.myRoom().then(r => {
         if (r.ok && r.body && r.body.room) setRoom(r.body.room);
         else if (r.status === 404) setRoom(null);
       });
       window.addEventListener("focus", upd);
-      return () => window.removeEventListener("focus", upd);
+      const id = setInterval(() => { if (!document.hidden) upd(); }, 10000);
+      return () => { window.removeEventListener("focus", upd); clearInterval(id); };
     }, []);
 
     async function saveName(newName) {
@@ -723,6 +771,13 @@
       setRoom(null);
       setRoomSetOpen(false);
     }
+    async function closeRoom() {
+      await MeetUp.closeMyRoom();
+      // Отключения участников доходят до сервера чуть позже самого close.
+      await new Promise(res => setTimeout(res, 500));
+      const r = await MeetUp.myRoom();
+      if (r.ok && r.body && r.body.room) setRoom(r.body.room);
+    }
 
     if (!user) return null;   // идёт проверка сессии
 
@@ -746,7 +801,7 @@
               <div className="hero">
                 <div className="hero-badge">
                   <Avatar size={26} name={name} src={avatar} />
-                  <span className="hb-txt">Вы онлайн</span>
+                  <span className="hb-txt">{room && room.online ? "Вы в эфире" : "Вы онлайн"}</span>
                 </div>
                 <div>
                   <div className="greet-label">С возвращением</div>
@@ -763,22 +818,32 @@
                   <Card elevated>
                     <div className="room-head">
                       <h2 className="card-title">{room.title}</h2>
-                      <Badge tone={room.online ? "live" : "muted"} dot>
-                        {room.online ? "в эфире · " + room.participants : "не в эфире"}
-                      </Badge>
+                      {room.online
+                        ? <LiveDuration sinceMs={room.live_since_ms} />
+                        : <Badge tone="muted" dot>не в эфире</Badge>}
                     </div>
+                    {room.online &&
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+                        <ParticipantsStack names={room.participant_names || []} />
+                        <span style={{ fontSize: 13, color: "var(--text-muted)" }}>
+                          Участники ({room.participants})
+                        </span>
+                      </div>}
                     <LinkRow code={room.code} />
                     <div className="actions-row">
                       <Button variant="primary" iconRight="arrow-right"
                               onClick={() => { location.href = "conference.html?room=" + encodeURIComponent(room.code); }}>
-                        Открыть комнату
+                        {room.online ? "Войти в эфир" : "Открыть комнату"}
                       </Button>
                       <Button variant="secondary" icon="settings" onClick={() => setRoomSetOpen(true)}>Настройки</Button>
+                      {room.online &&
+                        <Button variant="danger" icon="phone-off" onClick={closeRoom}>Завершить</Button>}
                     </div>
-                    <div className="room-note">
-                      Гости входят, только пока вы в комнате{room.password ? ", и только по паролю" : ""}.
-                      Без вас ссылка отвечает «владелец ещё не открыл комнату».
-                    </div>
+                    {!room.online &&
+                      <div className="room-note">
+                        Эфир начинается с вашего входа{room.password ? ", гости подключаются по паролю" : ""} —
+                        и продолжается, пока в комнате кто-то есть.
+                      </div>}
                   </Card>
                 ) : (
                   <EmptyRoom onCreate={() => setCreateOpen(true)} />

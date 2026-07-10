@@ -14,6 +14,8 @@ ConferenceRoom::ConferenceRoom(const QString &code, int ownerId)
 
 void ConferenceRoom::addParticipant(ClientSession *session)
 {
+    if (m_sessions.isEmpty())
+        m_liveSinceMs = QDateTime::currentMSecsSinceEpoch();
     if (!m_sessions.contains(session))
         m_sessions.append(session);
     m_emptySinceMs = 0;
@@ -22,8 +24,10 @@ void ConferenceRoom::addParticipant(ClientSession *session)
 void ConferenceRoom::removeParticipant(ClientSession *session)
 {
     m_sessions.removeAll(session);
-    if (m_sessions.isEmpty())
+    if (m_sessions.isEmpty()) {
         m_emptySinceMs = QDateTime::currentMSecsSinceEpoch();
+        m_liveSinceMs = 0;
+    }
 }
 
 void ConferenceRoom::broadcastJson(const QJsonObject &obj, ClientSession *except) const
