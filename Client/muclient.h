@@ -17,20 +17,6 @@ namespace Ui
 QT_END_NAMESPACE
 
 
-class MUAuthPage;
-
-class MUClient : public QMainWindow
-{
-    Q_OBJECT
-public:
-    MUClient(QWidget *parent = nullptr);
-    ~MUClient();
-
-private:
-    Ui::MUClient *ui;
-    MUAuthPage* authPage;
-};
-
 
 class MUAuthForm: public QWidget
 {
@@ -55,19 +41,22 @@ public:
     QLabel* hint;
 };
 
-class MUAuthPage: public QWidget
+
+class MUClient : public QMainWindow
 {
     Q_OBJECT
 
 public:
-    MUAuthPage(QWidget *parent);
-    ~MUAuthPage();
+    MUClient(QWidget *parent = nullptr);
+    ~MUClient();
+
+private:
+    Ui::MUClient *ui;
 
     MUAuthForm* authForm;
     QLabel* appName;
     QLabel* image;
     QPushButton* switchThemeBtn;
 };
-
 
 #endif
