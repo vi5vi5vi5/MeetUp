@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MeetUp — Главная</title>
+<link rel="stylesheet" href="assets/fonts.css">
+<link rel="stylesheet" href="assets/theme.css">
+<style>
+  html, body { height: 100%; margin: 0; }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text); font-family: var(--font-ui);
+    font-size: var(--text-md); line-height: var(--leading-base);
+    transition: background .24s var(--ease);
+  }
+  #root { position: fixed; inset: 0; overflow: auto; }
+  a { color: var(--accent-ink); text-decoration: none; }
+  a:hover { opacity: .82; }
+  ::selection { background: var(--accent); color: var(--on-accent); }
+
+  .page { min-height: 100%; display: flex; flex-direction: column; }
+
+  .topbar { display: flex; align-items: center; gap: 14px; padding: 22px 28px; }
+  .wordmark { font-family: var(--font-label); font-weight: 700; font-size: 18px; letter-spacing: 2px; text-transform: uppercase; }
+  .topbar-actions { display: flex; align-items: center; gap: 12px; }
+
+  .stagewrap { flex: 1; display: grid; place-items: center; padding: 8px 28px 48px; }
+  .stage { display: grid; grid-template-columns: 1.05fr .95fr; gap: 44px; align-items: center;
+    max-width: 1000px; width: 100%; }
+
+  /* ---- hero ---- */
+  .hero { display: flex; flex-direction: column; gap: 22px; min-width: 0; }
+  .hero-badge { display: inline-flex; align-items: center; gap: 8px; align-self: flex-start;
+    padding: 6px 12px 6px 6px; border: 1px solid var(--border); border-radius: var(--radius-pill);
+    background: var(--surface); }
+  .hero-badge .hb-txt { font-family: var(--font-label); text-transform: uppercase; letter-spacing: 2px; font-size: 11px; color: var(--text-muted); }
+  .greet-label { font-family: var(--font-label); font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: var(--text-faint); }
+  .greet-title { margin: 8px 0 0; font-family: var(--font-display); font-weight: 800;
+    font-size: clamp(36px, 5vw, 54px); line-height: .95; letter-spacing: -1.8px;
+    min-width: 0; overflow-wrap: anywhere; }
+  .greet-sub { margin-top: 16px; max-width: 380px; color: var(--text-muted); font-size: 15px; }
+
+  .col { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+  .card-title { font-family: var(--font-display); font-weight: 700; font-size: 20px; letter-spacing: -.5px; margin: 0; }
+  .room-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  .actions-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+  .actions-row > * { flex: 1 1 auto; }
+  .room-note { margin-top: 12px; font-size: var(--text-xs); color: var(--text-faint); }
+
+  /* ---- элементы аккаунта и модалок (из дизайна «Главная») ---- */
+  .hu-avatar { display: inline-flex; align-items: center; justify-content: center; flex: none;
+    border-radius: 50%; background: var(--surface-3); color: var(--text);
+    font-family: var(--font-ui); font-weight: 800; overflow: hidden;
+    border: 1px solid var(--border); background-size: cover; background-position: center; }
+  .hu-textbtn { border: 0; background: transparent; color: var(--accent-ink);
+    font-family: var(--font-ui); font-weight: 700; font-size: 12px; cursor: pointer;
+    padding: 4px 6px; border-radius: 6px; transition: var(--transition); }
+  .hu-textbtn:hover { background: var(--surface-2); }
+  .hu-label { font-family: var(--font-label); text-transform: uppercase; letter-spacing: 2px;
+    font-size: 11px; color: var(--text-faint); }
+  .hu-account { position: relative; }
+  .hu-chip { display: inline-flex; align-items: center; gap: 9px; padding: 5px 9px 5px 5px;
+    border-radius: var(--radius-pill); border: 1px solid var(--border); background: var(--surface);
+    cursor: pointer; color: var(--text); font-family: var(--font-ui); transition: var(--transition); }
+  .hu-chip:hover { background: var(--surface-2); }
+  .hu-chip-name { font-weight: 700; font-size: 13px; max-width: 150px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .hu-caret { color: var(--text-muted); display: flex; }
+  .hu-menu { position: absolute; top: calc(100% + 8px); right: 0; min-width: 230px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md);
+    box-shadow: var(--shadow-pop); padding: 6px; z-index: 120; }
+  .hu-menu-head { display: flex; align-items: center; gap: 10px; padding: 8px 8px 12px;
+    border-bottom: 1px solid var(--border); margin-bottom: 6px; }
+  .hu-menu-item { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+    padding: 9px 10px; border: 0; background: transparent; border-radius: var(--radius-sm);
+    color: var(--text); font-family: var(--font-ui); font-size: 13px; font-weight: 600;
+    cursor: pointer; transition: var(--transition); text-decoration: none; }
+  .hu-menu-item:hover { background: var(--surface-2); }
+  .hu-menu-item.danger { color: var(--danger); }
+  .hu-scrim { position: fixed; inset: 0; z-index: 200; background: rgba(6,6,8,.55);
+    display: grid; place-items: center; padding: 20px; overflow: auto;
+    animation: hu-fade .15s var(--ease); }
+  @keyframes hu-fade { from { opacity: 0 } to { opacity: 1 } }
+  .hu-link { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 12px;
+    border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-2); }
+  .hu-link-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-family: var(--font-mono); font-size: 12.5px; color: var(--text); }
+  .hu-empty { display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; gap: 16px; padding: 36px 24px; border: 1.5px dashed var(--border-strong);
+    border-radius: var(--radius-card); background: var(--surface); cursor: pointer; transition: var(--transition); }
+  .hu-empty:hover { border-color: var(--accent-ink); background: var(--surface-2); }
+  .hu-divider { display: flex; align-items: center; gap: 12px; margin: 16px 0; }
+  .hu-divider::before, .hu-divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+  .hu-divider span { font-family: var(--font-label); font-size: 10px; letter-spacing: 2px;
+    text-transform: uppercase; color: var(--text-faint); }
+
+  /* ---- Mobile ---- */
+  @media (max-width: 780px) {
+    .topbar { padding: 18px 18px; }
+    .stagewrap { padding: 4px 16px 56px; align-items: start; }
+    .stage { grid-template-columns: 1fr; gap: 24px; max-width: 460px; }
+    .hero { align-items: flex-start; }
+    .greet-title { font-size: clamp(30px, 9.5vw, 42px); }
+    .greet-sub { max-width: none; }
+  }
+</style>
+</head>
+<body>
+
+<div id="root"></div>
+<script src="assets/react.js"></script>
+<script src="assets/react-dom.js"></script>
+<script src="assets/babel.js"></script>
+<script src="assets/meetup-ds.js"></script>
+<script src="assets/meetup-common.js"></script>
+<script type="text/babel">
+  const { useState, useRef, useEffect } = React;
+  const { Card, Button, IconButton, Icon, Badge, Input, Field } = window.MeetUpDesignSystem_2584b5;
+
+  // Локальные черновики: аватарка и личная комната пока живут в браузере —
+  // серверная часть (личные комнаты, загрузка аватарок) в следующей итерации.
+  const THEME_KEY = "meetup.theme";
+  const AVATAR_KEY = "meetup.avatar";
+  const ROOM_KEY = "meetup.room.draft";
+  function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function lsSet(k, v) {
+    try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {}
+  }
+  function loadRoomDraft() {
+    try { return JSON.parse(lsGet(ROOM_KEY) || "null"); } catch (e) { return null; }
+  }
+
+  function initials(name) {
+    const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return "?";
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+  function slugify(v) {
+    return String(v || "").toLowerCase().replace(/[^a-z0-9а-яё\-]+/gi, "-").replace(/^-+|-+$/g, "");
+  }
+  function roomLinkText(code) { return location.host + "/conference.html?room=" + (code || ""); }
+  function roomLinkFull(code) { return location.origin + "/conference.html?room=" + encodeURIComponent(code || ""); }
+
+  function Avatar({ size = 40, name, src, style }) {
+    const st = { width: size, height: size, fontSize: Math.round(size * 0.4), ...style };
+    if (src) st.backgroundImage = 'url("' + src + '")';
+    return <span className="hu-avatar" style={st}>{src ? null : initials(name)}</span>;
+  }
+
+  function Modal({ open, onClose, title, subtitle, width = 460, children }) {
+    useEffect(() => {
+      if (!open) return;
+      const onKey = (e) => { if (e.key === "Escape") onClose(); };
+      window.addEventListener("keydown", onKey);
+      return () => window.removeEventListener("keydown", onKey);
+    }, [open, onClose]);
+    if (!open) return null;
+    return (
+      <div className="hu-scrim" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+        <Card elevated width={width} style={{ maxWidth: "100%", maxHeight: "calc(100vh - 40px)", overflowY: "auto" }}>
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 14 }}>
+            <div>
+              {title && <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 20, letterSpacing: "-.5px" }}>{title}</div>}
+              {subtitle && <div style={{ color: "var(--text-muted)", fontSize: 13, marginTop: 4 }}>{subtitle}</div>}
+            </div>
+            <IconButton icon="x" size="sm" label="Закрыть" onClick={onClose} />
+          </div>
+          {children}
+        </Card>
+      </div>
+    );
+  }
+
+  function AccountMenu({ name, avatar, theme, onEditProfile, onToggleTheme, onLogout }) {
+    const [open, setOpen] = useState(false);
+    const ref = useRef(null);
+    useEffect(() => {
+      if (!open) return;
+      const onDown = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+      const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+      document.addEventListener("mousedown", onDown);
+      window.addEventListener("keydown", onKey);
+      return () => { document.removeEventListener("mousedown", onDown); window.removeEventListener("keydown", onKey); };
+    }, [open]);
+    return (
+      <div className="hu-account" ref={ref}>
+        <button className="hu-chip" onClick={() => setOpen(o => !o)} aria-haspopup="menu">
+          <Avatar size={30} name={name} src={avatar} />
+          <span className="hu-chip-name">{name}</span>
+          <span className="hu-caret"><Icon name="more" size={16} /></span>
+        </button>
+        {open && (
+          <div className="hu-menu" role="menu">
+            <div className="hu-menu-head">
+              <Avatar size={38} name={name} src={avatar} />
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</div>
+                <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Ваш аккаунт</div>
+              </div>
+            </div>
+            <button className="hu-menu-item" onClick={() => { setOpen(false); onEditProfile(); }}>
+              <Icon name="settings" size={16} /> Настройки профиля
+            </button>
+            <button className="hu-menu-item" onClick={onToggleTheme}>
+              <Icon name={theme === "dark" ? "sun" : "moon"} size={16} /> {theme === "dark" ? "Светлая тема" : "Тёмная тема"}
+            </button>
+            <div style={{ height: 1, background: "var(--border)", margin: "6px 4px" }} />
+            <button className="hu-menu-item danger" onClick={onLogout}>
+              <Icon name="arrow-right" size={16} /> Выйти
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function AvatarEditor({ name, avatar, onChange }) {
+    const inputRef = useRef(null);
+    function onFile(e) {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      const rd = new FileReader();
+      rd.onload = () => onChange(rd.result);
+      rd.readAsDataURL(f);
+      e.target.value = "";
+    }
+    return (
+      <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
+        <Avatar size={88} name={name} src={avatar} />
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <input ref={inputRef} type="file" accept="image/*" onChange={onFile} style={{ display: "none" }} />
+          <div style={{ display: "flex", gap: 8 }}>
+            <Button variant={avatar ? "secondary" : "primary"} size="sm"
+                    icon={avatar ? undefined : "plus"} onClick={() => inputRef.current && inputRef.current.click()}>
+              {avatar ? "Заменить" : "Загрузить фото"}
+            </Button>
+            {avatar && <Button variant="ghost" size="sm" icon="x" onClick={() => onChange(null)}>Удалить</Button>}
+          </div>
+          <span style={{ fontSize: 11, color: "var(--text-faint)" }}>
+            PNG или JPG · пока хранится только в этом браузере
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  function NameField({ name, onSave }) {
+    const [editing, setEditing] = useState(false);
+    const [val, setVal] = useState(name);
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState("");
+    useEffect(() => { if (!editing) setVal(name); }, [name, editing]);
+    async function save() {
+      const v = val.trim();
+      if (!v) { setErr("Имя не может быть пустым."); return; }
+      setBusy(true);
+      const ok = await onSave(v);
+      setBusy(false);
+      if (ok) { setEditing(false); setErr(""); }
+      else setErr("Не удалось сохранить имя. Попробуйте позже.");
+    }
+    if (editing) {
+      return (
+        <div>
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+            <Field label="Отображаемое имя" htmlFor="hu-name" style={{ flex: 1 }}>
+              <Input id="hu-name" value={val} autoFocus maxLength={40}
+                     onChange={(e) => { setVal(e.target.value); setErr(""); }}
+                     onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }} />
+            </Field>
+            <Button variant="primary" icon="check" disabled={busy} onClick={save}>Сохранить</Button>
+          </div>
+          {err && <div style={{ marginTop: 8, fontSize: 12, color: "var(--danger)" }}>{err}</div>}
+        </div>
+      );
+    }
+    return (
+      <div>
+        <div className="hu-label" style={{ marginBottom: 4 }}>Отображаемое имя</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 22, letterSpacing: "-.5px" }}>{name}</span>
+          <button className="hu-textbtn" onClick={() => setEditing(true)}>Изменить</button>
+        </div>
+      </div>
+    );
+  }
+
+  function LinkRow({ code }) {
+    const [copied, setCopied] = useState(false);
+    function copy() {
+      try { navigator.clipboard && navigator.clipboard.writeText(roomLinkFull(code)); } catch (e) {}
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+    }
+    return (
+      <div className="hu-link">
+        <span className="hu-link-text" title={roomLinkText(code)}>{roomLinkText(code)}</span>
+        <IconButton icon={copied ? "check" : "copy"} size="sm" variant={copied ? "active" : "neutral"}
+                    label="Копировать ссылку" onClick={copy} />
+      </div>
+    );
+  }
+
+  function EmptyRoom({ onCreate }) {
+    return (
+      <div className="hu-empty" onClick={onCreate} role="button" tabIndex={0}
+           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onCreate(); } }}>
+        <IconButton icon="plus" variant="accent" size="lg" label="Создать личную комнату" onClick={onCreate} />
+        <div>
+          <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 20, letterSpacing: "-.5px" }}>Создайте личную комнату</div>
+          <div style={{ color: "var(--text-muted)", fontSize: 13, marginTop: 6, maxWidth: 340, marginLeft: "auto", marginRight: "auto" }}>
+            Постоянная комната с вашей собственной ссылкой — поделитесь ей один раз и встречайтесь всегда по ней.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function CreateRoomModal({ open, onClose, userName, onCreate }) {
+    const [code, setCode] = useState("");
+    const [title, setTitle] = useState("");
+    const [pass, setPass] = useState("");
+    const [showPass, setShowPass] = useState(false);
+    const [err, setErr] = useState("");
+    useEffect(() => { if (open) { setCode(""); setTitle(""); setPass(""); setShowPass(false); setErr(""); } }, [open]);
+    function create() {
+      const c = slugify(code);
+      if (!c) { setErr("Укажите код комнаты для ссылки."); return; }
+      onCreate({ code: c, title: title.trim() || ("Комната " + userName), password: pass });
+      onClose();
+    }
+    return (
+      <Modal open={open} onClose={onClose} title="Новая личная комната"
+             subtitle="Постоянная комната с вашей собственной ссылкой." width={470}>
+        <Field label="Код комнаты (ссылка)" htmlFor="cr-code" hint={roomLinkText(slugify(code) || "…")}>
+          <Input id="cr-code" value={code} placeholder="anna-room" autoFocus
+                 onChange={(e) => { setCode(e.target.value); setErr(""); }}
+                 onKeyDown={(e) => e.key === "Enter" && create()} />
+        </Field>
+        <Field label="Название конференции" htmlFor="cr-title" style={{ marginTop: 16 }}>
+          <Input id="cr-title" value={title} placeholder={"Комната " + userName}
+                 onChange={(e) => setTitle(e.target.value)} />
+        </Field>
+        <Field label="Пароль (необязательно)" htmlFor="cr-pass" style={{ marginTop: 16 }}
+               hint="Оставьте пустым — вход без пароля.">
+          <div style={{ display: "flex", gap: 8 }}>
+            <Input id="cr-pass" type={showPass ? "text" : "password"} value={pass} placeholder="••••••"
+                   style={{ flex: 1 }} onChange={(e) => setPass(e.target.value)} />
+            <Button variant="secondary" onClick={() => setShowPass(v => !v)}>{showPass ? "Скрыть" : "Показать"}</Button>
+          </div>
+        </Field>
+        <Button variant="primary" block iconRight="arrow-right" style={{ marginTop: 22 }} onClick={create}>
+          Создать комнату
+        </Button>
+        <div style={{ marginTop: 12, textAlign: "center", fontSize: 12, color: err ? "var(--danger)" : "var(--text-faint)" }}>
+          {err || "Черновик: комната пока хранится только в этом браузере."}
+        </div>
+      </Modal>
+    );
+  }
+
+  function RoomSettingsModal({ open, onClose, room, onChange }) {
+    const [title, setTitle] = useState(room ? room.title : "");
+    const [code, setCode] = useState(room ? room.code : "");
+    const [pass, setPass] = useState("");
+    const [showPass, setShowPass] = useState(false);
+    const [editingPass, setEditingPass] = useState(false);
+    useEffect(() => {
+      if (open && room) { setTitle(room.title); setCode(room.code); setPass(""); setShowPass(false); setEditingPass(false); }
+    }, [open]);
+    if (!room) return null;
+    const hasPass = !!room.password;
+    function saveTitle() { const t = title.trim(); if (t) onChange({ ...room, title: t }); }
+    function saveCode() { const c = slugify(code); if (c) onChange({ ...room, code: c }); else setCode(room.code); }
+    function savePass() { onChange({ ...room, password: pass }); setEditingPass(false); setPass(""); setShowPass(false); }
+    return (
+      <Modal open={open} onClose={onClose} title="Настройки комнаты"
+             subtitle="Ссылка, название и пароль для подключения." width={470}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+          <Field label="Ссылка для подключения" htmlFor="rs-code" hint={roomLinkText(slugify(code) || "…")}>
+            <Input id="rs-code" value={code} onChange={(e) => setCode(e.target.value)}
+                   onBlur={saveCode} onKeyDown={(e) => e.key === "Enter" && saveCode()} />
+          </Field>
+          <Field label="Название конференции" htmlFor="rs-title">
+            <div style={{ display: "flex", gap: 8 }}>
+              <Input id="rs-title" value={title} style={{ flex: 1, minWidth: 0 }}
+                     onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveTitle()} />
+              <Button variant="secondary" icon="check" onClick={saveTitle}>Сохранить</Button>
+            </div>
+          </Field>
+          <div>
+            <div className="hu-label" style={{ marginBottom: 8 }}>Пароль на вход</div>
+            {!editingPass ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                {hasPass ? (
+                  <React.Fragment>
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 14, letterSpacing: "2px" }}>
+                      {showPass ? room.password : "••••••"}
+                    </span>
+                    <button className="hu-textbtn" onClick={() => setShowPass(v => !v)}>{showPass ? "Скрыть" : "Показать"}</button>
+                    <span style={{ flex: 1 }} />
+                    <Button variant="secondary" size="sm" onClick={() => { setEditingPass(true); setPass(room.password); }}>Изменить</Button>
+                    <Button variant="ghost" size="sm" icon="x" onClick={() => onChange({ ...room, password: "" })}>Удалить</Button>
+                  </React.Fragment>
+                ) : (
+                  <React.Fragment>
+                    <span style={{ fontSize: 13, color: "var(--text-muted)", flex: 1, minWidth: 140 }}>
+                      Пароль не установлен — вход свободный.
+                    </span>
+                    <Button variant="secondary" size="sm" icon="plus" onClick={() => { setEditingPass(true); setPass(""); }}>Добавить пароль</Button>
+                  </React.Fragment>
+                )}
+              </div>
+            ) : (
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <Input type={showPass ? "text" : "password"} value={pass} placeholder="Новый пароль" autoFocus
+                       style={{ flex: 1, minWidth: 140 }}
+                       onChange={(e) => setPass(e.target.value)} onKeyDown={(e) => e.key === "Enter" && savePass()} />
+                <Button variant="secondary" size="sm" onClick={() => setShowPass(v => !v)}>{showPass ? "Скрыть" : "Показать"}</Button>
+                <Button variant="primary" size="sm" icon="check" onClick={savePass}>ОК</Button>
+              </div>
+            )}
+          </div>
+        </div>
+      </Modal>
+    );
+  }
+
+  // Вход в чужую комнату по коду и новая конференция — существующее API,
+  // та же логика, что в анонимном лобби.
+  function QuickActions() {
+    const [code, setCode] = useState("");
+    const [err, setErr] = useState("");
+    const [busy, setBusy] = useState(false);
+    async function join() {
+      const c = code.trim();
+      if (!c) { setErr("Введите код комнаты."); return; }
+      setErr("");
+      setBusy(true);
+      const resp = await MeetUp.api("GET", "/api/rooms/" + encodeURIComponent(c));
+      if (resp.ok) { location.href = "conference.html?room=" + encodeURIComponent(c); return; }
+      setBusy(false);
+      if (resp.status === 404) setErr("Комната не найдена. Проверьте код.");
+      else setErr("Сервер недоступен. Попробуйте позже.");
+    }
+    async function createConf() {
+      setErr("");
+      setBusy(true);
+      const resp = await MeetUp.api("POST", "/api/rooms");
+      if (resp.ok && resp.body && resp.body.room) {
+        location.href = "conference.html?room=" + encodeURIComponent(resp.body.room);
+        return;
+      }
+      setBusy(false);
+      setErr("Не удалось создать комнату. Попробуйте позже.");
+    }
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <Field label="Код чужой комнаты" htmlFor="qa-code" hint="Спросите код у организатора">
+          <Input id="qa-code" value={code} placeholder="Например: fRt7…" autoComplete="off" maxLength={64}
+                 onChange={(e) => { setCode(e.target.value); setErr(""); }}
+                 onKeyDown={(e) => e.key === "Enter" && join()} />
+        </Field>
+        <Button variant="primary" block iconRight="arrow-right" disabled={busy} onClick={join}>Подключиться</Button>
+        <div className="hu-divider"><span>или</span></div>
+        <Button variant="ghost" block icon="plus" disabled={busy} onClick={createConf}>Создать конференцию</Button>
+        <div style={{ textAlign: "center", fontSize: 12, color: err ? "var(--danger)" : "var(--text-faint)" }}>
+          {err || "Код новой конференции сгенерирует сервер."}
+        </div>
+      </div>
+    );
+  }
+
+  function HomeScreen() {
+    const [user, setUser] = useState(null);
+    const [theme, setTheme] = useState(lsGet(THEME_KEY) === "light" ? "light" : "dark");
+    const [avatar, setAvatar] = useState(lsGet(AVATAR_KEY));
+    const [room, setRoom] = useState(loadRoomDraft);
+    const [profileOpen, setProfileOpen] = useState(false);
+    const [createOpen, setCreateOpen] = useState(false);
+    const [roomSetOpen, setRoomSetOpen] = useState(false);
+
+    useEffect(() => {
+      document.documentElement.setAttribute("data-theme", theme);
+      lsSet(THEME_KEY, theme);
+    }, [theme]);
+    const toggleTheme = () => setTheme(t => (t === "dark" ? "light" : "dark"));
+
+    // Страница только для вошедших: нет сессии — на логин.
+    useEffect(() => {
+      MeetUp.authMe().then(resp => {
+        if (resp.ok && resp.body && resp.body.user) {
+          setUser(resp.body.user);
+          MeetUp.saveName(resp.body.user.display_name);
+        } else {
+          location.replace("login.html");
+        }
+      });
+    }, []);
+
+    async function saveName(newName) {
+      const resp = await MeetUp.updateMe({ display_name: newName });
+      if (resp.ok && resp.body && resp.body.user) {
+        setUser(resp.body.user);
+        MeetUp.saveName(resp.body.user.display_name);
+        return true;
+      }
+      return false;
+    }
+
+    async function logout() {
+      await MeetUp.authLogout();
+      location.href = "login.html";
+    }
+
+    function saveAvatar(a) { setAvatar(a); lsSet(AVATAR_KEY, a); }
+    function saveRoom(r) { setRoom(r); lsSet(ROOM_KEY, r ? JSON.stringify(r) : null); }
+
+    if (!user) return null;   // идёт проверка сессии
+
+    const name = user.display_name;
+    return (
+      <div className="page">
+        <div className="topbar">
+          <div className="wordmark">MeetUp</div>
+          <span style={{ flex: 1 }} />
+          <div className="topbar-actions">
+            <IconButton icon={theme === "dark" ? "sun" : "moon"} size="sm" label="Сменить тему" onClick={toggleTheme} />
+            <AccountMenu name={name} avatar={avatar} theme={theme}
+                         onEditProfile={() => setProfileOpen(true)}
+                         onToggleTheme={toggleTheme} onLogout={logout} />
+          </div>
+        </div>
+
+        <div className="stagewrap">
+          <div className="stage">
+            <div className="hero">
+              <div className="hero-badge">
+                <Avatar size={26} name={name} src={avatar} />
+                <span className="hb-txt">Вы онлайн</span>
+              </div>
+              <div>
+                <div className="greet-label">С возвращением</div>
+                <h1 className="greet-title">{name}</h1>
+                <p className="greet-sub">
+                  Ваша личная комната всегда под рукой — начните встречу в один клик
+                  или подключитесь к чужой конференции.
+                </p>
+              </div>
+            </div>
+
+            <div className="col">
+              {room ? (
+                <Card elevated>
+                  <div className="room-head">
+                    <h2 className="card-title">{room.title}</h2>
+                    <Badge tone="muted" dot>не в эфире</Badge>
+                  </div>
+                  <LinkRow code={room.code} />
+                  <div className="actions-row">
+                    <Button variant="primary" iconRight="arrow-right" disabled
+                            title="Заработает вместе с серверной частью личных комнат">
+                      Открыть комнату
+                    </Button>
+                    <Button variant="secondary" icon="settings" onClick={() => setRoomSetOpen(true)}>Настройки</Button>
+                  </div>
+                  <div className="room-note">
+                    Черновик: личная комната хранится в этом браузере, серверная часть появится в следующем обновлении.
+                  </div>
+                </Card>
+              ) : (
+                <EmptyRoom onCreate={() => setCreateOpen(true)} />
+              )}
+
+              <Card>
+                <h2 className="card-title" style={{ marginBottom: 16 }}>Другая встреча</h2>
+                <QuickActions />
+              </Card>
+            </div>
+          </div>
+        </div>
+
+        <Modal open={profileOpen} onClose={() => setProfileOpen(false)} title="Настройки профиля"
+               subtitle="Имя и фото, которые видят участники." width={440}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+            <AvatarEditor name={name} avatar={avatar} onChange={saveAvatar} />
+            <NameField name={name} onSave={saveName} />
+          </div>
+        </Modal>
+
+        <CreateRoomModal open={createOpen} onClose={() => setCreateOpen(false)}
+                         userName={name} onCreate={saveRoom} />
+        <RoomSettingsModal open={roomSetOpen} onClose={() => setRoomSetOpen(false)}
+                           room={room} onChange={saveRoom} />
+      </div>
+    );
+  }
+
+  ReactDOM.createRoot(document.getElementById("root")).render(<HomeScreen />);
+</script>
+
+</body>
+</html>

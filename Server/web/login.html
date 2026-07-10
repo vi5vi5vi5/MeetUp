@@ -38,7 +38,7 @@
 
   .hero-title {
     margin: 0; font-family: var(--font-display); font-weight: 800;
-    font-size: clamp(38px, 6vw, 58px); line-height: .95; letter-spacing: -1.5px;
+    font-size: clamp(32px, 4.6vw, 48px); line-height: .98; letter-spacing: -1.5px;
   }
   .hero-sub {
     margin-top: 20px; max-width: 340px; color: var(--text-muted);
@@ -54,7 +54,6 @@
   .cardwrap { justify-self: end; width: 100%; max-width: 380px; }
 
   .row-between { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-  .forgot { font-size: 12px; color: var(--accent-ink); }
 
   .divider { display: flex; align-items: center; gap: 12px; margin: 20px 0 16px; }
   .divider::before, .divider::after {
@@ -76,7 +75,7 @@
       align-content: start; padding-top: 8px;
     }
     .hero { text-align: left; }
-    .hero-title { font-size: clamp(32px, 11vw, 44px); min-width: 0; overflow-wrap: anywhere; }
+    .hero-title { font-size: clamp(26px, 8.6vw, 40px); min-width: 0; }
     .hero-sub { margin-top: 14px; max-width: none; font-size: 14px; }
     .hero-meta { margin-top: 18px; }
     .cardwrap { justify-self: stretch; max-width: none; }
@@ -99,29 +98,52 @@
   const { useState, useEffect } = React;
   const { Card, Button, Input, Field, IconButton } = window.MeetUpDesignSystem_2584b5;
 
+  // Заголовок hero: одна из фраз выбирается случайно при загрузке.
+  // "\n" — перенос строки, *слово* — акцентный цвет,   держит короткие
+  // слова вместе с соседями (не остаются одни на строке).
+  const HERO_PHRASES = [
+    "С возвращением\nв *эфир*",
+    "Рады видеть\nвас *снова*",
+    "Ваша комната\nвас *ждёт*",
+    "Снова\nв *деле*",
+    "Войдите —\nи вы в *эфире*",
+  ];
+
+  function pickHeroPhrase() {
+    const raw = HERO_PHRASES[Math.floor(Math.random() * HERO_PHRASES.length)];
+    return raw.split("\n").map((line, i) => (
+      <React.Fragment key={i}>
+        {i > 0 && <br />}
+        {line.split(/\*([^*]+)\*/).map((part, j) =>
+          j % 2 ? <span key={j} style={{ color: "var(--accent-ink)" }}>{part}</span> : part)}
+      </React.Fragment>
+    ));
+  }
+
   function LoginScreen() {
     const [theme, setTheme] = useState("dark");
     const [login, setLogin] = useState("");
     const [pass, setPass] = useState("");
     const [err, setErr] = useState("");
     const [busy, setBusy] = useState(false);
+    const [hero] = useState(pickHeroPhrase);
 
     useEffect(() => {
       document.documentElement.setAttribute("data-theme", theme);
     }, [theme]);
     const toggle = () => setTheme(t => (t === "dark" ? "light" : "dark"));
 
-    // Живая сессия в куке — сразу в лобби, логин не нужен.
+    // Живая сессия в куке — сразу на главную, логин не нужен.
     useEffect(() => {
       MeetUp.authMe().then(resp => {
-        if (resp.ok && resp.body && resp.body.user) enterLobby(resp.body.user);
+        if (resp.ok && resp.body && resp.body.user) enterHome(resp.body.user);
       });
     }, []);
 
     // Отображаемое имя аккаунта подставляется в лобби и конференцию.
-    function enterLobby(user) {
+    function enterHome(user) {
       MeetUp.saveName(user.display_name);
-      location.href = "anon_lobby.html";
+      location.href = "home.html";
     }
 
     async function submit() {
@@ -129,7 +151,7 @@
       setErr("");
       setBusy(true);
       const resp = await MeetUp.authLogin(login.trim(), pass);
-      if (resp.ok && resp.body && resp.body.user) { enterLobby(resp.body.user); return; }
+      if (resp.ok && resp.body && resp.body.user) { enterHome(resp.body.user); return; }
       setBusy(false);
       if (resp.status === 401) setErr("Неверный логин или пароль.");
       else if (resp.status === 0) setErr("Сервер недоступен. Попробуйте позже.");
@@ -153,9 +175,7 @@
         <div className="stagewrap">
           <div className="stage">
             <div className="hero">
-              <h1 className="hero-title">
-                С возвращением<br />в <span style={{ color: "var(--accent-ink)" }}>эфир</span>
-              </h1>
+              <h1 className="hero-title">{hero}</h1>
               <p className="hero-sub">
                 Войдите в аккаунт, чтобы продолжить встречи, историю комнат и контакты.
               </p>
@@ -179,13 +199,6 @@
                          onChange={(e) => { setPass(e.target.value); setErr(""); }}
                          onKeyDown={(e) => e.key === "Enter" && submit()} />
                 </Field>
-
-                <div style={{ marginTop: 10, textAlign: "right" }}>
-                  <a href="#" className="forgot"
-                     onClick={(e) => { e.preventDefault(); setErr("Восстановление пароля появится вместе с аккаунтами."); }}>
-                    Забыли пароль?
-                  </a>
-                </div>
 
                 <Button variant="primary" block iconRight="arrow-right" disabled={busy}
                         style={{ marginTop: 20 }} onClick={submit}>

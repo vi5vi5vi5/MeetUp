@@ -44,7 +44,7 @@
 
   .hero-title {
     margin: 0; font-family: var(--font-display); font-weight: 800;
-    font-size: clamp(38px, 6vw, 58px); line-height: .95; letter-spacing: -1.5px;
+    font-size: clamp(32px, 4.6vw, 48px); line-height: .98; letter-spacing: -1.5px;
   }
   .hero-sub {
     margin-top: 20px; max-width: 340px; color: var(--text-muted);
@@ -79,7 +79,7 @@
       align-content: start; padding-top: 8px;
     }
     .hero { text-align: left; }
-    .hero-title { font-size: clamp(32px, 11vw, 44px); min-width: 0; overflow-wrap: anywhere; }
+    .hero-title { font-size: clamp(26px, 8.6vw, 40px); min-width: 0; }
     .hero-sub { margin-top: 14px; max-width: none; font-size: 14px; }
     .hero-meta { margin-top: 18px; }
     .cardwrap { justify-self: stretch; max-width: none; }
@@ -103,14 +103,37 @@
   const { useState, useEffect } = React;
   const { Card, Button, Input, Field, IconButton } = window.MeetUpDesignSystem_2584b5;
 
-  // Лобби анонимного входа: без аккаунта, только имя. Пользователи с
-  // аккаунтом получат своё лобби после реализации авторизации (TODO(auth)).
+  // Лобби анонимного входа: без аккаунта, только имя. У вошедших по
+  // аккаунту своя главная — home.html.
+
+  // Заголовок hero: одна из фраз выбирается случайно при загрузке.
+  // "\n" — перенос строки, *слово* — акцентный цвет.
+  const HERO_PHRASES = [
+    "Встреча\nза *один клик*",
+    "Один код —\nи вы *вместе*",
+    "Соберитесь\nв *эфире*",
+    "Прямо\nиз *браузера*",
+    "Говорите\n*свободно*",
+  ];
+
+  function pickHeroPhrase() {
+    const raw = HERO_PHRASES[Math.floor(Math.random() * HERO_PHRASES.length)];
+    return raw.split("\n").map((line, i) => (
+      <React.Fragment key={i}>
+        {i > 0 && <br />}
+        {line.split(/\*([^*]+)\*/).map((part, j) =>
+          j % 2 ? <span key={j} style={{ color: "var(--accent-ink)" }}>{part}</span> : part)}
+      </React.Fragment>
+    ));
+  }
+
   function LobbyScreen() {
     const [theme, setTheme] = useState("dark");
     const [name, setName] = useState(MeetUp.savedName());
     const [room, setRoom] = useState("");
     const [err, setErr] = useState("");
     const [busy, setBusy] = useState(false);
+    const [hero] = useState(pickHeroPhrase);
 
     useEffect(() => {
       document.documentElement.setAttribute("data-theme", theme);
@@ -162,9 +185,7 @@
         <div className="stagewrap">
           <div className="stage">
             <div className="hero">
-              <h1 className="hero-title">
-                Встреча<br />за <span style={{ color: "var(--accent-ink)" }}>один клик</span>
-              </h1>
+              <h1 className="hero-title">{hero}</h1>
               <p className="hero-sub">
                 Без установки и регистрации. Укажите имя, введите код комнаты — и вы в эфире.
               </p>

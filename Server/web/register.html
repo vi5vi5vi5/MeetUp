@@ -111,16 +111,16 @@
     }, [theme]);
     const toggle = () => setTheme(t => (t === "dark" ? "light" : "dark"));
 
-    // Уже вошли — регистрация не нужна, сразу в лобби.
+    // Уже вошли — регистрация не нужна, сразу на главную.
     useEffect(() => {
       MeetUp.authMe().then(resp => {
-        if (resp.ok && resp.body && resp.body.user) enterLobby(resp.body.user);
+        if (resp.ok && resp.body && resp.body.user) enterHome(resp.body.user);
       });
     }, []);
 
-    function enterLobby(user) {
+    function enterHome(user) {
       MeetUp.saveName(user.display_name);
-      location.href = "anon_lobby.html";
+      location.href = "home.html";
     }
 
     async function submit() {
@@ -133,7 +133,7 @@
       setErr("");
       setBusy(true);
       const resp = await MeetUp.authRegister(loginNorm, pass, name.trim());
-      if (resp.ok && resp.body && resp.body.user) { enterLobby(resp.body.user); return; }
+      if (resp.ok && resp.body && resp.body.user) { enterHome(resp.body.user); return; }
       setBusy(false);
       const code = resp.body && resp.body.error;
       if (ERRORS[code]) setErr(ERRORS[code]);
