@@ -49,4 +49,7 @@ EXPOSE 80 9000
 
 # --web-root обязателен: вшитый в бинарь WEB_ROOT_DEFAULT указывает на путь
 # исходников (/src/web), которого в рантайм-образе нет.
-CMD ["/app/MeetUpServer", "--http-port", "80", "--ws-port", "9000", "--web-root", "/app/web"]
+# --data-dir указывает в точку монтирования ./mount (см. docker-compose.yml) —
+# без тома данные остались бы внутри контейнера и умерли при пересборке.
+CMD ["/app/MeetUpServer", "--http-port", "80", "--ws-port", "9000", \
+     "--web-root", "/app/web", "--data-dir", "/app/mount"]

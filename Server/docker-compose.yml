@@ -10,6 +10,11 @@ services:
   app:
     build: .
     restart: unless-stopped
+    volumes:
+      # Всё персистентное (SQLite) — в ./mount на хосте: переживает
+      # пересборку образа и down/up; папка в .gitignore, git pull её
+      # не трогает. Docker создаёт её сам при первом запуске.
+      - ./mount:/app/mount
 
   proxy:
     build: proxy
