@@ -20,6 +20,10 @@ public:
     // Создать комнату со случайным уникальным кодом.
     ConferenceRoom *createRoom();
 
+    // Открыть личную комнату: код задан владельцем, комната помнит его id.
+    // Если код занят живой комнатой — nullptr (join разберётся с существующей).
+    ConferenceRoom *createPersonal(const QString &code, int ownerId);
+
     ConferenceRoom *find(const QString &code) const;
 
     // Удалить комнаты, простоявшие пустыми дольше ttlMs: брошенные после

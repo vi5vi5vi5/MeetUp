@@ -4,6 +4,7 @@
 #include "core/RoomRegistry.h"
 #include "network/HttpRequest.h"
 #include "services/AuthService.h"
+#include "services/PersonalRoomService.h"
 
 #include <QWebSocketServer>
 #include <QWebSocket>
@@ -20,8 +21,11 @@ const QByteArray kSessionCookieName = QByteArrayLiteral("meetup_session");
 } // namespace
 
 ConferenceServer::ConferenceServer(quint16 port, RoomRegistry *registry,
-                                   std::shared_ptr<AuthService> auth, QObject *parent)
-    : QObject(parent), m_registry(registry), m_auth(std::move(auth)), m_port(port)
+                                   std::shared_ptr<AuthService> auth,
+                                   std::shared_ptr<PersonalRoomService> personalRooms,
+                                   QObject *parent)
+    : QObject(parent), m_registry(registry), m_auth(std::move(auth)),
+      m_personalRooms(std::move(personalRooms)), m_port(port)
 {
     m_server = new QWebSocketServer(QStringLiteral("MeetUp"),
                                     QWebSocketServer::NonSecureMode, this);
@@ -118,11 +122,52 @@ void ConferenceServer::handleJoin(ClientSession *session, const QJsonObject &msg
         return;
     }
 
-    // Комнату создаёт только HTTP API — опечатка в коде не плодит комнат-призраков.
+    // Комнату создаёт HTTP API — опечатка в коде не плодит комнат-призраков.
+    // Личная комната — исключение: её открывает join владельца.
     ConferenceRoom *room = m_registry->find(roomCode);
     if (!room) {
-        sendError(session, QStringLiteral("room_not_found"));
-        return;
+        const std::optional<PersonalRoom> personal = m_personalRooms->byCode(roomCode);
+        if (personal.has_value())
+            room = m_registry->find(personal->code);   // код мог отличаться регистром
+        if (!room) {
+            if (!personal.has_value()) {
+                sendError(session, QStringLiteral("room_not_found"));
+                return;
+            }
+            if (!account || session->userId() != personal->ownerId) {
+                // Личная комната без владельца не существует: гости ждут,
+                // пока владелец её откроет.
+                sendError(session, QStringLiteral("room_offline"));
+                return;
+            }
+            room = m_registry->createPersonal(personal->code, personal->ownerId);
+        }
+    }
+
+    // Правила личной комнаты проверяются по свежим данным сервиса: пароль
+    // и код могли поменяться, пока комната в эфире.
+    QString roomTitle;
+    if (room->ownerId() >= 0) {
+        const std::optional<PersonalRoom> personal = m_personalRooms->byCode(room->code());
+        if (!personal.has_value() || personal->ownerId != room->ownerId()) {
+            // Комнату удалили или сменили ей код: по старому коду больше
+            // никого не пускаем, участники внутри остаются.
+            sendError(session, QStringLiteral("room_not_found"));
+            return;
+        }
+        const bool isOwner = account && session->userId() == personal->ownerId;
+        if (!isOwner) {
+            if (!hasAccountUser(room, personal->ownerId)) {
+                sendError(session, QStringLiteral("room_offline"));
+                return;
+            }
+            if (!personal->password.isEmpty()
+                && msg.value(QStringLiteral("password")).toString() != personal->password) {
+                sendError(session, QStringLiteral("wrong_password"));
+                return;
+            }
+        }
+        roomTitle = personal->title;
     }
 
     if (account) {
@@ -136,12 +181,15 @@ void ConferenceServer::handleJoin(ClientSession *session, const QJsonObject &msg
 
     // join_ok — только вошедшему: список присутствующих и история чата,
     // чтобы новый участник видел разговор, который шёл до него.
-    session->sendJson(QJsonObject{
+    QJsonObject joinOk{
         {"type", "join_ok"},
         {"sender_id", qint64(session->id())},
         {"participants", room->participantsJson()},
         {"history", room->historyJson()},
-    });
+    };
+    if (!roomTitle.isEmpty())
+        joinOk.insert(QStringLiteral("room_title"), roomTitle);
+    session->sendJson(joinOk);
 
     // Теперь добавляем в комнату и уведомляем остальных.
     room->addParticipant(session);
@@ -158,6 +206,15 @@ void ConferenceServer::handleJoin(ClientSession *session, const QJsonObject &msg
     qInfo().noquote() << QStringLiteral("join: %1 (id=%2) -> room '%3', participants: %4")
                              .arg(name).arg(session->id()).arg(roomCode)
                              .arg(room->sessions().size());
+}
+
+bool ConferenceServer::hasAccountUser(const ConferenceRoom *room, int userId)
+{
+    for (ClientSession *s : room->sessions()) {
+        if (s->userId() == userId)
+            return true;
+    }
+    return false;
 }
 
 void ConferenceServer::dropDuplicate(ConferenceRoom *room, quint32 id)

@@ -38,6 +38,16 @@ ConferenceRoom *RoomRegistry::createRoom()
     return room;
 }
 
+ConferenceRoom *RoomRegistry::createPersonal(const QString &code, int ownerId)
+{
+    if (m_rooms.contains(code))
+        return nullptr;
+
+    auto *room = new ConferenceRoom(code, ownerId);
+    m_rooms.insert(code, room);
+    return room;
+}
+
 ConferenceRoom *RoomRegistry::find(const QString &code) const
 {
     return m_rooms.value(code, nullptr);

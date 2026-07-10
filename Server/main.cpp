@@ -6,12 +6,14 @@
 #include <memory>
 
 #include "core/RoomRegistry.h"
+#include "interface/InMemory/InMemoryPersonalRooms.h"
 #include "interface/InMemory/InMemorySessions.h"
 #include "interface/InMemory/InMemoryUsers.h"
 #include "network/ConferenceServer.h"
 #include "network/HttpApi.h"
 #include "network/HttpFileServer.h"
 #include "services/AuthService.h"
+#include "services/PersonalRoomService.h"
 
 #ifndef WEB_ROOT_DEFAULT
 #define WEB_ROOT_DEFAULT ""
@@ -66,10 +68,12 @@ int main(int argc, char *argv[])
     // заменой этих двух строк, интерфейсы и сервисы не изменятся.
     auto users = std::make_shared<InMemoryUsers>();
     auto sessions = std::make_shared<InMemorySessions>();
+    auto personalRooms = std::make_shared<InMemoryPersonalRooms>();
     auto auth = std::make_shared<AuthService>(users, sessions);
+    auto rooms = std::make_shared<PersonalRoomService>(personalRooms);
 
-    HttpApi api(auth, &registry);
-    ConferenceServer conference(wsPort, &registry, auth);
+    HttpApi api(auth, rooms, &registry);
+    ConferenceServer conference(wsPort, &registry, auth, rooms);
     HttpFileServer http(httpPort, webRoot, &api);
 
     if (!conference.isListening() || !http.isListening())

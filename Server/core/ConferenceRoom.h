@@ -23,9 +23,15 @@ struct ChatEntry
 class ConferenceRoom
 {
 public:
-    explicit ConferenceRoom(const QString &code);
+    explicit ConferenceRoom(const QString &code, int ownerId = -1);
 
     QString code() const { return m_code; }
+
+    // Личная комната открыта владельцем: join-правила (пароль, присутствие
+    // владельца) сервер проверяет по свежим данным PersonalRoomService.
+    // -1 — обычная разовая конференция.
+    int ownerId() const { return m_ownerId; }
+
     bool isEmpty() const { return m_sessions.isEmpty(); }
     const QList<ClientSession *> &sessions() const { return m_sessions; }
 
@@ -51,6 +57,7 @@ public:
 
 private:
     QString m_code;
+    int m_ownerId = -1;
     QList<ClientSession *> m_sessions;   // не владеет сессиями
     QList<ChatEntry> m_history;
     qint64 m_emptySinceMs = 0;

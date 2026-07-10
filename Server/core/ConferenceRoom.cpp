@@ -5,8 +5,9 @@
 #include <QJsonObject>
 #include <QJsonArray>
 
-ConferenceRoom::ConferenceRoom(const QString &code)
+ConferenceRoom::ConferenceRoom(const QString &code, int ownerId)
     : m_code(code),
+      m_ownerId(ownerId),
       m_emptySinceMs(QDateTime::currentMSecsSinceEpoch())
 {
 }

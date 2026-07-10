@@ -2,18 +2,22 @@
 
 #include <QDebug>
 
+#include "core/ClientSession.h"
 #include "core/ConferenceRoom.h"
 #include "core/RoomRegistry.h"
 #include "network/HttpRequest.h"
 #include "services/AuthService.h"
+#include "services/PersonalRoomService.h"
 
 namespace {
 const QByteArray kSessionCookieName = QByteArrayLiteral("meetup_session");
 constexpr qint64 kCookieMaxAgeS = AuthService::kSessionTtlMs / 1000;
 } // namespace
 
-HttpApi::HttpApi(std::shared_ptr<AuthService> auth, RoomRegistry *rooms)
-    : m_auth(std::move(auth)), m_rooms(rooms)
+HttpApi::HttpApi(std::shared_ptr<AuthService> auth,
+                 std::shared_ptr<PersonalRoomService> personalRooms,
+                 RoomRegistry *rooms)
+    : m_auth(std::move(auth)), m_personalRooms(std::move(personalRooms)), m_rooms(rooms)
 {
 }
 
@@ -44,6 +48,10 @@ bool HttpApi::route(const HttpRequest &req, const Respond &respond)
         if (m == "GET")        respond(handleMe(req));
         else if (m == "PATCH") respond(handlePatchMe(req));
         else respond(err(405, QStringLiteral("method_not_allowed")));
+        return true;
+    }
+    if (p == QLatin1String("/api/me/room")) {
+        respond(handleMyRoom(req));
         return true;
     }
 
@@ -164,12 +172,108 @@ ApiResponse HttpApi::handleCreateRoom()
 ApiResponse HttpApi::handleCheckRoom(const QString &code)
 {
     ConferenceRoom *room = m_rooms->find(code);
-    if (!room)
+    if (room && room->ownerId() < 0) {
+        // Обычная разовая конференция.
+        return ApiResponse{200, QJsonObject{
+            {"room", room->code()},
+            {"participants", int(room->sessions().size())},
+        }, {}};
+    }
+
+    // Личная комната существует и вне эфира: клиенту нужны название,
+    // «в эфире ли владелец» и есть ли пароль — чтобы спросить его до join.
+    const std::optional<PersonalRoom> personal = m_personalRooms->byCode(code);
+    if (!personal.has_value())
         return err(404, QStringLiteral("room_not_found"));
+
+    int participants = 0;
+    const bool online = personalRoomOnline(*personal, &participants);
     return ApiResponse{200, QJsonObject{
-        {"room", room->code()},
-        {"participants", int(room->sessions().size())},
+        {"room", personal->code},
+        {"personal", true},
+        {"title", personal->title},
+        {"has_password", !personal->password.isEmpty()},
+        {"online", online},
+        {"participants", participants},
     }, {}};
+}
+
+// ---------- Личная комната владельца ----------
+
+bool HttpApi::personalRoomOnline(const PersonalRoom &room, int *participants) const
+{
+    ConferenceRoom *live = m_rooms->find(room.code);
+    if (participants)
+        *participants = live ? int(live->sessions().size()) : 0;
+    if (!live)
+        return false;
+    for (ClientSession *s : live->sessions()) {
+        if (s->userId() == room.ownerId)
+            return true;
+    }
+    return false;
+}
+
+ApiResponse HttpApi::handleMyRoom(const HttpRequest &req)
+{
+    const std::optional<User> user = m_auth->userByToken(sessionToken(req));
+    if (!user.has_value())
+        return err(401, QStringLiteral("no_session"));
+
+    // Ответ владельцу: комната целиком (включая пароль — он вправе его
+    // посмотреть) плюс живое состояние эфира.
+    const auto roomResponse = [this](const PersonalRoom &room) {
+        int participants = 0;
+        QJsonObject j = room.ownerJson();
+        j.insert(QStringLiteral("online"), personalRoomOnline(room, &participants));
+        j.insert(QStringLiteral("participants"), participants);
+        return ApiResponse{200, QJsonObject{{"room", j}}, {}};
+    };
+
+    const QByteArray &m = req.method;
+
+    if (m == "GET") {
+        const std::optional<PersonalRoom> room = m_personalRooms->byOwner(user->id);
+        if (!room.has_value())
+            return err(404, QStringLiteral("no_room"));
+        return roomResponse(*room);
+    }
+
+    if (m == "DELETE") {
+        if (!m_personalRooms->remove(user->id))
+            return err(404, QStringLiteral("no_room"));
+        qInfo().noquote() << QStringLiteral("API: personal room removed (owner id=%1)").arg(user->id);
+        return ApiResponse{};
+    }
+
+    if (m == "POST" || m == "PATCH") {
+        bool okJson = false;
+        const QJsonObject body = req.jsonBody(&okJson);
+        if (!okJson)
+            return err(400, QStringLiteral("invalid_json"));
+
+        // PATCH меняет только присланные поля; отсутствие поля — «не трогать».
+        const auto field = [&body](const char *name) -> std::optional<QString> {
+            if (!body.contains(QLatin1String(name)))
+                return std::nullopt;
+            return body.value(QLatin1String(name)).toString();
+        };
+
+        const RoomResult res = (m == "POST")
+            ? m_personalRooms->create(user->id,
+                                      body.value(QLatin1String("code")).toString(),
+                                      body.value(QLatin1String("title")).toString(),
+                                      body.value(QLatin1String("password")).toString())
+            : m_personalRooms->update(user->id, field("code"), field("title"), field("password"));
+        if (!res.ok)
+            return err(statusForError(res.error), res.error);
+        if (m == "POST")
+            qInfo().noquote() << QStringLiteral("API: personal room '%1' created (owner id=%2)")
+                                     .arg(res.room.code).arg(user->id);
+        return roomResponse(res.room);
+    }
+
+    return err(405, QStringLiteral("method_not_allowed"));
 }
 
 // ---------- Помощники ----------
@@ -181,10 +285,13 @@ ApiResponse HttpApi::err(int status, const QString &code)
 
 int HttpApi::statusForError(const QString &code)
 {
-    if (code == QLatin1String("login_taken"))
+    if (code == QLatin1String("login_taken") || code == QLatin1String("code_taken")
+        || code == QLatin1String("room_exists"))
         return 409;
     if (code == QLatin1String("wrong_credentials") || code == QLatin1String("no_session"))
         return 401;
+    if (code == QLatin1String("no_room"))
+        return 404;
     return 400;
 }
 
