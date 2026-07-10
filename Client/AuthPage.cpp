@@ -1,22 +1,6 @@
 #include "muclient.h"
-#include "./ui_muclient.h"
 #include <QVBoxLayout>
 
-MUClient::MUClient(QWidget *parent)
-    : QMainWindow(parent)
-    , ui(new Ui::MUClient)
-{
-    ui->setupUi(this);
-
-
-    authPage = new MUAuthPage(this->centralWidget());
-}
-
-MUClient::~MUClient()
-{
-    delete authPage;
-    delete ui;
-}
 MUAuthForm::MUAuthForm(QWidget* parent): QWidget(parent)
 {
     QVBoxLayout* formLayout = new QVBoxLayout(this);
@@ -43,7 +27,7 @@ MUAuthForm::MUAuthForm(QWidget* parent): QWidget(parent)
             "QLabel {"
             "   margin-left: 50px;"
             "}"
-        );
+            );
     formLayout->addWidget(pwdSign, 0, Qt::AlignmentFlag::AlignLeft);
 
     pwdInput = new QLineEdit(this);
@@ -67,7 +51,7 @@ MUAuthForm::MUAuthForm(QWidget* parent): QWidget(parent)
         "QPushButton:hover {"
         "   color: #aaaaaa;"
         "}"
-    );
+        );
 
     formLayout->addWidget(restorePwdButton, 0, Qt::AlignmentFlag::AlignRight);
 
