@@ -12,6 +12,7 @@ class AuthService;
 class PersonalRoomService;
 class RoomRegistry;
 struct HttpRequest;
+struct PersonalRoom;
 
 // Ответ API: HTTP-статус, JSON-тело и дополнительные заголовки (Set-Cookie).
 struct ApiResponse

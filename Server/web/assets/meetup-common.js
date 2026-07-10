@@ -53,6 +53,14 @@
   function authMe() { return api("GET", "/api/me"); }
   function updateMe(patch) { return api("PATCH", "/api/me", patch); }
 
+  // --- Личная комната владельца ----------------------------------------------
+  // body.room: { code, title, password, online, participants }. Ошибки:
+  // "no_room", "invalid_code", "code_taken", "room_exists", "invalid_title".
+  function myRoom() { return api("GET", "/api/me/room"); }
+  function createMyRoom(data) { return api("POST", "/api/me/room", data); }
+  function updateMyRoom(patch) { return api("PATCH", "/api/me/room", patch); }
+  function deleteMyRoom() { return api("DELETE", "/api/me/room"); }
+
   window.MeetUp = {
     wsUrl: wsUrl,
     api: api,
@@ -63,5 +71,9 @@
     authLogout: authLogout,
     authMe: authMe,
     updateMe: updateMe,
+    myRoom: myRoom,
+    createMyRoom: createMyRoom,
+    updateMyRoom: updateMyRoom,
+    deleteMyRoom: deleteMyRoom,
   };
 })();

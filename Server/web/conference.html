@@ -27,7 +27,8 @@
     font-family: var(--font-label); font-weight: 700; font-size: 15px;
     letter-spacing: 2px; text-transform: uppercase; color: var(--text-muted);
   }
-  .conf-title { margin: 0; font-family: var(--font-display); font-weight: 700; font-size: 24px; letter-spacing: -.8px; }
+  .conf-title { margin: 0; font-family: var(--font-display); font-weight: 700; font-size: 24px; letter-spacing: -.8px;
+                min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   .gridwrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .grid {
@@ -227,11 +228,11 @@
   // История посещённых комнат для главной страницы (localStorage, общий
   // на все вкладки). Хранится только в браузере — сервер её не ведёт.
   const HISTORY_KEY = "meetup.history";
-  function recordVisit(code) {
+  function recordVisit(code, title) {
     try {
       const list = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]")
         .filter(e => e && e.code !== code);
-      list.unshift({ code, at: Date.now() });
+      list.unshift(title ? { code, at: Date.now(), title } : { code, at: Date.now() });
       localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, 8)));
     } catch (e) { /* приватный режим */ }
   }
@@ -254,10 +255,15 @@
     const [theme, setTheme] = useState("dark");
     // Стартуем с "connecting": гейт показывается только после того, как
     // /api/me ответил, что живой сессии аккаунта нет (и имени в запасе тоже).
-    const [phase, setPhase] = useState("connecting"); // gate|connecting|live|error
+    const [phase, setPhase] = useState("connecting"); // gate|connecting|waiting|live|error
     const [isAccount, setIsAccount] = useState(false);
     const [errText, setErrText] = useState("");
     const [gateName, setGateName] = useState("");
+    // Личная комната: название (join_ok/чек по коду), пароль на гейте.
+    const [roomTitle, setRoomTitle] = useState("");
+    const [needPass, setNeedPass] = useState(false);
+    const [gatePass, setGatePass] = useState("");
+    const [gateErr, setGateErr] = useState("");
     const [myId, setMyId] = useState(null);
     const [peers, setPeers] = useState([]);          // {id, name, mic, cam}
     const [messages, setMessages] = useState([]);    // {key, author, time, text, self}
@@ -294,6 +300,7 @@
       const av = loadAvSettings();
       mediaRef.current = {
         ws: null, myId: null, manualClose: false, fatal: false, attempts: 0,
+        roomPass: "", waitTimer: null,
         camStream: null, micStream: null, displayStream: null,
         speakingUntil: new Map(), chatChain: Promise.resolve(),
         mediaStarted: false, joinedAt: 0,
@@ -349,15 +356,29 @@
     useEffect(() => { document.documentElement.setAttribute("data-theme", theme); }, [theme]);
     const toggleTheme = () => setTheme(t => (t === "dark" ? "light" : "dark"));
 
+    useEffect(() => { if (roomTitle) document.title = roomTitle + " — MeetUp"; }, [roomTitle]);
+
     // ================= Подключение =================
 
     function openSocket() {
       const ws = new WebSocket(MeetUp.wsUrl());
       ws.binaryType = "arraybuffer";
       M.ws = ws;
-      ws.onopen = () => ws.send(JSON.stringify({ type: "join", room: roomCode, name: nameRef.current }));
+      ws.onopen = () => ws.send(JSON.stringify(joinMsg()));
       ws.onmessage = onWsMessage;
       ws.onclose = onWsClose;
+    }
+
+    // Пароль нужен только личной комнате — для остальных сервер его игнорирует.
+    function joinMsg() {
+      return { type: "join", room: roomCode, name: nameRef.current, password: M.roomPass };
+    }
+
+    // Повторный join: по живому сокету сервер разрешает ещё одну попытку
+    // (неверный пароль, комната ещё не открыта), сокет переоткрывать не надо.
+    function sendJoin() {
+      if (M.ws && M.ws.readyState === 1) M.ws.send(JSON.stringify(joinMsg()));
+      else openSocket();
     }
 
     function fatal(text) {
@@ -399,9 +420,11 @@
         case "join_ok": {
           M.myId = msg.sender_id;
           M.attempts = 0;
+          if (M.waitTimer) { clearTimeout(M.waitTimer); M.waitTimer = null; }
+          if (msg.room_title) setRoomTitle(msg.room_title);
           if (!M.joinedAt) {
             M.joinedAt = Date.now();
-            recordVisit(roomCode);   // история комнат на главной (не реконнект)
+            recordVisit(roomCode, msg.room_title);   // история комнат на главной (не реконнект)
           }
           setMyId(msg.sender_id);
           setReconnecting(false);
@@ -473,6 +496,22 @@
             M.manualClose = true;
             stopEverything();
             fatal("Вы подключились к этой комнате в другом окне или на другом устройстве. Здесь соединение остановлено.");
+          } else if (msg.reason === "wrong_password") {
+            // Личная комната с паролем: спрашиваем (или переспрашиваем) на гейте.
+            setNeedPass(true);
+            setGateErr(M.roomPass ? "Неверный пароль. Попробуйте ещё раз." : "");
+            M.roomPass = "";
+            setGatePass("");
+            setPhase("gate");
+          } else if (msg.reason === "room_offline") {
+            // Личная комната без владельца не существует: ждём, пока владелец
+            // её откроет, и пробуем снова — гость войдёт сам.
+            setPhase("waiting");
+            if (!M.waitTimer)
+              M.waitTimer = setTimeout(() => {
+                M.waitTimer = null;
+                if (M.ws && M.ws.readyState === 1) sendJoin();
+              }, 5000);
           } else {
             console.warn("Ошибка сервера:", msg.reason);
           }
@@ -803,15 +842,19 @@
       if (chatVisible) setUnread(0);
     }, [messages, tab, panelOpen, isMobile]);
 
-    // ================= Гейт имени (вход по ссылке) =================
+    // ================= Гейт (вход по ссылке: имя и/или пароль) =================
 
     function gateSubmit() {
-      const name = gateName.trim();
-      if (!name) return;
-      MeetUp.saveName(name);
-      nameRef.current = name;
+      const name = nameRef.current || gateName.trim();
+      if (!name || (needPass && !gatePass)) return;
+      if (!nameRef.current) {
+        MeetUp.saveName(name);
+        nameRef.current = name;
+      }
+      M.roomPass = gatePass;
+      setGateErr("");
       setPhase("connecting");
-      openSocket();
+      sendJoin();
     }
 
     // ================= Ссылка-приглашение =================
@@ -846,6 +889,15 @@
 
     useEffect(() => {
       if (!roomCode) { location.replace("anon_lobby.html"); return; }
+
+      // Личная комната рассказывает о себе до входа: название — в шапку и на
+      // экран ожидания, has_password — чтобы гейт сразу спросил пароль.
+      MeetUp.api("GET", "/api/rooms/" + encodeURIComponent(roomCode)).then((r) => {
+        if (r.ok && r.body && r.body.personal) {
+          if (r.body.title) setRoomTitle(r.body.title);
+          if (r.body.has_password) setNeedPass(true);
+        }
+      });
 
       // Сначала восстанавливаем ключ E2E (ссылка/хранилище), потом коннект —
       // иначе история чата из join_ok расшифруется без ключа.
@@ -1058,7 +1110,9 @@
         <div className="stage">
           <div className="confbar">
             <div className="conf-mark">MeetUp</div>
-            <h1 className="conf-title">Комната <span style={{ color: "var(--accent-ink)" }}>#{roomCode.slice(0, 6)}</span></h1>
+            <h1 className="conf-title" title={roomTitle || undefined}>
+              {roomTitle || <>Комната <span style={{ color: "var(--accent-ink)" }}>#{roomCode.slice(0, 6)}</span></>}
+            </h1>
             <span style={{ flex: 1 }} />
             {phase === "live" && !reconnecting &&
               <Badge tone="live" dot>в эфире · {elapsed}</Badge>}
@@ -1271,26 +1325,60 @@
           </div>
         </>}
 
-        {/* гейт имени: вход по ссылке-приглашению */}
+        {/* гейт входа по ссылке: имя (аноним) и пароль (личная комната) */}
         {phase === "gate" &&
           <div className="overlay">
             <div className="overlay-card">
               <Card elevated width="100%">
                 <h2 className="overlay-title">Присоединиться</h2>
-                <p className="overlay-sub">Комната <b>#{roomCode.slice(0, 6)}</b>. Представьтесь — и вы в эфире.</p>
-                <Field label="Ваше имя" htmlFor="gate-name">
-                  <Input id="gate-name" autoFocus value={gateName} maxLength={40} placeholder="Анна"
-                         autoComplete="name"
-                         onChange={e => setGateName(e.target.value)}
-                         onKeyDown={e => e.key === "Enter" && gateSubmit()} />
-                </Field>
+                <p className="overlay-sub">
+                  {roomTitle ? <>Комната «<b>{roomTitle}</b>»</> : <>Комната <b>#{roomCode.slice(0, 6)}</b></>}.{" "}
+                  {needPass ? "Вход по паролю — спросите его у владельца." : "Представьтесь — и вы в эфире."}
+                </p>
+                {!nameRef.current &&
+                  <Field label="Ваше имя" htmlFor="gate-name">
+                    <Input id="gate-name" autoFocus value={gateName} maxLength={40} placeholder="Анна"
+                           autoComplete="name"
+                           onChange={e => setGateName(e.target.value)}
+                           onKeyDown={e => e.key === "Enter" && gateSubmit()} />
+                  </Field>}
+                {needPass &&
+                  <Field label="Пароль комнаты" htmlFor="gate-pass"
+                         style={!nameRef.current ? { marginTop: 14 } : undefined}>
+                    <Input id="gate-pass" type="password" value={gatePass} maxLength={128}
+                           placeholder="••••••" autoFocus={!!nameRef.current}
+                           onChange={e => { setGatePass(e.target.value); setGateErr(""); }}
+                           onKeyDown={e => e.key === "Enter" && gateSubmit()} />
+                  </Field>}
+                {gateErr &&
+                  <p style={{ color: "var(--danger)", fontSize: 13, margin: "10px 0 0" }}>{gateErr}</p>}
                 <Button variant="primary" block iconRight="arrow-right" style={{ marginTop: 20 }}
-                        disabled={!gateName.trim()} onClick={gateSubmit}>
+                        disabled={!(nameRef.current || gateName.trim()) || (needPass && !gatePass)}
+                        onClick={gateSubmit}>
                   Подключиться
                 </Button>
                 <Button variant="ghost" block style={{ marginTop: 10 }}
-                        onClick={() => { location.href = "anon_lobby.html"; }}>
-                  В лобби
+                        onClick={() => { location.href = exitHref; }}>
+                  {exitLabel}
+                </Button>
+              </Card>
+            </div>
+          </div>}
+
+        {/* личная комната не в эфире: ждём владельца, join повторяется сам */}
+        {phase === "waiting" &&
+          <div className="overlay">
+            <div className="overlay-card">
+              <Card elevated width="100%">
+                <h2 className="overlay-title">{roomTitle || "Комната закрыта"}</h2>
+                <p className="overlay-sub">
+                  Владелец ещё не открыл комнату. Оставайтесь на странице —
+                  как только он появится, вы войдёте автоматически.
+                </p>
+                <Badge tone="muted" dot>ждём владельца…</Badge>
+                <Button variant="ghost" block style={{ marginTop: 16 }}
+                        onClick={() => { location.href = exitHref; }}>
+                  {exitLabel}
                 </Button>
               </Card>
             </div>

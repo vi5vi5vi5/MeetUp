@@ -160,8 +160,9 @@
   const { useState, useRef, useEffect } = React;
   const { Card, Button, IconButton, Icon, Badge, Input, Field } = window.MeetUpDesignSystem_2584b5;
 
-  // Локальные черновики: аватарка и личная комната пока живут в браузере —
-  // серверная часть (личные комнаты, загрузка аватарок) в следующей итерации.
+  // Аватарка пока живёт в браузере — загрузка на сервер в следующей итерации.
+  // Личная комната хранится на сервере (/api/me/room); старый локальный
+  // черновик используется один раз — чтобы заполнить форму создания.
   const THEME_KEY = "meetup.theme";
   const AVATAR_KEY = "meetup.avatar";
   const ROOM_KEY = "meetup.room.draft";
@@ -171,6 +172,18 @@
   }
   function loadRoomDraft() {
     try { return JSON.parse(lsGet(ROOM_KEY) || "null"); } catch (e) { return null; }
+  }
+
+  // Текст для машинных кодов ошибок /api/me/room.
+  function roomErrText(code) {
+    return {
+      invalid_code: "Код: от 3 до 32 символов — латиница, цифры, «-» и «_».",
+      code_taken: "Этот код уже занят другой комнатой.",
+      room_exists: "У вас уже есть личная комната.",
+      invalid_title: "Название: от 1 до 64 символов.",
+      invalid_password: "Пароль слишком длинный (до 128 символов).",
+      no_session: "Сессия истекла — войдите заново.",
+    }[code] || "Не получилось сохранить. Попробуйте позже.";
   }
 
   // История конференций: пишет conference.html при входе в комнату
@@ -201,8 +214,10 @@
     if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
     return (parts[0][0] + parts[1][0]).toUpperCase();
   }
+  // Код комнаты по правилам сервера: [a-z0-9_-], 3–32 символа.
   function slugify(v) {
-    return String(v || "").toLowerCase().replace(/[^a-z0-9а-яё\-]+/gi, "-").replace(/^-+|-+$/g, "");
+    return String(v || "").toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
   }
   function roomLinkText(code) { return location.host + "/conference.html?room=" + (code || ""); }
   function roomLinkFull(code) { return location.origin + "/conference.html?room=" + encodeURIComponent(code || ""); }
@@ -388,11 +403,25 @@
     const [pass, setPass] = useState("");
     const [showPass, setShowPass] = useState(false);
     const [err, setErr] = useState("");
-    useEffect(() => { if (open) { setCode(""); setTitle(""); setPass(""); setShowPass(false); setErr(""); } }, [open]);
-    function create() {
+    const [busy, setBusy] = useState(false);
+    useEffect(() => {
+      if (!open) return;
+      // Старый локальный черновик комнаты (до серверной части) — в форму,
+      // чтобы не набирать заново; после создания он стирается.
+      const draft = loadRoomDraft() || {};
+      setCode(draft.code || "");
+      setTitle(draft.title || "");
+      setPass(draft.password || "");
+      setShowPass(false); setErr(""); setBusy(false);
+    }, [open]);
+    async function create() {
       const c = slugify(code);
-      if (!c) { setErr("Укажите код комнаты для ссылки."); return; }
-      onCreate({ code: c, title: title.trim() || ("Комната " + userName), password: pass });
+      if (c.length < 3) { setErr(roomErrText("invalid_code")); return; }
+      setBusy(true);
+      const e = await onCreate({ code: c, title: title.trim() || ("Комната " + userName), password: pass });
+      setBusy(false);
+      if (e) { setErr(roomErrText(e)); return; }
+      lsSet(ROOM_KEY, null);
       onClose();
     }
     return (
@@ -415,30 +444,48 @@
             <Button variant="secondary" onClick={() => setShowPass(v => !v)}>{showPass ? "Скрыть" : "Показать"}</Button>
           </div>
         </Field>
-        <Button variant="primary" block iconRight="arrow-right" style={{ marginTop: 22 }} onClick={create}>
+        <Button variant="primary" block iconRight="arrow-right" style={{ marginTop: 22 }}
+                disabled={busy} onClick={create}>
           Создать комнату
         </Button>
         <div style={{ marginTop: 12, textAlign: "center", fontSize: 12, color: err ? "var(--danger)" : "var(--text-faint)" }}>
-          {err || "Черновик: комната пока хранится только в этом браузере."}
+          {err || "Комната сохраняется на сервере — ссылка заработает сразу."}
         </div>
       </Modal>
     );
   }
 
-  function RoomSettingsModal({ open, onClose, room, onChange }) {
+  function RoomSettingsModal({ open, onClose, room, onChange, onDelete }) {
     const [title, setTitle] = useState(room ? room.title : "");
     const [code, setCode] = useState(room ? room.code : "");
     const [pass, setPass] = useState("");
     const [showPass, setShowPass] = useState(false);
     const [editingPass, setEditingPass] = useState(false);
+    const [confirmDel, setConfirmDel] = useState(false);
+    const [err, setErr] = useState("");
     useEffect(() => {
-      if (open && room) { setTitle(room.title); setCode(room.code); setPass(""); setShowPass(false); setEditingPass(false); }
+      if (open && room) {
+        setTitle(room.title); setCode(room.code); setPass("");
+        setShowPass(false); setEditingPass(false); setConfirmDel(false); setErr("");
+      }
     }, [open]);
     if (!room) return null;
     const hasPass = !!room.password;
-    function saveTitle() { const t = title.trim(); if (t) onChange({ ...room, title: t }); }
-    function saveCode() { const c = slugify(code); if (c) onChange({ ...room, code: c }); else setCode(room.code); }
-    function savePass() { onChange({ ...room, password: pass }); setEditingPass(false); setPass(""); setShowPass(false); }
+    // Каждое поле сохраняется отдельным PATCH; ошибка сервера — под формой.
+    async function apply(patch) {
+      const e = await onChange(patch);
+      setErr(e ? roomErrText(e) : "");
+      return !e;
+    }
+    function saveTitle() { const t = title.trim(); if (t && t !== room.title) apply({ title: t }); }
+    function saveCode() {
+      const c = slugify(code);
+      if (!c || c === room.code) { setCode(room.code); return; }
+      apply({ code: c }).then(ok => { if (!ok) setCode(room.code); });
+    }
+    async function savePass() {
+      if (await apply({ password: pass })) { setEditingPass(false); setPass(""); setShowPass(false); }
+    }
     return (
       <Modal open={open} onClose={onClose} title="Настройки комнаты"
              subtitle="Ссылка, название и пароль для подключения." width={470}>
@@ -466,7 +513,7 @@
                     <button className="hu-textbtn" onClick={() => setShowPass(v => !v)}>{showPass ? "Скрыть" : "Показать"}</button>
                     <span style={{ flex: 1 }} />
                     <Button variant="secondary" size="sm" onClick={() => { setEditingPass(true); setPass(room.password); }}>Изменить</Button>
-                    <Button variant="ghost" size="sm" icon="x" onClick={() => onChange({ ...room, password: "" })}>Удалить</Button>
+                    <Button variant="ghost" size="sm" icon="x" onClick={() => apply({ password: "" })}>Удалить</Button>
                   </React.Fragment>
                 ) : (
                   <React.Fragment>
@@ -486,6 +533,19 @@
                 <Button variant="primary" size="sm" icon="check" onClick={savePass}>ОК</Button>
               </div>
             )}
+          </div>
+          {err && <div style={{ fontSize: 12, color: "var(--danger)" }}>{err}</div>}
+          <div style={{ borderTop: "1px solid var(--border)", paddingTop: 14,
+                        display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 13, color: "var(--text-muted)", flex: 1, minWidth: 140 }}>
+              {confirmDel ? "Точно удалить? Ссылка перестанет работать." : "Комната больше не нужна?"}
+            </span>
+            {confirmDel
+              ? <React.Fragment>
+                  <Button variant="secondary" size="sm" onClick={() => setConfirmDel(false)}>Отмена</Button>
+                  <Button variant="danger" size="sm" icon="x" onClick={onDelete}>Да, удалить</Button>
+                </React.Fragment>
+              : <Button variant="ghost" size="sm" icon="x" onClick={() => setConfirmDel(true)}>Удалить комнату</Button>}
           </div>
         </div>
       </Modal>
@@ -573,7 +633,7 @@
                    title={"Подключиться к " + e.code} onClick={join}
                    onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); join(); } }}>
                 <Icon name="video" size={16} style={{ color: "var(--text-muted)" }} />
-                <span className="hist-code">{e.code}</span>
+                <span className="hist-code" title={e.code}>{e.title || e.code}</span>
                 <span className="hist-when">{fmtWhen(e.at)}</span>
                 <button className="hist-del" title="Убрать из истории"
                         aria-label={"Убрать " + e.code + " из истории"}
@@ -592,7 +652,7 @@
     const [user, setUser] = useState(null);
     const [theme, setTheme] = useState(lsGet(THEME_KEY) === "light" ? "light" : "dark");
     const [avatar, setAvatar] = useState(lsGet(AVATAR_KEY));
-    const [room, setRoom] = useState(loadRoomDraft);
+    const [room, setRoom] = useState(null);   // личная комната с сервера
     const [profileOpen, setProfileOpen] = useState(false);
     const [createOpen, setCreateOpen] = useState(false);
     const [roomSetOpen, setRoomSetOpen] = useState(false);
@@ -603,16 +663,30 @@
     }, [theme]);
     const toggleTheme = () => setTheme(t => (t === "dark" ? "light" : "dark"));
 
-    // Страница только для вошедших: нет сессии — на логин.
+    // Страница только для вошедших: нет сессии — на логин. Личная комната
+    // подгружается до первого рендера, чтобы карточка не мигала.
     useEffect(() => {
-      MeetUp.authMe().then(resp => {
+      MeetUp.authMe().then(async resp => {
         if (resp.ok && resp.body && resp.body.user) {
+          const r = await MeetUp.myRoom();
+          if (r.ok && r.body && r.body.room) setRoom(r.body.room);
           setUser(resp.body.user);
           MeetUp.saveName(resp.body.user.display_name);
         } else {
           location.replace("login.html");
         }
       });
+    }, []);
+
+    // Статус «в эфире» меняется, пока вкладка в фоне, — обновляем комнату,
+    // когда пользователь возвращается на главную.
+    useEffect(() => {
+      const upd = () => MeetUp.myRoom().then(r => {
+        if (r.ok && r.body && r.body.room) setRoom(r.body.room);
+        else if (r.status === 404) setRoom(null);
+      });
+      window.addEventListener("focus", upd);
+      return () => window.removeEventListener("focus", upd);
     }, []);
 
     async function saveName(newName) {
@@ -631,7 +705,24 @@
     }
 
     function saveAvatar(a) { setAvatar(a); lsSet(AVATAR_KEY, a); }
-    function saveRoom(r) { setRoom(r); lsSet(ROOM_KEY, r ? JSON.stringify(r) : null); }
+
+    // Операции с личной комнатой: null — успех, иначе машинный код ошибки
+    // (текст подбирают модалки через roomErrText).
+    async function createRoom(data) {
+      const r = await MeetUp.createMyRoom(data);
+      if (r.ok && r.body && r.body.room) { setRoom(r.body.room); return null; }
+      return (r.body && r.body.error) || "server";
+    }
+    async function changeRoom(patch) {
+      const r = await MeetUp.updateMyRoom(patch);
+      if (r.ok && r.body && r.body.room) { setRoom(r.body.room); return null; }
+      return (r.body && r.body.error) || "server";
+    }
+    async function deleteRoom() {
+      await MeetUp.deleteMyRoom();
+      setRoom(null);
+      setRoomSetOpen(false);
+    }
 
     if (!user) return null;   // идёт проверка сессии
 
@@ -672,18 +763,21 @@
                   <Card elevated>
                     <div className="room-head">
                       <h2 className="card-title">{room.title}</h2>
-                      <Badge tone="muted" dot>не в эфире</Badge>
+                      <Badge tone={room.online ? "live" : "muted"} dot>
+                        {room.online ? "в эфире · " + room.participants : "не в эфире"}
+                      </Badge>
                     </div>
                     <LinkRow code={room.code} />
                     <div className="actions-row">
-                      <Button variant="primary" iconRight="arrow-right" disabled
-                              title="Заработает вместе с серверной частью личных комнат">
+                      <Button variant="primary" iconRight="arrow-right"
+                              onClick={() => { location.href = "conference.html?room=" + encodeURIComponent(room.code); }}>
                         Открыть комнату
                       </Button>
                       <Button variant="secondary" icon="settings" onClick={() => setRoomSetOpen(true)}>Настройки</Button>
                     </div>
                     <div className="room-note">
-                      Черновик: личная комната хранится в этом браузере, серверная часть появится в следующем обновлении.
+                      Гости входят, только пока вы в комнате{room.password ? ", и только по паролю" : ""}.
+                      Без вас ссылка отвечает «владелец ещё не открыл комнату».
                     </div>
                   </Card>
                 ) : (
@@ -716,9 +810,9 @@
         </Modal>
 
         <CreateRoomModal open={createOpen} onClose={() => setCreateOpen(false)}
-                         userName={name} onCreate={saveRoom} />
+                         userName={name} onCreate={createRoom} />
         <RoomSettingsModal open={roomSetOpen} onClose={() => setRoomSetOpen(false)}
-                           room={room} onChange={saveRoom} />
+                           room={room} onChange={changeRoom} onDelete={deleteRoom} />
       </div>
     );
   }
