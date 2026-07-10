@@ -6,9 +6,10 @@
 #include <memory>
 
 #include "core/RoomRegistry.h"
-#include "interface/InMemory/InMemoryPersonalRooms.h"
-#include "interface/InMemory/InMemorySessions.h"
-#include "interface/InMemory/InMemoryUsers.h"
+#include "interface/sqlite/SqliteDb.h"
+#include "interface/sqlite/SqlitePersonalRooms.h"
+#include "interface/sqlite/SqliteSessions.h"
+#include "interface/sqlite/SqliteUsers.h"
 #include "network/ConferenceServer.h"
 #include "network/HttpApi.h"
 #include "network/HttpFileServer.h"
@@ -47,9 +48,18 @@ int main(int argc, char *argv[])
         QStringLiteral("Directory with the web client (index.html)."),
         QStringLiteral("dir"), QStringLiteral(WEB_ROOT_DEFAULT));
 
+    // Всё персистентное (SQLite) живёт в одной папке: при запуске в docker
+    // web-root указывает в примонтированные исходники, и mount рядом с ним
+    // оказывается на хосте — данные переживают пересборку и новый контейнер.
+    QCommandLineOption dataDirOption(
+        QStringList{"d", "data-dir"},
+        QStringLiteral("Directory for persistent data (default: <web-root>/../mount)."),
+        QStringLiteral("dir"), QString());
+
     parser.addOption(wsPortOption);
     parser.addOption(httpPortOption);
     parser.addOption(webRootOption);
+    parser.addOption(dataDirOption);
     parser.process(app);
 
     const quint16 wsPort = parser.value(wsPortOption).toUShort();
@@ -63,12 +73,26 @@ int main(int argc, char *argv[])
     // подключает в них участников.
     RoomRegistry registry;
 
+    // Папка данных создаётся сама и добавлена в .gitignore — git pull её
+    // не трогает. База — один файл mount/meetup.db.
+    QString dataDir = parser.value(dataDirOption);
+    if (dataDir.isEmpty())
+        dataDir = QDir(webRoot).filePath(QStringLiteral("../mount"));
+    dataDir = QDir::cleanPath(dataDir);
+    if (!QDir().mkpath(dataDir)) {
+        qCritical().noquote() << QStringLiteral("Failed to create data dir %1").arg(dataDir);
+        return 1;
+    }
+
     // Хранилища и сервисы (как в MedFlow: репозитории → сервисы → серверы).
-    // Пока InMemory — данные живут до перезапуска; SQLite подключится позже
-    // заменой этих двух строк, интерфейсы и сервисы не изменятся.
-    auto users = std::make_shared<InMemoryUsers>();
-    auto sessions = std::make_shared<InMemorySessions>();
-    auto personalRooms = std::make_shared<InMemoryPersonalRooms>();
+    // Репозитории на SQLite; InMemory-реализации остаются для тестов и как
+    // образец — интерфейсы у них общие.
+    auto db = std::make_shared<SqliteDb>(QDir(dataDir).filePath(QStringLiteral("meetup.db")));
+    if (!db->isOpen())
+        return 1;
+    auto users = std::make_shared<SqliteUsers>(db);
+    auto sessions = std::make_shared<SqliteSessions>(db);
+    auto personalRooms = std::make_shared<SqlitePersonalRooms>(db);
     auto auth = std::make_shared<AuthService>(users, sessions);
     auto rooms = std::make_shared<PersonalRoomService>(personalRooms);
 

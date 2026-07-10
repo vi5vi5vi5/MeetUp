@@ -3,6 +3,9 @@
 /docs/
 /.claude/
 
+# Данные сервера (SQLite): создаётся сам, git pull его не трогает
+/mount/
+
 # Visual Studio
 /.vs/
 *.vcxproj.user
