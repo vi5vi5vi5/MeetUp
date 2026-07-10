@@ -1,19 +1,27 @@
+#include "AuthForm.h"
 #include "muclient.h"
-#include <QVBoxLayout>
-#include <QObject>
 
 MUAuthForm::MUAuthForm(QWidget* parent): QWidget(parent)
 {
-    QVBoxLayout* formLayout = new QVBoxLayout(this);
+    formLayout = new QVBoxLayout(this);
+    formLayout->setSpacing(5);
     this->setLayout(formLayout);
+
+
+    QImage img = QImage(300, 100, QImage::Format_RGBA8888); //<-Заглушка
+    image = new QLabel();
+    image->setPixmap(QPixmap::fromImage(img));
+    image->setContentsMargins(0, 75, 0, 0);
+    formLayout->addWidget(image, 0, Qt::AlignmentFlag::AlignTop);
 
     loginSign = new QLabel("ЛОГИН ИЛИ EMAIL", this);
     loginSign->setStyleSheet
-        (
-            "QLabel {"
-            "   margin-left: 50px;"
-            "}"
-        );
+    (
+        "QLabel {"
+        "   margin-top: 5px;"
+        "   margin-left: 60px;"
+        "}"
+    );
     formLayout->addWidget(loginSign, 0, Qt::AlignmentFlag::AlignLeft);
 
     loginInput = new QLineEdit(this);
@@ -24,11 +32,11 @@ MUAuthForm::MUAuthForm(QWidget* parent): QWidget(parent)
 
     pwdSign = new QLabel("ПАРОЛЬ", this);
     pwdSign->setStyleSheet
-        (
-            "QLabel {"
-            "   margin-left: 50px;"
-            "}"
-            );
+    (
+        "QLabel {"
+        "   margin-left: 60px;"
+        "}"
+    );
     formLayout->addWidget(pwdSign, 0, Qt::AlignmentFlag::AlignLeft);
 
     pwdInput = new QLineEdit(this);
@@ -42,17 +50,18 @@ MUAuthForm::MUAuthForm(QWidget* parent): QWidget(parent)
     formLayout->addWidget(loginButton, 0, Qt::AlignmentFlag::AlignCenter);
 
     restorePwdButton = new QPushButton("Забыли пароль?", this);
-    restorePwdButton->setStyleSheet(
+    restorePwdButton->setStyleSheet
+    (
         "QPushButton {"
         "   background: transparent;" // Полностью прозрачный фон
         "   border: none;"             // Убираем серую рамку вокруг текста
         "   color: #ffffff;"           // Белый цвет текста (замените на ваш, если нужен другой)
-        "   margin-right: 55px;"
+        "   margin-right: 65px;"
         "}"
         "QPushButton:hover {"
         "   color: #aaaaaa;"
         "}"
-        );
+    );
 
     formLayout->addWidget(restorePwdButton, 0, Qt::AlignmentFlag::AlignRight);
 
@@ -69,10 +78,24 @@ MUAuthForm::MUAuthForm(QWidget* parent): QWidget(parent)
 
     hint = new QLabel("Аккаунт хранит ваше имя\n       между встречами.", this);
     formLayout->addWidget(hint, 0, Qt::AlignmentFlag::AlignCenter);
+
+    formLayout->addStretch();
+    connect(loginButton, &QPushButton::clicked, parent, [=]
+    {
+        QString login = loginInput->text();
+        QString password = pwdInput->text();
+
+        if (true) if (MUClient* cli = dynamic_cast<MUClient*>(parent)) cli->SetHomePage();
+    });
+    connect(createAccountButton, &QPushButton::clicked, parent, [=]
+    {
+        if (MUClient* cli = dynamic_cast<MUClient*>(parent)) cli->SetRegPage();
+    });
 }
 
 MUAuthForm::~MUAuthForm()
 {
+    delete image;
     delete loginSign;
     delete loginInput;
     delete pwdSign;
@@ -83,4 +106,5 @@ MUAuthForm::~MUAuthForm()
     delete orSign;
     delete nologinButton;
     delete hint;
+    delete formLayout;
 }

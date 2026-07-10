@@ -16,32 +16,6 @@ namespace Ui
 }
 QT_END_NAMESPACE
 
-
-
-class MUAuthForm: public QWidget
-{
-    Q_OBJECT
-
-public:
-    MUAuthForm(QWidget *parent);
-    ~MUAuthForm();
-
-    QLabel* loginSign;
-    QLineEdit* loginInput;
-
-    QLabel* pwdSign;
-    QLineEdit* pwdInput;
-
-    QPushButton* loginButton;
-    QPushButton* restorePwdButton;
-    QPushButton* createAccountButton;
-
-    QLabel* orSign;
-    QPushButton* nologinButton;
-    QLabel* hint;
-};
-
-
 class MUClient : public QMainWindow
 {
     Q_OBJECT
@@ -50,12 +24,15 @@ public:
     MUClient(QWidget *parent = nullptr);
     ~MUClient();
 
+    void SetRegPage();
+    void SetAuthPage();
+    void SetHomePage();
 private:
     Ui::MUClient *ui;
 
-    MUAuthForm* authForm;
+    QHBoxLayout* layout;
+    QWidget* authForm;
     QLabel* appName;
-    QLabel* image;
     QPushButton* switchThemeBtn;
 };
 

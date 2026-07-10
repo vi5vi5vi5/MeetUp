@@ -1,15 +1,18 @@
 #include "muclient.h"
 #include "./ui_muclient.h"
+#include "RegisterForm.h"
+#include "HomePage.h"
+#include "AuthForm.h"
 #include <QVBoxLayout>
 
 MUClient::MUClient(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::MUClient)
 {
+
     ui->setupUi(this);
-    QHBoxLayout* layout = new QHBoxLayout(centralWidget());
-    QVBoxLayout* vLayout = new QVBoxLayout(centralWidget());
-    vLayout->setSpacing(10);
+    layout = new QHBoxLayout(centralWidget());
+
 
     appName = new QLabel("MEETUP");
     appName->setFixedHeight(35);
@@ -17,18 +20,10 @@ MUClient::MUClient(QWidget *parent)
 
     layout->addStretch();
 
-    QImage img = QImage(300, 100, QImage::Format_RGBA8888); //<-Заглушка
-    image = new QLabel();
-    image->setPixmap(QPixmap::fromImage(img));
-    image->setContentsMargins(0, 100, 0, 0);
-
-    vLayout->addWidget(image, 0, Qt::AlignmentFlag::AlignTop);
-
     authForm = new MUAuthForm(this);
-    vLayout->addWidget(authForm, 0, Qt::AlignmentFlag::AlignTop);
-    vLayout->addStretch();
+    // authForm = new MUMeetingForm(this);
 
-    layout->addLayout(vLayout);
+    layout->insertWidget(2, authForm);
     layout->addStretch();
 
     switchThemeBtn = new QPushButton();
@@ -40,7 +35,26 @@ MUClient::~MUClient()
 {
     delete appName;
     delete switchThemeBtn;
-    delete image;
     if (authForm) delete authForm;
     delete ui;
+}
+
+void MUClient::SetRegPage()
+{
+    delete authForm;
+    authForm = new MURegForm(this);
+    layout->insertWidget(2, authForm);
+}
+void MUClient::SetAuthPage()
+{
+    delete authForm;
+    authForm = new MUAuthForm(this);
+    layout->insertWidget(2, authForm);
+}
+
+void MUClient::SetHomePage()
+{
+    delete authForm;
+    authForm = new MUHomePage(this);
+    layout->insertWidget(2, authForm);
 }

@@ -26,7 +26,12 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
     qt_add_executable(Client
         MANUAL_FINALIZATION
         ${PROJECT_SOURCES}
-        AuthPage.cpp
+        AuthForm.cpp
+        AuthForm.h
+        RegisterForm.h
+        RegisterForm.cpp
+        HomePage.h
+        HomePage.cpp
     )
 # Define target properties for Android with Qt 6 as:
 #    set_property(TARGET Client APPEND PROPERTY QT_ANDROID_PACKAGE_SOURCE_DIR
