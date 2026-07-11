@@ -37,6 +37,17 @@ CREATE TABLE IF NOT EXISTS personal_rooms(
   password      TEXT    NOT NULL DEFAULT '',
   created_at_ms INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS room_aliases(
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  room_id       INTEGER NOT NULL REFERENCES personal_rooms(id) ON DELETE CASCADE,
+  code          TEXT    NOT NULL UNIQUE,
+  password      TEXT    NOT NULL DEFAULT '',
+  uses_left     INTEGER NOT NULL DEFAULT -1,
+  logins        TEXT    NOT NULL DEFAULT '',
+  enabled       INTEGER NOT NULL DEFAULT 1,
+  created_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_room_aliases_room ON room_aliases(room_id);
 )sql";
 
 } // namespace

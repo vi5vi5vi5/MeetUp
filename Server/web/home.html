@@ -223,6 +223,17 @@
     }[code] || "Не получилось сохранить. Попробуйте позже.";
   }
 
+  function aliasErrText(code) {
+    return {
+      alias_limit: "Не больше 5 ссылок на комнату. Удалите одну из существующих.",
+      no_alias: "Ссылка уже удалена.",
+      invalid_uses: "Лимит использований — целое число от 1.",
+      invalid_logins: "Проверьте список логинов: до 50 логинов, каждый до 64 символов.",
+      invalid_password: "Пароль слишком длинный (до 128 символов).",
+      no_session: "Сессия истекла — войдите заново.",
+    }[code] || "Не получилось сохранить. Попробуйте позже.";
+  }
+
   // История конференций: пишет conference.html при входе в комнату
   // (localStorage, ключ meetup.history) — на сервере её нет.
   const HISTORY_KEY = "meetup.history";
@@ -528,6 +539,144 @@
     );
   }
 
+  // Одна ссылка-приглашение: строка с копированием, статусом и действиями.
+  function AliasRow({ a, onToggle, onDelete }) {
+    const [copied, setCopied] = useState(false);
+    function copy() {
+      try { navigator.clipboard && navigator.clipboard.writeText(roomLinkFull(a.code)); } catch (e) {}
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+    }
+    return (
+      <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "8px 10px",
+                    opacity: a.enabled ? 1 : .55 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, flex: 1, minWidth: 0,
+                         overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                title={roomLinkText(a.code)}>{roomLinkText(a.code)}</span>
+          <IconButton icon={copied ? "check" : "copy"} size="sm" variant={copied ? "active" : "neutral"}
+                      label="Копировать ссылку" onClick={copy} />
+          <IconButton icon="x" size="sm" variant="neutral" label="Удалить ссылку" onClick={onDelete} />
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+          {!a.enabled && <Badge tone="muted">выключена</Badge>}
+          {!!a.password && <Badge tone="muted">пароль: {a.password}</Badge>}
+          {a.uses_left >= 0 && <Badge tone="accent">осталось входов: {a.uses_left}</Badge>}
+          {a.logins.length > 0 &&
+            <Badge tone="muted">
+              {"только: " + a.logins.slice(0, 3).join(", ")
+                + (a.logins.length > 3 ? " и ещё " + (a.logins.length - 3) : "")}
+            </Badge>}
+          {a.enabled && !a.password && <span style={{ fontSize: 11, color: "var(--text-faint)" }}>без пароля</span>}
+          <span style={{ flex: 1 }} />
+          <button className="hu-textbtn" onClick={onToggle}>{a.enabled ? "Выключить" : "Включить"}</button>
+        </div>
+      </div>
+    );
+  }
+
+  // Форма новой ссылки: все поля необязательны — пустая форма даёт
+  // безлимитную ссылку без пароля для всех.
+  function AliasCreateForm({ busy, onCreate, onCancel }) {
+    const [pass, setPass] = useState("");
+    const [uses, setUses] = useState("");
+    const [logins, setLogins] = useState("");
+    function submit() {
+      const data = { password: pass };
+      const n = parseInt(uses, 10);
+      if (uses.trim()) data.uses = n;
+      const list = logins.split(/[,\s]+/).filter(Boolean);
+      if (list.length) data.logins = list;
+      onCreate(data);
+    }
+    return (
+      <div style={{ border: "1px dashed var(--border)", borderRadius: 10, padding: 12,
+                    display: "flex", flexDirection: "column", gap: 12 }}>
+        <Field label="Пароль ссылки" htmlFor="al-pass" hint="Пусто — вход без пароля, даже если он есть у комнаты.">
+          <Input id="al-pass" value={pass} onChange={(e) => setPass(e.target.value)} />
+        </Field>
+        <Field label="Лимит использований" htmlFor="al-uses" hint="Пусто — без лимита. Исчерпанная ссылка удаляется.">
+          <Input id="al-uses" type="number" min="1" value={uses} placeholder="без лимита"
+                 onChange={(e) => setUses(e.target.value)} />
+        </Field>
+        <Field label="Кому доступна" htmlFor="al-logins"
+               hint="Логины через запятую. Пусто — всем; со списком анонимный вход закрыт.">
+          <Input id="al-logins" value={logins} placeholder="ivan, anna"
+                 onChange={(e) => setLogins(e.target.value)} />
+        </Field>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <Button variant="secondary" size="sm" onClick={onCancel}>Отмена</Button>
+          <Button variant="primary" size="sm" icon="check" disabled={busy} onClick={submit}>Создать ссылку</Button>
+        </div>
+      </div>
+    );
+  }
+
+  // Ссылки-приглашения комнаты: до 5 дополнительных кодов входа со своими
+  // паролем, лимитом использований и списком допущенных логинов.
+  function AliasSection({ open }) {
+    const [items, setItems] = useState(null);   // null — ещё грузим
+    const [formOpen, setFormOpen] = useState(false);
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState("");
+    useEffect(() => {
+      if (!open) return;
+      setFormOpen(false); setErr("");
+      MeetUp.api("GET", "/api/me/room/aliases").then(r => {
+        setItems(r.ok && r.body ? (r.body.aliases || []) : []);
+      });
+    }, [open]);
+    async function create(data) {
+      setBusy(true);
+      const r = await MeetUp.api("POST", "/api/me/room/aliases", data);
+      setBusy(false);
+      if (r.ok && r.body && r.body.alias) {
+        setItems([...(items || []), r.body.alias]);
+        setFormOpen(false); setErr("");
+      } else {
+        setErr(aliasErrText(r.body && r.body.error));
+      }
+    }
+    async function toggle(a) {
+      const r = await MeetUp.api("PATCH", "/api/me/room/aliases/" + a.id, { enabled: !a.enabled });
+      if (r.ok && r.body && r.body.alias)
+        setItems(items.map(x => x.id === a.id ? r.body.alias : x));
+      else setErr(aliasErrText(r.body && r.body.error));
+    }
+    async function del(a) {
+      const r = await MeetUp.api("DELETE", "/api/me/room/aliases/" + a.id);
+      if (r.ok || r.status === 404) { setItems(items.filter(x => x.id !== a.id)); setErr(""); }
+    }
+    const list = items || [];
+    return (
+      <div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+          <div className="hu-label" style={{ flex: 1 }}>Ссылки-приглашения</div>
+          {!formOpen && items !== null && list.length < 5 &&
+            <Button variant="secondary" size="sm" icon="plus" onClick={() => { setFormOpen(true); setErr(""); }}>
+              Новая ссылка
+            </Button>}
+        </div>
+        {items === null ? (
+          <div style={{ fontSize: 13, color: "var(--text-muted)" }}>Загружаем…</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {list.length === 0 && !formOpen &&
+              <div style={{ fontSize: 13, color: "var(--text-muted)" }}>
+                Дополнительные ссылки на эту же комнату — со своим паролем, лимитом
+                использований и списком допущенных. До 5 ссылок.
+              </div>}
+            {list.map(a => <AliasRow key={a.id} a={a} onToggle={() => toggle(a)} onDelete={() => del(a)} />)}
+            {formOpen && <AliasCreateForm busy={busy} onCreate={create} onCancel={() => setFormOpen(false)} />}
+            {list.length >= 5 &&
+              <div style={{ fontSize: 12, color: "var(--text-faint)" }}>Достигнут предел — 5 ссылок.</div>}
+          </div>
+        )}
+        {err && <div style={{ fontSize: 12, color: "var(--danger)", marginTop: 8 }}>{err}</div>}
+      </div>
+    );
+  }
+
   function RoomSettingsModal({ open, onClose, room, onChange, onDelete }) {
     const [title, setTitle] = useState(room ? room.title : "");
     const [code, setCode] = useState(room ? room.code : "");
@@ -619,6 +768,9 @@
             )}
           </div>
           {err && <div style={{ fontSize: 12, color: "var(--danger)" }}>{err}</div>}
+          <div style={{ borderTop: "1px solid var(--border)", paddingTop: 14 }}>
+            <AliasSection open={open} />
+          </div>
           <div style={{ borderTop: "1px solid var(--border)", paddingTop: 14,
                         display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <span style={{ fontSize: 13, color: "var(--text-muted)", flex: 1, minWidth: 140 }}>

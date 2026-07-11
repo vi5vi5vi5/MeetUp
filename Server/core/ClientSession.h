@@ -29,10 +29,13 @@ public:
     // -1 — аноним. Авторизованный получает постоянный id и имя из профиля.
     int userId() const { return m_userId; }
     QString accountName() const { return m_accountName; }
+    QString login() const { return m_login; }
     int avatarVer() const { return m_avatarVer; }
-    void setAccount(int userId, const QString &displayName, int avatarVer)
+    void setAccount(int userId, const QString &login,
+                    const QString &displayName, int avatarVer)
     {
         m_userId = userId;
+        m_login = login;
         m_accountName = displayName;
         m_avatarVer = avatarVer;
     }
@@ -69,6 +72,7 @@ private:
     quint32 m_id = 0;
     QString m_name;
     int m_userId = -1;                  // id аккаунта; -1 — аноним
+    QString m_login;                    // логин аккаунта (списки допуска алиасов)
     QString m_accountName;              // отображаемое имя из профиля
     int m_avatarVer = 0;                // версия аватарки на момент подключения
     ConferenceRoom *m_room = nullptr;   // nullptr до join

@@ -27,18 +27,22 @@ add_executable(MeetUpServer
     models/User.h
     models/Session.h
     models/PersonalRoom.h
+    models/RoomAlias.h
 
     # interface/ — доступ к данным: Abstract (контракты) + реализации
     interface/Abstract/IUsers.h
     interface/Abstract/ISessions.h
     interface/Abstract/IPersonalRooms.h
+    interface/Abstract/IRoomAliases.h
     interface/InMemory/InMemoryUsers.h
     interface/InMemory/InMemorySessions.h
     interface/InMemory/InMemoryPersonalRooms.h
+    interface/InMemory/InMemoryRoomAliases.h
     interface/sqlite/SqliteDb.h            interface/sqlite/SqliteDb.cpp
     interface/sqlite/SqliteUsers.h         interface/sqlite/SqliteUsers.cpp
     interface/sqlite/SqliteSessions.h      interface/sqlite/SqliteSessions.cpp
     interface/sqlite/SqlitePersonalRooms.h interface/sqlite/SqlitePersonalRooms.cpp
+    interface/sqlite/SqliteRoomAliases.h   interface/sqlite/SqliteRoomAliases.cpp
 
     # services/ — бизнес-логика
     services/AuthService.h     services/AuthService.cpp

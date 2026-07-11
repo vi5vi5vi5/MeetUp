@@ -78,6 +78,14 @@ bool HttpApi::route(const HttpRequest &req, const Respond &respond)
         respond(m == "POST" ? handleCloseMyRoom(req) : err(405, QStringLiteral("method_not_allowed")));
         return true;
     }
+    if (p == QLatin1String("/api/me/room/aliases")) {
+        respond(handleMyAliases(req));
+        return true;
+    }
+    if (p.startsWith(QLatin1String("/api/me/room/aliases/"))) {
+        respond(handleMyAlias(req, p.mid(int(qstrlen("/api/me/room/aliases/")))));
+        return true;
+    }
 
     if (p == QLatin1String("/api/rooms")) {
         respond(m == "POST" ? handleCreateRoom() : err(405, QStringLiteral("method_not_allowed")));
@@ -281,15 +289,29 @@ ApiResponse HttpApi::handleCheckRoom(const QString &code)
 
     // Личная комната существует и вне эфира: клиенту нужны название,
     // активна ли она и есть ли пароль — чтобы спросить его до join.
-    const std::optional<PersonalRoom> personal = m_personalRooms->byCode(code);
-    if (!personal.has_value())
-        return err(404, QStringLiteral("room_not_found"));
+    std::optional<PersonalRoom> personal = m_personalRooms->byCode(code);
+    QString gateCode;
+    bool hasPassword = false;
+    if (personal.has_value()) {
+        gateCode = personal->code;
+        hasPassword = !personal->password.isEmpty();
+    } else {
+        // Alias-ссылка: ведёт в личную комнату, но пароль на гейте — свой.
+        // join пойдёт по коду алиаса, чтобы сервер применил его правила.
+        const std::optional<RoomAlias> alias = m_personalRooms->aliasByCode(code);
+        if (alias.has_value() && alias->enabled)
+            personal = m_personalRooms->byId(alias->roomId);
+        if (!personal.has_value())
+            return err(404, QStringLiteral("room_not_found"));
+        gateCode = alias->code;
+        hasPassword = !alias->password.isEmpty();
+    }
 
     QJsonObject j{
-        {"room", personal->code},
+        {"room", gateCode},
         {"personal", true},
         {"title", personal->title},
-        {"has_password", !personal->password.isEmpty()},
+        {"has_password", hasPassword},
     };
     addLiveInfo(j, *personal, /*ownerView=*/false);
     return ApiResponse{200, j, {}};
@@ -402,6 +424,113 @@ ApiResponse HttpApi::handleCloseMyRoom(const HttpRequest &req)
     return ApiResponse{200, QJsonObject{{"kicked", kicked}}, {}};
 }
 
+// ---------- Alias-ссылки ----------
+
+// Разбор общих полей тела алиаса: uses (число или null — безлимит),
+// logins (массив строк), enabled (bool), password (строка).
+static std::optional<int> aliasUsesField(const QJsonObject &body, bool *bad)
+{
+    if (!body.contains(QLatin1String("uses")))
+        return std::nullopt;
+    const QJsonValue v = body.value(QLatin1String("uses"));
+    if (v.isNull())
+        return -1;   // явное «без лимита»
+    if (!v.isDouble()) {
+        *bad = true;
+        return std::nullopt;
+    }
+    return v.toInt();
+}
+
+static std::optional<QStringList> aliasLoginsField(const QJsonObject &body)
+{
+    if (!body.contains(QLatin1String("logins")))
+        return std::nullopt;
+    QStringList out;
+    for (const QJsonValue &v : body.value(QLatin1String("logins")).toArray())
+        out.append(v.toString());
+    return out;
+}
+
+ApiResponse HttpApi::handleMyAliases(const HttpRequest &req)
+{
+    const std::optional<User> user = m_auth->userByToken(sessionToken(req));
+    if (!user.has_value())
+        return err(401, QStringLiteral("no_session"));
+
+    if (req.method == "GET") {
+        QJsonArray arr;
+        for (const RoomAlias &a : m_personalRooms->aliasesByOwner(user->id))
+            arr.append(a.ownerJson());
+        return ApiResponse{200, QJsonObject{{"aliases", arr}}, {}};
+    }
+
+    if (req.method == "POST") {
+        bool okJson = false;
+        const QJsonObject body = req.jsonBody(&okJson);
+        if (!okJson)
+            return err(400, QStringLiteral("invalid_json"));
+        bool badUses = false;
+        const std::optional<int> uses = aliasUsesField(body, &badUses);
+        if (badUses)
+            return err(400, QStringLiteral("invalid_uses"));
+        const AliasResult res = m_personalRooms->createAlias(
+            user->id,
+            body.value(QLatin1String("password")).toString(),
+            uses.value_or(-1),
+            aliasLoginsField(body).value_or(QStringList{}),
+            body.value(QLatin1String("enabled")).toBool(true));
+        if (!res.ok)
+            return err(statusForError(res.error), res.error);
+        qInfo().noquote() << QStringLiteral("API: alias '%1' created (owner id=%2)")
+                                 .arg(res.alias.code).arg(user->id);
+        return ApiResponse{200, QJsonObject{{"alias", res.alias.ownerJson()}}, {}};
+    }
+
+    return err(405, QStringLiteral("method_not_allowed"));
+}
+
+ApiResponse HttpApi::handleMyAlias(const HttpRequest &req, const QString &idStr)
+{
+    const std::optional<User> user = m_auth->userByToken(sessionToken(req));
+    if (!user.has_value())
+        return err(401, QStringLiteral("no_session"));
+    bool okId = false;
+    const int aliasId = idStr.toInt(&okId);
+    if (!okId)
+        return err(404, QStringLiteral("no_alias"));
+
+    if (req.method == "DELETE") {
+        if (!m_personalRooms->removeAlias(user->id, aliasId))
+            return err(404, QStringLiteral("no_alias"));
+        return ApiResponse{};
+    }
+
+    if (req.method == "PATCH") {
+        bool okJson = false;
+        const QJsonObject body = req.jsonBody(&okJson);
+        if (!okJson)
+            return err(400, QStringLiteral("invalid_json"));
+        bool badUses = false;
+        const std::optional<int> uses = aliasUsesField(body, &badUses);
+        if (badUses)
+            return err(400, QStringLiteral("invalid_uses"));
+        const std::optional<QString> password = body.contains(QLatin1String("password"))
+            ? std::optional<QString>(body.value(QLatin1String("password")).toString())
+            : std::nullopt;
+        const std::optional<bool> enabled = body.contains(QLatin1String("enabled"))
+            ? std::optional<bool>(body.value(QLatin1String("enabled")).toBool())
+            : std::nullopt;
+        const AliasResult res = m_personalRooms->updateAlias(
+            user->id, aliasId, password, uses, aliasLoginsField(body), enabled);
+        if (!res.ok)
+            return err(statusForError(res.error), res.error);
+        return ApiResponse{200, QJsonObject{{"alias", res.alias.ownerJson()}}, {}};
+    }
+
+    return err(405, QStringLiteral("method_not_allowed"));
+}
+
 // ---------- Помощники ----------
 
 ApiResponse HttpApi::err(int status, const QString &code)
@@ -412,11 +541,11 @@ ApiResponse HttpApi::err(int status, const QString &code)
 int HttpApi::statusForError(const QString &code)
 {
     if (code == QLatin1String("login_taken") || code == QLatin1String("code_taken")
-        || code == QLatin1String("room_exists"))
+        || code == QLatin1String("room_exists") || code == QLatin1String("alias_limit"))
         return 409;
     if (code == QLatin1String("wrong_credentials") || code == QLatin1String("no_session"))
         return 401;
-    if (code == QLatin1String("no_room"))
+    if (code == QLatin1String("no_room") || code == QLatin1String("no_alias"))
         return 404;
     return 400;
 }

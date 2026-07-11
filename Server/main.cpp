@@ -8,6 +8,7 @@
 #include "core/RoomRegistry.h"
 #include "interface/sqlite/SqliteDb.h"
 #include "interface/sqlite/SqlitePersonalRooms.h"
+#include "interface/sqlite/SqliteRoomAliases.h"
 #include "interface/sqlite/SqliteSessions.h"
 #include "interface/sqlite/SqliteUsers.h"
 #include "network/ConferenceServer.h"
@@ -93,8 +94,9 @@ int main(int argc, char *argv[])
     auto users = std::make_shared<SqliteUsers>(db);
     auto sessions = std::make_shared<SqliteSessions>(db);
     auto personalRooms = std::make_shared<SqlitePersonalRooms>(db);
+    auto roomAliases = std::make_shared<SqliteRoomAliases>(db);
     auto auth = std::make_shared<AuthService>(users, sessions);
-    auto rooms = std::make_shared<PersonalRoomService>(personalRooms);
+    auto rooms = std::make_shared<PersonalRoomService>(personalRooms, roomAliases);
 
     HttpApi api(auth, rooms, &registry, dataDir);
     ConferenceServer conference(wsPort, &registry, auth, rooms);

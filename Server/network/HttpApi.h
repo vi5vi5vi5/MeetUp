@@ -67,6 +67,11 @@ private:
     ApiResponse handleMyRoom(const HttpRequest &req);
     ApiResponse handleCloseMyRoom(const HttpRequest &req);
 
+    // Alias-ссылки комнаты: /api/me/room/aliases (GET/POST)
+    // и /api/me/room/aliases/<id> (PATCH/DELETE).
+    ApiResponse handleMyAliases(const HttpRequest &req);
+    ApiResponse handleMyAlias(const HttpRequest &req, const QString &idStr);
+
     // Живое состояние личной комнаты: online («в эфире» — внутри кто-то
     // есть), число участников; владельцу — ещё имена и старт эфира.
     void addLiveInfo(QJsonObject &j, const PersonalRoom &room, bool ownerView) const;

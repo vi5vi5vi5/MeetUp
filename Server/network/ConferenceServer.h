@@ -53,7 +53,8 @@ private:
 
     // Выгнать из комнаты участника с тем же id (повторный вход с аккаунта:
     // другая вкладка или реконнект, пока старый сокет ещё не умер).
-    void dropDuplicate(ConferenceRoom *room, quint32 id);
+    // true — дубликат был: это реконнект, а не новый вход.
+    bool dropDuplicate(ConferenceRoom *room, quint32 id);
 
     QWebSocketServer *m_server;
     RoomRegistry *m_registry;           // не владеет (общий с HTTP API)

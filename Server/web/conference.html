@@ -627,6 +627,12 @@
             M.roomPass = "";
             setGatePass("");
             setPhase("gate");
+          } else if (msg.reason === "alias_forbidden") {
+            // Ссылка-приглашение с фиксированным списком логинов: этот
+            // аккаунт (или аноним) в него не входит.
+            M.manualClose = true;
+            stopEverything();
+            fatal("Эта ссылка-приглашение доступна только определённым участникам. Войдите в аккаунт, которому открыт доступ.");
           } else if (msg.reason === "screen_busy") {
             // Демонстрацию уже ведёт другой: освобождаем захваченный экран.
             if (!stateRef.current.sharing) stopSharing(false);

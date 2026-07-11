@@ -67,7 +67,7 @@ void ConferenceServer::onNewConnection()
             socket->request().rawHeader(QByteArrayLiteral("Cookie")), kSessionCookieName));
         if (!token.isEmpty()) {
             if (const std::optional<User> user = m_auth->userByToken(token))
-                session->setAccount(user->id, user->displayName, user->avatarVer);
+                session->setAccount(user->id, user->login, user->displayName, user->avatarVer);
         }
 
         connect(session, &ClientSession::textReceived,
@@ -131,11 +131,25 @@ void ConferenceServer::handleJoin(ClientSession *session, const QJsonObject &msg
         return;
     }
 
+    // Alias-ссылка ведёт в личную комнату, но правила входа у неё свои:
+    // кастомный пароль, список допущенных логинов, лимит использований.
+    // Выключенный алиас неотличим от несуществующего.
+    std::optional<RoomAlias> alias = m_personalRooms->aliasByCode(roomCode);
+    if (alias.has_value() && !alias->enabled)
+        alias.reset();
+    const QString realCode = alias.has_value()
+        ? m_personalRooms->byId(alias->roomId).value_or(PersonalRoom{}).code
+        : roomCode;
+    if (realCode.isEmpty()) {
+        sendError(session, QStringLiteral("room_not_found"));
+        return;
+    }
+
     // Комнату создаёт HTTP API — опечатка в коде не плодит комнат-призраков.
     // Личная комната — исключение: её открывает join владельца.
-    ConferenceRoom *room = m_registry->find(roomCode);
+    ConferenceRoom *room = m_registry->find(realCode);
     if (!room) {
-        const std::optional<PersonalRoom> personal = m_personalRooms->byCode(roomCode);
+        const std::optional<PersonalRoom> personal = m_personalRooms->byCode(realCode);
         if (personal.has_value())
             room = m_registry->find(personal->code);   // код мог отличаться регистром
         if (!room) {
@@ -156,6 +170,7 @@ void ConferenceServer::handleJoin(ClientSession *session, const QJsonObject &msg
     // Правила личной комнаты проверяются по свежим данным сервиса: пароль
     // и код могли поменяться, пока комната в эфире.
     QString roomTitle;
+    bool consumeUse = false;
     if (room->ownerId() >= 0) {
         const std::optional<PersonalRoom> personal = m_personalRooms->byCode(room->code());
         if (!personal.has_value() || personal->ownerId != room->ownerId()) {
@@ -173,7 +188,21 @@ void ConferenceServer::handleJoin(ClientSession *session, const QJsonObject &msg
                 sendError(session, QStringLiteral("room_offline"));
                 return;
             }
-            if (!personal->password.isEmpty()
+            if (alias.has_value()) {
+                // Список допущенных: только перечисленные логины, анонимов
+                // список отсекает всегда — у них логина нет.
+                if (!alias->logins.isEmpty()
+                    && (!account || !alias->logins.contains(session->login()))) {
+                    sendError(session, QStringLiteral("alias_forbidden"));
+                    return;
+                }
+                if (!alias->password.isEmpty()
+                    && msg.value(QStringLiteral("password")).toString() != alias->password) {
+                    sendError(session, QStringLiteral("wrong_password"));
+                    return;
+                }
+                consumeUse = true;
+            } else if (!personal->password.isEmpty()
                 && msg.value(QStringLiteral("password")).toString() != personal->password) {
                 sendError(session, QStringLiteral("wrong_password"));
                 return;
@@ -182,14 +211,20 @@ void ConferenceServer::handleJoin(ClientSession *session, const QJsonObject &msg
         roomTitle = personal->title;
     }
 
+    bool replaced = false;
     if (account) {
         // Постоянный id: тот же пользователь — тот же id в любой конференции.
         session->setId(kAccountIdBase + quint32(session->userId()));
-        dropDuplicate(room, session->id());
+        replaced = dropDuplicate(room, session->id());
     } else {
         session->setId(m_nextId++);
     }
     session->setName(name);
+
+    // Использование ссылки тратится на состоявшийся вход; реконнект того же
+    // аккаунта (replaced) — не новый вход.
+    if (consumeUse && !replaced)
+        m_personalRooms->consumeAlias(*alias);
 
     // join_ok — только вошедшему: список присутствующих и история чата,
     // чтобы новый участник видел разговор, который шёл до него.
@@ -229,7 +264,7 @@ void ConferenceServer::handleJoin(ClientSession *session, const QJsonObject &msg
                              .arg(room->sessions().size());
 }
 
-void ConferenceServer::dropDuplicate(ConferenceRoom *room, quint32 id)
+bool ConferenceServer::dropDuplicate(ConferenceRoom *room, quint32 id)
 {
     ClientSession *dup = nullptr;
     for (ClientSession *s : room->sessions()) {
@@ -239,7 +274,7 @@ void ConferenceServer::dropDuplicate(ConferenceRoom *room, quint32 id)
         }
     }
     if (!dup)
-        return;
+        return false;
 
     // Старое соединение вытесняется новым: session_replaced говорит клиенту
     // не переподключаться (иначе две вкладки выбивали бы друг друга вечно).
@@ -261,6 +296,7 @@ void ConferenceServer::dropDuplicate(ConferenceRoom *room, quint32 id)
 
     qInfo().noquote() << QStringLiteral("join: id=%1 replaced by a new connection in room '%2'")
                              .arg(id).arg(room->code());
+    return true;
 }
 
 void ConferenceServer::handleChat(ClientSession *session, const QJsonObject &msg)
