@@ -4,6 +4,7 @@
 // Отправка: видео VideoEncoder (H.264/VP8/VP9 — первый поддержанный) до
 // 720p, аудио AudioEncoder (Opus 48 кГц/32 кбит). Браузеру без WebCodecs —
 // фолбэк на прежний формат: JPEG-кадры 10 к/с и PCM 16 кГц.
+// Демонстрация экрана — отдельный поток (типы SCREEN_*) параллельно камере.
 //
 // Протокол v2 (бинарь через WebSocket, сервер прозрачно вставляет sender
 // после первого байта и НЕ трогает остальное):
@@ -17,10 +18,14 @@
 // флаг keyframe до расшифровки.
 (function () {
 
-  const MSG = { VIDEO_JPEG: 1, AUDIO_PCM: 2, VIDEO_CODED: 3, AUDIO_CODED: 4, KEYFRAME_REQ: 6 };
+  // Камера и демонстрация экрана — независимые потоки: у экрана свои типы,
+  // чтобы приёмник держал два декодера и рисовал их в разные места.
+  const MSG = { VIDEO_JPEG: 1, AUDIO_PCM: 2, VIDEO_CODED: 3, AUDIO_CODED: 4,
+                SCREEN_CODED: 5, KEYFRAME_REQ: 6, SCREEN_JPEG: 7 };
   const FLAG_KEYFRAME = 1;
   const FLAG_ENCRYPTED = 2;
   const CHAT_AAD_TYPE = 250;              // «тип» для шифрования текста чата
+  const IMAGE_AAD_TYPE = 251;             // …и картинок чата
 
   const CODEC_BY_ID = { 1: "vp8", 2: "avc1.42E01F", 3: "vp09.00.10.08", 4: "opus" };
   const VIDEO_TRY = [
@@ -107,6 +112,12 @@
     for (let i = 0; i < s.length; i++) u8[i] = s.charCodeAt(i);
     return u8;
   }
+  // Обычный base64 (не url-safe) — для data:-URL картинок чата.
+  function u8ToStdB64(u8) {
+    let s = "";
+    for (let i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]);
+    return btoa(s);
+  }
 
   // ---- E2E: ключи ----
   async function deriveKeyFromPhrase(phrase, roomCode) {
@@ -180,17 +191,17 @@
       // отправка
       videoChoice: undefined,     // undefined = детект идёт, null = только legacy
       audioCoded: false,
-      capEl: null, capToken: 0, videoActive: false, isScreen: false,
-      venc: null, vencW: 0, vencH: 0, vframes: 0, keyNext: false, lastForceAt: 0,
+      lastForceAt: 0,
       aenc: null, aTs: 0,
       micSrc: null, capNode: null,
-      jpegCanvas: null, lastJpegAt: 0, jpegBusy: false,
-      sendChains: { a: Promise.resolve(), v: Promise.resolve() },
+      sendChains: { a: Promise.resolve(), v: Promise.resolve(), s: Promise.resolve() },
       lastKeyReqAt: 0,
       // приём
       peers: new Map(),           // id -> peer
-      sinks: new Map(),           // id -> <canvas>
+      sinks: new Map(),           // id -> <canvas> камеры
       sinkRefs: new Map(),
+      screenSinks: new Map(),     // id -> <canvas> демонстрации экрана
+      screenSinkRefs: new Map(),
       lastFrameAt: new Map(),
       stats: { videoCodec: "", audioCodec: "" },
     };
@@ -334,109 +345,130 @@
     }
 
     // ---------- Отправка: видео ----------
+    // Камера и экран — два одинаково устроенных, но независимых отправителя:
+    // демонстрация не выключает камеру и наоборот.
 
-    function startVideo(stream, o) {
-      stopVideo();
-      st.isScreen = !!(o && o.screen);
-      st.videoActive = true;
-      const v = st.capEl || (st.capEl = document.createElement("video"));
-      v.muted = true; v.playsInline = true; v.autoplay = true;
-      v.srcObject = stream;
-      const p = v.play();
-      if (p && p.catch) p.catch(() => {});
-      const token = ++st.capToken;
-      if ("requestVideoFrameCallback" in HTMLVideoElement.prototype) {
-        const step = () => {
-          if (st.capToken !== token || !st.videoActive) return;
-          captureTick(v);
+    function makeVideoSender(screen) {
+      const lane = screen ? "s" : "v";
+      const codedType = screen ? MSG.SCREEN_CODED : MSG.VIDEO_CODED;
+      const jpegType = screen ? MSG.SCREEN_JPEG : MSG.VIDEO_JPEG;
+      // Legacy-JPEG: камера — мелко и часто, экран — крупно и редко,
+      // иначе текст на демонстрации нечитаем.
+      const jpegMaxW = screen ? 1280 : 480, jpegMaxH = screen ? 720 : 360;
+      const jpegIntervalMs = screen ? 500 : JPEG_INTERVAL_MS;
+
+      const s = { el: null, token: 0, active: false,
+                  venc: null, w: 0, h: 0, frames: 0, keyNext: false,
+                  jpegCanvas: null, lastJpegAt: 0, jpegBusy: false };
+
+      function start(stream) {
+        stop();
+        s.active = true;
+        const v = s.el || (s.el = document.createElement("video"));
+        v.muted = true; v.playsInline = true; v.autoplay = true;
+        v.srcObject = stream;
+        const p = v.play();
+        if (p && p.catch) p.catch(() => {});
+        const token = ++s.token;
+        if ("requestVideoFrameCallback" in HTMLVideoElement.prototype) {
+          const step = () => {
+            if (s.token !== token || !s.active) return;
+            tick(v);
+            v.requestVideoFrameCallback(step);
+          };
           v.requestVideoFrameCallback(step);
-        };
-        v.requestVideoFrameCallback(step);
-      } else {
-        const timer = setInterval(() => {
-          if (st.capToken !== token || !st.videoActive) { clearInterval(timer); return; }
-          captureTick(v);
-        }, 1000 / 24);
-      }
-    }
-
-    function stopVideo() {
-      st.videoActive = false;
-      st.capToken++;
-      if (st.venc) { try { st.venc.close(); } catch (e) {} st.venc = null; }
-      if (st.capEl) st.capEl.srcObject = null;
-    }
-
-    function captureTick(v) {
-      if (!v.videoWidth || v.readyState < 2) return;
-      if (st.videoChoice === undefined) return;          // детект кодеков ещё идёт
-      if (st.videoChoice === null) { legacyJpegTick(v); return; }
-      if (opts.buffered() > MAX_BUFFERED) return;        // сеть не успевает — пропуск кадра
-
-      const w = v.videoWidth & ~1, h = v.videoHeight & ~1;
-      if (!st.venc || st.vencW !== w || st.vencH !== h) {
-        if (st.venc) { try { st.venc.close(); } catch (e) {} }
-        const choice = st.videoChoice;
-        try {
-          st.venc = new VideoEncoder({
-            output: (chunk) => {
-              const u8 = new Uint8Array(chunk.byteLength);
-              chunk.copyTo(u8);
-              enqueueSend(MSG.VIDEO_CODED, chunk.type === "key" ? FLAG_KEYFRAME : 0, choice.id,
-                          BigInt(Math.max(0, Math.round(chunk.timestamp || 0))), u8, "v");
-            },
-            error: () => { st.venc = null; },   // пересоздастся следующим кадром
-          });
-          st.venc.configure(videoCfg(choice, w, h, st.isScreen));
-          st.vencW = w; st.vencH = h; st.vframes = 0;
-        } catch (e) {
-          st.venc = null;
-          st.videoChoice = null;                // WebCodecs сломан — legacy до конца сессии
-          st.stats.videoCodec = "jpeg";
-          return;
+        } else {
+          const timer = setInterval(() => {
+            if (s.token !== token || !s.active) { clearInterval(timer); return; }
+            tick(v);
+          }, 1000 / 24);
         }
       }
-      if (st.venc.encodeQueueSize > 2) return;  // энкодер захлебнулся — пропуск
 
-      let frame;
-      try {
-        frame = new VideoFrame(v, { timestamp: Math.round(performance.now() * 1000) });
-      } catch (e) {
-        return;   // кадр ещё не готов
+      function stop() {
+        s.active = false;
+        s.token++;
+        if (s.venc) { try { s.venc.close(); } catch (e) {} s.venc = null; }
+        if (s.el) s.el.srcObject = null;
       }
-      const key = st.keyNext || st.vframes % KEY_EVERY_FRAMES === 0;
-      st.keyNext = false;
-      st.vframes++;
-      try { st.venc.encode(frame, { keyFrame: key }); } catch (e) { st.venc = null; }
-      frame.close();
+
+      function tick(v) {
+        if (!v.videoWidth || v.readyState < 2) return;
+        if (st.videoChoice === undefined) return;          // детект кодеков ещё идёт
+        if (st.videoChoice === null) { legacyTick(v); return; }
+        if (opts.buffered() > MAX_BUFFERED) return;        // сеть не успевает — пропуск кадра
+
+        const w = v.videoWidth & ~1, h = v.videoHeight & ~1;
+        if (!s.venc || s.w !== w || s.h !== h) {
+          if (s.venc) { try { s.venc.close(); } catch (e) {} }
+          const choice = st.videoChoice;
+          try {
+            s.venc = new VideoEncoder({
+              output: (chunk) => {
+                const u8 = new Uint8Array(chunk.byteLength);
+                chunk.copyTo(u8);
+                enqueueSend(codedType, chunk.type === "key" ? FLAG_KEYFRAME : 0, choice.id,
+                            BigInt(Math.max(0, Math.round(chunk.timestamp || 0))), u8, lane);
+              },
+              error: () => { s.venc = null; },   // пересоздастся следующим кадром
+            });
+            s.venc.configure(videoCfg(choice, w, h, screen));
+            s.w = w; s.h = h; s.frames = 0;
+          } catch (e) {
+            s.venc = null;
+            st.videoChoice = null;                // WebCodecs сломан — legacy до конца сессии
+            st.stats.videoCodec = "jpeg";
+            return;
+          }
+        }
+        if (s.venc.encodeQueueSize > 2) return;  // энкодер захлебнулся — пропуск
+
+        let frame;
+        try {
+          frame = new VideoFrame(v, { timestamp: Math.round(performance.now() * 1000) });
+        } catch (e) {
+          return;   // кадр ещё не готов
+        }
+        const key = s.keyNext || s.frames % KEY_EVERY_FRAMES === 0;
+        s.keyNext = false;
+        s.frames++;
+        try { s.venc.encode(frame, { keyFrame: key }); } catch (e) { s.venc = null; }
+        frame.close();
+      }
+
+      function legacyTick(v) {
+        const now = Date.now();
+        if (now - s.lastJpegAt < jpegIntervalMs || s.jpegBusy) return;
+        if (opts.buffered() > MAX_BUFFERED) return;
+        s.lastJpegAt = now;
+        const c = s.jpegCanvas || (s.jpegCanvas = document.createElement("canvas"));
+        const vw = v.videoWidth || jpegMaxW, vh = v.videoHeight || jpegMaxH;
+        const scale = Math.min(jpegMaxW / vw, jpegMaxH / vh, 1);
+        const cw = Math.max(2, Math.round(vw * scale)), ch = Math.max(2, Math.round(vh * scale));
+        if (c.width !== cw || c.height !== ch) { c.width = cw; c.height = ch; }
+        c.getContext("2d").drawImage(v, 0, 0, cw, ch);
+        s.jpegBusy = true;
+        c.toBlob((blob) => {
+          s.jpegBusy = false;
+          if (!blob || !s.active) return;
+          blob.arrayBuffer().then((ab) => {
+            enqueueSend(jpegType, 0, 0, BigInt(Date.now()), new Uint8Array(ab), lane);
+          });
+        }, "image/jpeg", 0.7);
+      }
+
+      return { start, stop, forceKey: () => { if (s.active) s.keyNext = true; } };
     }
 
-    function legacyJpegTick(v) {
-      const now = Date.now();
-      if (now - st.lastJpegAt < JPEG_INTERVAL_MS || st.jpegBusy) return;
-      if (opts.buffered() > MAX_BUFFERED) return;
-      st.lastJpegAt = now;
-      const c = st.jpegCanvas || (st.jpegCanvas = document.createElement("canvas"));
-      const vw = v.videoWidth || 480, vh = v.videoHeight || 360;
-      const scale = Math.min(480 / vw, 360 / vh, 1);
-      const cw = Math.max(2, Math.round(vw * scale)), ch = Math.max(2, Math.round(vh * scale));
-      if (c.width !== cw || c.height !== ch) { c.width = cw; c.height = ch; }
-      c.getContext("2d").drawImage(v, 0, 0, cw, ch);
-      st.jpegBusy = true;
-      c.toBlob((blob) => {
-        st.jpegBusy = false;
-        if (!blob || !st.videoActive) return;
-        blob.arrayBuffer().then((ab) => {
-          enqueueSend(MSG.VIDEO_JPEG, 0, 0, BigInt(Date.now()), new Uint8Array(ab), "v");
-        });
-      }, "image/jpeg", 0.7);
-    }
+    const camSender = makeVideoSender(false);
+    const screenSender = makeVideoSender(true);
 
     function forceKeyframe() {
       const now = Date.now();
       if (now - st.lastForceAt < 500) return;
       st.lastForceAt = now;
-      st.keyNext = true;
+      camSender.forceKey();
+      screenSender.forceKey();
     }
 
     function requestKeyframe() {
@@ -465,8 +497,9 @@
     function ensurePeer(id) {
       let p = st.peers.get(id);
       if (!p) {
-        p = { chains: { a: Promise.resolve(), v: Promise.resolve() },
-              vdec: null, vcodec: 0, awaitKey: true,
+        p = { chains: { a: Promise.resolve(), v: Promise.resolve(), s: Promise.resolve() },
+              cam: { dec: null, codec: 0, awaitKey: true },
+              scr: { dec: null, codec: 0, awaitKey: true },
               adec: null, player: null,
               pcmCursor: 0, fails: 0, locked: false };
         st.peers.set(id, p);
@@ -484,7 +517,8 @@
       const ts = dv.getBigUint64(7, true);
       if (type === MSG.KEYFRAME_REQ) { forceKeyframe(); return; }
       const payload = new Uint8Array(buffer, 15);
-      const lane = (type === MSG.AUDIO_PCM || type === MSG.AUDIO_CODED) ? "a" : "v";
+      const lane = (type === MSG.AUDIO_PCM || type === MSG.AUDIO_CODED) ? "a"
+                 : (type === MSG.SCREEN_CODED || type === MSG.SCREEN_JPEG) ? "s" : "v";
       const peer = ensurePeer(sender);
       peer.chains[lane] = peer.chains[lane]
         .then(() => handleMedia(peer, sender, type, flags, codecId, ts, payload))
@@ -505,10 +539,12 @@
       setLocked(peer, sender, false);
 
       switch (type) {
-        case MSG.VIDEO_CODED: decodeVideo(peer, sender, flags, codecId, ts, body); break;
-        case MSG.VIDEO_JPEG:  paintJpeg(sender, body); break;
-        case MSG.AUDIO_CODED: decodeAudio(peer, codecId, ts, body, sender); break;
-        case MSG.AUDIO_PCM:   playPcm(peer, sender, body); break;
+        case MSG.VIDEO_CODED:  decodeVideo(peer.cam, st.sinks, false, sender, flags, codecId, ts, body); break;
+        case MSG.SCREEN_CODED: decodeVideo(peer.scr, st.screenSinks, true, sender, flags, codecId, ts, body); break;
+        case MSG.VIDEO_JPEG:   paintJpeg(st.sinks, false, sender, body); break;
+        case MSG.SCREEN_JPEG:  paintJpeg(st.screenSinks, true, sender, body); break;
+        case MSG.AUDIO_CODED:  decodeAudio(peer, codecId, ts, body, sender); break;
+        case MSG.AUDIO_PCM:    playPcm(peer, sender, body); break;
       }
     }
 
@@ -518,51 +554,55 @@
       opts.onLocked(sender, locked);
     }
 
-    function decodeVideo(peer, sender, flags, codecId, ts, body) {
+    // sub — peer.cam или peer.scr: у камеры и экрана свои декодеры и синки.
+    function decodeVideo(sub, sinks, isScreen, sender, flags, codecId, ts, body) {
       if (!CODEC_BY_ID[codecId]) return;
-      if (!peer.vdec || peer.vcodec !== codecId) {
-        if (peer.vdec) { try { peer.vdec.close(); } catch (e) {} }
+      if (!sub.dec || sub.codec !== codecId) {
+        if (sub.dec) { try { sub.dec.close(); } catch (e) {} }
         if (typeof VideoDecoder === "undefined") return;
-        peer.vdec = new VideoDecoder({
-          output: (frame) => paintFrame(sender, frame),
-          error: () => { peer.vdec = null; peer.awaitKey = true; requestKeyframe(); },
+        sub.dec = new VideoDecoder({
+          output: (frame) => paintFrame(sinks, isScreen, sender, frame),
+          error: () => { sub.dec = null; sub.awaitKey = true; requestKeyframe(); },
         });
-        try { peer.vdec.configure({ codec: CODEC_BY_ID[codecId], optimizeForLatency: true }); }
-        catch (e) { peer.vdec = null; return; }
-        peer.vcodec = codecId;
-        peer.awaitKey = true;
+        try { sub.dec.configure({ codec: CODEC_BY_ID[codecId], optimizeForLatency: true }); }
+        catch (e) { sub.dec = null; return; }
+        sub.codec = codecId;
+        sub.awaitKey = true;
       }
       const isKey = !!(flags & FLAG_KEYFRAME);
-      if (peer.awaitKey && !isKey) { requestKeyframe(); return; }   // ждём опорный кадр
-      peer.awaitKey = false;
+      if (sub.awaitKey && !isKey) { requestKeyframe(); return; }   // ждём опорный кадр
+      sub.awaitKey = false;
       try {
-        peer.vdec.decode(new EncodedVideoChunk({
+        sub.dec.decode(new EncodedVideoChunk({
           type: isKey ? "key" : "delta", timestamp: Number(ts), data: body }));
       } catch (e) {
-        try { peer.vdec.close(); } catch (e2) {}
-        peer.vdec = null;
-        peer.awaitKey = true;
+        try { sub.dec.close(); } catch (e2) {}
+        sub.dec = null;
+        sub.awaitKey = true;
         requestKeyframe();
       }
     }
 
-    function paintFrame(sender, frame) {
-      st.lastFrameAt.set(sender, Date.now());
-      const canvas = st.sinks.get(sender);
+    function paintFrame(sinks, isScreen, sender, frame) {
+      const canvas = sinks.get(sender);
       if (canvas) {
         const w = frame.displayWidth, h = frame.displayHeight;
         if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
         canvas.getContext("2d").drawImage(frame, 0, 0, w, h);
       }
       frame.close();
-      opts.onFrameActivity(sender);
+      if (isScreen) {
+        if (opts.onScreenFrame) opts.onScreenFrame(sender);
+      } else {
+        st.lastFrameAt.set(sender, Date.now());
+        opts.onFrameActivity(sender);
+      }
     }
 
-    function paintJpeg(sender, body) {
+    function paintJpeg(sinks, isScreen, sender, body) {
       const blob = new Blob([body], { type: "image/jpeg" });
       createImageBitmap(blob).then((bmp) => {
-        st.lastFrameAt.set(sender, Date.now());
-        const canvas = st.sinks.get(sender);
+        const canvas = sinks.get(sender);
         if (canvas) {
           if (canvas.width !== bmp.width || canvas.height !== bmp.height) {
             canvas.width = bmp.width; canvas.height = bmp.height;
@@ -570,7 +610,12 @@
           canvas.getContext("2d").drawImage(bmp, 0, 0);
         }
         bmp.close();
-        opts.onFrameActivity(sender);
+        if (isScreen) {
+          if (opts.onScreenFrame) opts.onScreenFrame(sender);
+        } else {
+          st.lastFrameAt.set(sender, Date.now());
+          opts.onFrameActivity(sender);
+        }
       }).catch(() => {});
     }
 
@@ -645,14 +690,14 @@
 
     // ---------- Плитки: ref-колбэки для <canvas> ----------
 
-    function videoSinkRef(id) {
-      let cb = st.sinkRefs.get(id);
+    function sinkRefFor(sinks, refs, id) {
+      let cb = refs.get(id);
       if (!cb) {
         cb = (el) => {
-          if (el) st.sinks.set(id, el);
-          else st.sinks.delete(id);
+          if (el) sinks.set(id, el);
+          else sinks.delete(id);
         };
-        st.sinkRefs.set(id, cb);
+        refs.set(id, cb);
       }
       return cb;
     }
@@ -662,7 +707,8 @@
     function dropPeer(id) {
       const p = st.peers.get(id);
       if (p) {
-        if (p.vdec) { try { p.vdec.close(); } catch (e) {} }
+        if (p.cam.dec) { try { p.cam.dec.close(); } catch (e) {} }
+        if (p.scr.dec) { try { p.scr.dec.close(); } catch (e) {} }
         if (p.adec) { try { p.adec.close(); } catch (e) {} }
         if (p.player) { try { p.player.disconnect(); } catch (e) {} }
         st.peers.delete(id);
@@ -675,7 +721,8 @@
     }
 
     function stop() {
-      stopVideo();
+      camSender.stop();
+      screenSender.stop();
       clearPeers();
       if (st.aenc) { try { st.aenc.close(); } catch (e) {} st.aenc = null; }
       if (st.micSrc) { try { st.micSrc.disconnect(); } catch (e) {} }
@@ -683,9 +730,15 @@
     }
 
     return {
-      ensureAudio, startMic, startVideo, stopVideo, stop,
+      ensureAudio, startMic, stop,
+      startVideo: (stream) => camSender.start(stream),
+      stopVideo: () => camSender.stop(),
+      startScreen: (stream) => screenSender.start(stream),
+      stopScreen: () => screenSender.stop(),
       onBinary, forceKeyframe, requestKeyframe,
-      videoSinkRef, dropPeer, clearPeers,
+      videoSinkRef: (id) => sinkRefFor(st.sinks, st.sinkRefs, id),
+      screenSinkRef: (id) => sinkRefFor(st.screenSinks, st.screenSinkRefs, id),
+      dropPeer, clearPeers,
       lastFrameAt: st.lastFrameAt,
       micLevel: () => st.micLevel,
       setVolume: (v) => { st.volume = v; if (st.masterGain) st.masterGain.gain.value = v; },
@@ -713,6 +766,20 @@
         let pt = null;
         try { pt = await st.cipher.open(CHAT_AAD_TYPE, 0, b64ToU8(s.slice(6))); } catch (e) {}
         return { encrypted: true, text: pt ? new TextDecoder().decode(pt) : null };
+      },
+      // Картинка чата: на входе/выходе обычный base64 JPEG; шифрованная —
+      // тот же формат "🔒e2e:<base64url(iv|ct)>", что и текст.
+      sealImage: async (b64) => {
+        if (!st.cipher) return null;
+        return "🔒e2e:" + u8ToB64(await st.cipher.seal(IMAGE_AAD_TYPE, 0, b64ToU8(b64)));
+      },
+      openImage: async (s) => {
+        if (typeof s !== "string" || !s) return { encrypted: false, src: null };
+        if (!s.startsWith("🔒e2e:")) return { encrypted: false, src: "data:image/jpeg;base64," + s };
+        if (!st.cipher) return { encrypted: true, src: null };
+        let pt = null;
+        try { pt = await st.cipher.open(IMAGE_AAD_TYPE, 0, b64ToU8(s.slice(6))); } catch (e) {}
+        return { encrypted: true, src: pt ? "data:image/jpeg;base64," + u8ToStdB64(pt) : null };
       },
       stats: () => ({ videoCodec: st.stats.videoCodec, audioCodec: st.stats.audioCodec,
                       encrypted: !!st.cipher }),

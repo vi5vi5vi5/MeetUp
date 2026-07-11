@@ -40,6 +40,52 @@
   .tile-media { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
   .mirror { transform: scaleX(-1); }
 
+  /* Демонстрация экрана: плёнка камер сверху + сцена. contain, а не cover —
+     экран нельзя ни обрезать, ни растягивать. */
+  .film { flex: none; display: flex; gap: 10px; overflow-x: auto; padding: 4px 26px 10px; }
+  .film-cell { flex: none; width: 168px; height: 96px; }
+  .stagebox {
+    flex: 1; min-height: 0; position: relative; margin: 0 26px 128px;
+    background: linear-gradient(160deg, var(--tile-from), var(--tile-to));
+    border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden;
+  }
+  .stage-media { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+  .stage-wait {
+    position: absolute; inset: 0; display: grid; place-items: center;
+    color: var(--text-muted); font-size: var(--text-sm); font-weight: var(--weight-semibold);
+  }
+  .stage-chip {
+    position: absolute; left: 12px; bottom: 12px; display: flex; align-items: center; gap: 6px;
+    background: var(--scrim-chip); backdrop-filter: var(--blur-chip); -webkit-backdrop-filter: var(--blur-chip);
+    padding: 5px 10px; border-radius: var(--radius-xs);
+    font-size: var(--text-xs); font-weight: var(--weight-semibold); color: var(--text);
+  }
+
+  /* всплывающее уведомление над доком (демонстрация занята и т.п.) */
+  .notice {
+    position: absolute; left: 50%; transform: translateX(-50%); bottom: 100px; z-index: 45;
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-pill);
+    padding: 10px 18px; font-size: var(--text-sm); font-weight: var(--weight-semibold);
+    box-shadow: var(--shadow-pop); white-space: nowrap; max-width: calc(100% - 32px);
+    overflow: hidden; text-overflow: ellipsis;
+  }
+
+  /* картинки в чате */
+  .chat-img {
+    display: block; max-width: 100%; max-height: 260px; border-radius: 8px;
+    cursor: zoom-in; object-fit: contain;
+  }
+  .chat-img-stub { opacity: .75; font-style: italic; }
+  .lightbox {
+    position: fixed; inset: 0; z-index: 120; display: grid; place-items: center;
+    padding: 24px; cursor: zoom-out;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+  }
+  .lightbox img {
+    max-width: 100%; max-height: 100%; object-fit: contain;
+    border-radius: var(--radius-md); box-shadow: var(--shadow-pop);
+  }
+
   /* пагинация плиток: стрелки по краям + точки над доком */
   .pager-dots {
     position: absolute; left: 50%; transform: translateX(-50%); bottom: 108px;
@@ -167,6 +213,9 @@
     .confbar { padding: 14px 16px; gap: 10px; }
     .conf-title { font-size: 19px; }
     .grid { padding: 4px 16px 132px; }
+    .film { padding: 4px 16px 8px; }
+    .film-cell { width: 128px; height: 74px; }
+    .stagebox { margin: 0 16px 132px; }
     .dock { bottom: 20px; }
     .pager-dots { bottom: 102px; }
     .share-pop { right: 16px; top: 64px; }
@@ -190,7 +239,7 @@
 <script src="assets/babel.js"></script>
 <script src="assets/meetup-ds.js"></script>
 <script src="assets/meetup-common.js"></script>
-<script src="assets/meetup-media.js?v=1"></script>
+<script src="assets/meetup-media.js?v=2"></script>
 <script type="text/babel">
   const { useState, useRef, useEffect } = React;
   const { Badge, Icon, IconButton, Input, Field, Button, Card, VideoTile, ParticipantRow, ChatMessage, ControlDock } =
@@ -272,6 +321,12 @@
     const [mic, setMic] = useState(true);
     const [cam, setCam] = useState(true);
     const [sharing, setSharing] = useState(false);
+    // Кто ведёт демонстрацию экрана (id участника, может быть свой) — одна
+    // на комнату, закрепляется сервером.
+    const [screenId, setScreenId] = useState(null);
+    const [screenFrames, setScreenFrames] = useState(() => new Set());
+    const [notice, setNotice] = useState("");
+    const [lightbox, setLightbox] = useState(null);
     const [tab, setTab] = useState("chat");
     const [panelOpen, setPanelOpen] = useState(false);
     const [isMobile, setIsMobile] = useState(false);
@@ -285,6 +340,8 @@
 
     const msgRef = useRef(null);
     const selfVideoRef = useRef(null);
+    const stageSelfRef = useRef(null);   // превью собственной демонстрации на сцене
+    const fileRef = useRef(null);        // скрытый <input type=file> для картинок чата
     const touchX = useRef(null);
 
     // Зеркало актуального состояния для обработчиков вне рендера
@@ -300,7 +357,7 @@
       const av = loadAvSettings();
       mediaRef.current = {
         ws: null, myId: null, manualClose: false, fatal: false, attempts: 0,
-        roomPass: "", waitTimer: null,
+        roomPass: "", waitTimer: null, noticeTimer: null,
         camStream: null, micStream: null, displayStream: null,
         speakingUntil: new Map(), chatChain: Promise.resolve(),
         mediaStarted: false, joinedAt: 0,
@@ -340,6 +397,10 @@
         onFrameActivity: (id) => {
           if (!hasFrameRef.current.has(id))
             setHasFrame(prev => { const n = new Set(prev); n.add(id); return n; });
+        },
+        onScreenFrame: (id) => {
+          if (!screenFramesRef.current.has(id))
+            setScreenFrames(prev => { const n = new Set(prev); n.add(id); return n; });
         },
         onLocked: (id, locked) => {
           setLockedIds(prev => {
@@ -406,13 +467,26 @@
       else engine.onBinary(event.data);
     }
 
-    // Текст чата: расшифровка "🔒e2e:..." при наличии ключа. raw хранится,
-    // чтобы перечитать сообщение, когда пользователь введёт ключ позже.
-    async function renderChatText(raw) {
-      const res = await engine.openText(raw);
-      if (!res.encrypted) return { raw, text: raw, locked: false };
-      if (res.text != null) return { raw, text: res.text, locked: false };
-      return { raw, text: "Зашифрованное сообщение — нужен ключ", locked: true };
+    // Тело сообщения чата: текст и/или картинка, расшифровка "🔒e2e:..." при
+    // наличии ключа. raw/rawImage хранятся, чтобы перечитать сообщение, когда
+    // пользователь введёт ключ позже.
+    async function renderChatBody(rawText, rawImage, imageDropped) {
+      const out = { raw: typeof rawText === "string" ? rawText : "",
+                    rawImage: typeof rawImage === "string" ? rawImage : "",
+                    text: "", locked: false,
+                    image: null, imageLocked: false, imageDropped: !!imageDropped };
+      if (out.raw) {
+        const res = await engine.openText(out.raw);
+        if (!res.encrypted) out.text = out.raw;
+        else if (res.text != null) out.text = res.text;
+        else { out.text = "Зашифрованное сообщение — нужен ключ"; out.locked = true; }
+      }
+      if (out.rawImage) {
+        const img = await engine.openImage(out.rawImage);
+        if (img.src) out.image = img.src;
+        else out.imageLocked = true;
+      }
+      return out;
     }
 
     function onJson(msg) {
@@ -439,11 +513,17 @@
             author: h.sender_name || ("Участник " + h.sender_id),
             time: fmtTime(h.timestamp_ms),
             self: h.sender_id === msg.sender_id,
-            ...(await renderChatText(h.text)),
+            ...(await renderChatBody(h.text, h.image, h.image_dropped)),
           }))).then(setMessages);
+          setScreenId(msg.screen_id != null ? msg.screen_id : null);
+          setScreenFrames(new Set());
           engine.clearPeers();
           engine.requestKeyframe();   // просим у вещающих опорные кадры
-          pushState(stateRef.current.mic, stateRef.current.sharing ? true : stateRef.current.cam);
+          pushState(stateRef.current.mic, stateRef.current.cam);
+          // Реконнект посреди своей демонстрации: слот на сервере освободился
+          // при обрыве — просим закрепить его за нами снова.
+          if (M.displayStream && M.ws && M.ws.readyState === 1)
+            M.ws.send(JSON.stringify({ type: "screen", on: true }));
           if (!M.mediaStarted) { M.mediaStarted = true; startMedia(); }
           break;
         }
@@ -459,6 +539,23 @@
           M.speakingUntil.delete(msg.id);
           dropFromSet(setHasFrame, msg.id);
           dropFromSet(setLockedIds, msg.id);
+          dropFromSet(setScreenFrames, msg.id);
+          setScreenId(cur => (cur === msg.id ? null : cur));
+          break;
+        case "screen":
+          // Сервер закрепил/освободил демонстрацию. Своё подтверждение —
+          // сигнал начать слать кадры экрана.
+          if (msg.on) {
+            setScreenId(msg.id);
+            if (msg.id === M.myId && M.displayStream) {
+              engine.startScreen(M.displayStream);
+              setSharing(true);
+            }
+          } else {
+            setScreenId(cur => (cur === msg.id ? null : cur));
+            dropFromSet(setScreenFrames, msg.id);
+            if (msg.id === M.myId && stateRef.current.sharing) stopSharing(false);
+          }
           break;
         case "participant_state":
           setPeers(prev => prev.map(p => p.id === msg.id ? { ...p, mic: !!msg.mic, cam: !!msg.cam } : p));
@@ -471,7 +568,7 @@
           const self = msg.sender_id === M.myId;
           // Расшифровка асинхронная — цепочка сохраняет порядок сообщений.
           M.chatChain = M.chatChain.then(async () => {
-            const body = await renderChatText(msg.text);
+            const body = await renderChatBody(msg.text, msg.image, false);
             setMessages(prev => [...prev, {
               key: msg.timestamp_ms + "-" + msg.sender_id + "-" + prev.length,
               author: msg.sender_name || ("Участник " + msg.sender_id),
@@ -509,6 +606,12 @@
             M.roomPass = "";
             setGatePass("");
             setPhase("gate");
+          } else if (msg.reason === "screen_busy") {
+            // Демонстрацию уже ведёт другой: освобождаем захваченный экран.
+            if (!stateRef.current.sharing) stopSharing(false);
+            showNotice("Демонстрацию экрана уже ведёт другой участник.");
+          } else if (msg.reason === "image_too_large") {
+            showNotice("Изображение слишком большое для отправки.");
           } else if (msg.reason === "room_offline") {
             // Личная комната без владельца не существует: ждём, пока владелец
             // её откроет, и пробуем снова — гость войдёт сам.
@@ -530,6 +633,13 @@
         M.ws.send(JSON.stringify({ type: "state", mic: micVal, cam: camVal }));
     }
 
+    // Короткое уведомление над доком; само гаснет.
+    function showNotice(text) {
+      setNotice(text);
+      clearTimeout(M.noticeTimer);
+      M.noticeTimer = setTimeout(() => setNotice(""), 4000);
+    }
+
     // Убрать id из Set-состояния (hasFrame, lockedIds), не трогая лишний рендер.
     function dropFromSet(setter, id) {
       setter(prev => {
@@ -544,6 +654,9 @@
 
     const hasFrameRef = useRef(hasFrame);
     useEffect(() => { hasFrameRef.current = hasFrame; }, [hasFrame]);
+
+    const screenFramesRef = useRef(screenFrames);
+    useEffect(() => { screenFramesRef.current = screenFrames; }, [screenFrames]);
 
     const messagesRef = useRef(messages);
     useEffect(() => { messagesRef.current = messages; }, [messages]);
@@ -587,7 +700,7 @@
           M.micStream = await grabStream("audio", M.pref.micId);
         } catch (e) {
           setMic(false);
-          pushState(false, stateRef.current.sharing ? true : stateRef.current.cam);
+          pushState(false, stateRef.current.cam);
           return false;
         }
       }
@@ -601,12 +714,11 @@
           M.camStream = await grabStream("video", M.pref.camId);
         } catch (e) {
           setCam(false);
-          pushState(stateRef.current.mic, stateRef.current.sharing ? true : false);
+          pushState(stateRef.current.mic, false);
           return false;
         }
       }
-      // Во время демонстрации экрана в эфир идёт displayStream.
-      if (!M.displayStream) engine.startVideo(M.camStream, { screen: false });
+      engine.startVideo(M.camStream);
       return true;
     }
 
@@ -621,19 +733,18 @@
       }
       if (M.micStream) M.micStream.getAudioTracks().forEach(t => { t.enabled = next; });
       setMic(next);
-      pushState(next, stateRef.current.sharing ? true : stateRef.current.cam);
+      pushState(next, stateRef.current.cam);
     }
 
     async function toggleCamera() {
       const s = stateRef.current;
-      if (s.sharing) stopSharing(false);
       const next = !s.cam;
       if (next) {
         if (!M.camStream) {
           const ok = await startCamera();
           if (!ok) return;
         } else {
-          engine.startVideo(M.camStream, { screen: false });
+          engine.startVideo(M.camStream);
         }
       } else if (M.camStream) {
         // Останавливаем дорожки, а не просто глушим — гаснет индикатор камеры.
@@ -645,9 +756,17 @@
       pushState(s.mic, next);
     }
 
+    // Демонстрация экрана идёт отдельным потоком, камеру не трогает.
+    // В комнате может быть только одна: сначала захватываем экран, потом
+    // просим сервер закрепить его за нами — кадры пойдут после подтверждения
+    // (сообщение "screen" в onJson), при отказе придёт error screen_busy.
     async function toggleShare() {
       const s = stateRef.current;
       if (s.sharing) { stopSharing(true); return; }
+      if (s.screenId != null) {
+        showNotice("Демонстрацию экрана уже ведёт другой участник.");
+        return;
+      }
       if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) return;
       let stream;
       try {
@@ -658,21 +777,23 @@
       M.displayStream = stream;
       const track = stream.getVideoTracks()[0];
       if (track) track.onended = () => stopSharing(true);   // «Прекратить доступ»
-      engine.startVideo(stream, { screen: true });
-      setSharing(true);
-      pushState(s.mic, true);
+      if (M.ws && M.ws.readyState === 1)
+        M.ws.send(JSON.stringify({ type: "screen", on: true }));
+      else
+        stopSharing(false);
     }
 
-    function stopSharing(push) {
-      const s = stateRef.current;
+    function stopSharing(notifyServer) {
       if (M.displayStream) {
         M.displayStream.getTracks().forEach(t => t.stop());
         M.displayStream = null;
       }
-      if (M.camStream && s.cam) engine.startVideo(M.camStream, { screen: false });
-      else engine.stopVideo();
+      engine.stopScreen();
       setSharing(false);
-      if (push) pushState(s.mic, s.cam);
+      // Локально гасим сцену сразу; остальным сервер разошлёт "screen off".
+      setScreenId(cur => (cur === M.myId ? null : cur));
+      if (notifyServer && M.ws && M.ws.readyState === 1)
+        M.ws.send(JSON.stringify({ type: "screen", on: false }));
     }
 
     function stopEverything() {
@@ -736,8 +857,7 @@
       try { stream = await grabStream("video", id); } catch (e) { refreshDevices(); return; }
       M.camStream.getTracks().forEach(t => t.stop());
       M.camStream = stream;
-      // Во время демонстрации экрана в эфире остаётся displayStream.
-      if (!M.displayStream && stateRef.current.cam) engine.startVideo(stream, { screen: false });
+      if (stateRef.current.cam) engine.startVideo(stream);
     }
 
     function selectOut(id) {
@@ -771,7 +891,8 @@
       setE2ePhrase(phraseForUi || "");
       M.chatChain = M.chatChain.then(async () => {
         const updated = await Promise.all(
-          messagesRef.current.map(async (m) => ({ ...m, ...(await renderChatText(m.raw)) })));
+          messagesRef.current.map(async (m) =>
+            ({ ...m, ...(await renderChatBody(m.raw, m.rawImage, m.imageDropped)) })));
         setMessages(updated);
       });
     }
@@ -835,6 +956,87 @@
         });
       } else {
         M.ws.send(JSON.stringify({ type: "chat", text }));
+      }
+    }
+
+    // ---- Картинки в чате: пережим в JPEG под лимит сервера, E2E как у текста ----
+
+    async function loadBitmap(file) {
+      try {
+        return await createImageBitmap(file);
+      } catch (e) {
+        // Формат не понял createImageBitmap — пробуем через <img>.
+        const url = URL.createObjectURL(file);
+        try {
+          const img = new Image();
+          await new Promise((ok, err) => { img.onload = ok; img.onerror = err; img.src = url; });
+          return img;
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+      }
+    }
+
+    async function fileToJpegB64(file) {
+      const bmp = await loadBitmap(file);
+      const srcW = bmp.width || bmp.naturalWidth, srcH = bmp.height || bmp.naturalHeight;
+      if (!srcW || !srcH) throw new Error("empty image");
+      const c = document.createElement("canvas");
+      try {
+        // Уменьшаем и снижаем качество, пока не влезет в лимит сервера.
+        for (const maxDim of [1600, 1024, 720]) {
+          const k = Math.min(1, maxDim / Math.max(srcW, srcH));
+          c.width = Math.max(1, Math.round(srcW * k));
+          c.height = Math.max(1, Math.round(srcH * k));
+          const g = c.getContext("2d");
+          g.fillStyle = "#fff";                    // прозрачность → белый фон
+          g.fillRect(0, 0, c.width, c.height);
+          g.drawImage(bmp, 0, 0, c.width, c.height);
+          for (const q of [0.85, 0.7, 0.55]) {
+            const dataUrl = c.toDataURL("image/jpeg", q);
+            const b64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+            if (b64.length <= 480000) return b64;
+          }
+        }
+      } finally {
+        if (bmp.close) bmp.close();
+      }
+      throw new Error("too big");
+    }
+
+    async function sendImage(file) {
+      if (!file || !M.ws || M.ws.readyState !== 1) return;
+      let image;
+      try {
+        image = await fileToJpegB64(file);
+      } catch (e) {
+        showNotice("Не получилось подготовить изображение.");
+        return;
+      }
+      if (engine.encrypted()) {
+        image = await engine.sealImage(image);
+        if (!image) return;
+      }
+      if (M.ws && M.ws.readyState === 1)
+        M.ws.send(JSON.stringify({ type: "chat", image }));
+    }
+
+    function onPickImage(e) {
+      const f = e.target.files && e.target.files[0];
+      e.target.value = "";   // повторный выбор того же файла снова даст change
+      if (f) sendImage(f);
+    }
+
+    // Вставка скриншота из буфера обмена прямо в поле сообщения.
+    function onComposerPaste(e) {
+      const items = e.clipboardData && e.clipboardData.items;
+      if (!items) return;
+      for (const it of items) {
+        if (it.type && it.type.startsWith("image/")) {
+          const f = it.getAsFile();
+          if (f) { e.preventDefault(); sendImage(f); }
+          return;
+        }
       }
     }
 
@@ -970,10 +1172,11 @@
       // Esc закрывает поповеры; стрелки листают страницы плиток
       // (кроме случаев, когда фокус в поле ввода или открыты настройки).
       const onKey = (e) => {
-        if (e.key === "Escape") { setSettingsOpen(false); setShareOpen(false); return; }
+        if (e.key === "Escape") { setSettingsOpen(false); setShareOpen(false); setLightbox(null); return; }
         const tag = (e.target && e.target.tagName) || "";
         if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
         if (stateRef.current.settingsOpen) return;
+        if (stateRef.current.screenId != null) return;   // при демонстрации страниц нет
         if (e.key === "ArrowLeft") setPage(p => Math.max(0, p - 1));
         if (e.key === "ArrowRight") setPage(p => Math.min(stateRef.current.pages - 1, p + 1));
       };
@@ -989,6 +1192,7 @@
         clearInterval(staleTimer);
         clearInterval(speakTimer);
         clearInterval(elapsedTimer);
+        clearTimeout(M.noticeTimer);
         window.removeEventListener("keydown", onKey);
         if (navigator.mediaDevices && navigator.mediaDevices.removeEventListener)
           navigator.mediaDevices.removeEventListener("devicechange", onDevChange);
@@ -1002,34 +1206,48 @@
     // потому что <video> размонтируется при листании страниц.
     useEffect(() => {
       const el = selfVideoRef.current;
-      const stream = M.displayStream || (cam ? M.camStream : null);
+      const stream = cam ? M.camStream : null;
       if (el && stream && el.srcObject !== stream) {
         el.srcObject = stream;
         const p = el.play();
+        if (p && p.catch) p.catch(() => {});
+      }
+      // Превью собственной демонстрации на сцене.
+      const stage = stageSelfRef.current;
+      if (stage && M.displayStream && stage.srcObject !== M.displayStream) {
+        stage.srcObject = M.displayStream;
+        const p = stage.play();
         if (p && p.catch) p.catch(() => {});
       }
     });
 
     // ================= Плитки и страницы =================
 
-    const selfHasVideo = sharing || cam;
     const tiles = [{
       key: "self", id: myId, name: nameRef.current || "Вы", self: true,
-      mic, cam: selfHasVideo, speaking: myId != null && speaking.has(myId), hasFrame: true,
+      mic, cam, speaking: myId != null && speaking.has(myId), hasFrame: true,
     }].concat(peers.map(p => ({
       key: "p" + p.id, id: p.id, name: p.name, self: false,
       mic: p.mic, cam: p.cam, speaking: speaking.has(p.id), hasFrame: hasFrame.has(p.id),
     })));
 
+    // Идёт демонстрация экрана: сцена + плёнка камер вместо сетки.
+    const screenActive = screenId != null;
+    const screenSelf = screenActive && myId != null && screenId === myId;
+    const sharerName = screenSelf
+      ? "Вы"
+      : ((peers.find(p => p.id === screenId) || {}).name || "");
+    const stageReady = screenSelf || screenFrames.has(screenId);
+
     const perPage = isMobile ? 6 : 9;
-    const pages = Math.max(1, Math.ceil(tiles.length / perPage));
+    const pages = screenActive ? 1 : Math.max(1, Math.ceil(tiles.length / perPage));
     const curPage = Math.min(page, pages - 1);
     const visible = tiles.slice(curPage * perPage, curPage * perPage + perPage);
 
     // Актуальный снимок состояния для обработчиков вне рендера
     // (WS-сообщения, таймеры, аудио-callback).
     useEffect(() => {
-      stateRef.current = { phase, mic, cam, sharing, tab, panelOpen, isMobile, pages, settingsOpen };
+      stateRef.current = { phase, mic, cam, sharing, screenId, tab, panelOpen, isMobile, pages, settingsOpen };
     });
 
     // Индикатор уровня микрофона — обновляется только при открытых настройках.
@@ -1060,19 +1278,20 @@
       };
     }
 
-    function renderTile(t, idx) {
+    function renderTile(t, idx, film) {
       const locked = !t.self && lockedIds.has(t.id);
       let media = null;
       if (t.self) {
-        if (selfHasVideo)
-          media = <video ref={selfVideoRef} className={"tile-media" + (sharing ? "" : " mirror")}
+        if (cam)
+          media = <video ref={selfVideoRef} className="tile-media mirror"
                          autoPlay muted playsInline />;
       } else if (t.cam && t.hasFrame && !locked) {
         media = <canvas className="tile-media" ref={engine.videoSinkRef(t.id)} />;
       }
-      const spanSelf = featured && tiles.length === 3 && idx === 0;
+      const spanSelf = !film && featured && tiles.length === 3 && idx === 0;
       return (
-        <div key={t.key} style={{ minHeight: 0, ...(spanSelf ? { gridRow: "1 / 3" } : null) }}>
+        <div key={t.key} className={film ? "film-cell" : undefined}
+             style={film ? undefined : { minHeight: 0, ...(spanSelf ? { gridRow: "1 / 3" } : null) }}>
           <VideoTile name={t.name} self={t.self} muted={!t.mic} speaking={t.speaking}
                      style={{ aspectRatio: "auto", height: "100%" }}>
             {(media || locked) ? <>
@@ -1104,6 +1323,23 @@
         background: on ? "var(--accent)" : "transparent",
         color: on ? "var(--on-accent)" : "var(--text-muted)",
       };
+    }
+
+    // Содержимое пузыря сообщения: картинка (или её заглушка) + текст.
+    function msgContent(m) {
+      const img = m.image
+        ? <img className="chat-img" src={m.image} alt="изображение"
+               onClick={() => setLightbox(m.image)} />
+        : m.imageLocked
+          ? <span className="chat-img-stub">🔒 Изображение зашифровано — нужен ключ</span>
+          : m.imageDropped
+            ? <span className="chat-img-stub">Изображение больше недоступно</span>
+            : null;
+      if (!img) return m.text;
+      return <>
+        {img}
+        {m.text ? <span style={{ display: "block", marginTop: 6 }}>{m.text}</span> : null}
+      </>;
     }
 
     const shortCode = roomCode.length > 10 ? roomCode.slice(0, 8) + "…" : roomCode;
@@ -1138,9 +1374,26 @@
           <div className="gridwrap"
                onTouchStart={pages > 1 ? onTouchStart : undefined}
                onTouchEnd={pages > 1 ? onTouchEnd : undefined}>
-            <div className="grid" style={gridStyle}>
-              {visible.map(renderTile)}
-            </div>
+            {screenActive ? <>
+              <div className="film">
+                {tiles.map((t, i) => renderTile(t, i, true))}
+              </div>
+              <div className="stagebox">
+                {screenSelf
+                  ? <video ref={stageSelfRef} className="stage-media" autoPlay muted playsInline />
+                  : <canvas key={"scr" + screenId} className="stage-media"
+                            ref={engine.screenSinkRef(screenId)} />}
+                {!stageReady && <div className="stage-wait">Демонстрация начинается…</div>}
+                <div className="stage-chip">
+                  <Icon name="screen" size={14} />
+                  {screenSelf ? "Вы демонстрируете экран" : "Демонстрация — " + (sharerName || "участник")}
+                </div>
+              </div>
+            </> : (
+              <div className="grid" style={gridStyle}>
+                {visible.map((t, i) => renderTile(t, i, false))}
+              </div>
+            )}
 
             {pages > 1 && <>
               <IconButton icon="arrow-right" label="Предыдущая страница" disabled={curPage === 0}
@@ -1171,6 +1424,8 @@
               onLeave={leave}
             />
           </div>
+
+          {notice && <div className="notice">{notice}</div>}
 
           <button className="chat-fab" onClick={() => { setPanelOpen(true); setTab("chat"); }}>
             <Icon name="chat" size={18} />
@@ -1234,12 +1489,18 @@
             <>
               <div ref={msgRef} className="chatscroll">
                 {messages.map(m => (
-                  <ChatMessage key={m.key} author={m.author} time={m.time} text={m.text} self={m.self} />
+                  <ChatMessage key={m.key} author={m.author} time={m.time} self={m.self}
+                               text={msgContent(m)} />
                 ))}
               </div>
               <div className="composer">
+                <input ref={fileRef} type="file" accept="image/*"
+                       style={{ display: "none" }} onChange={onPickImage} />
+                <IconButton icon="image" label="Отправить изображение"
+                            onClick={() => fileRef.current && fileRef.current.click()} />
                 <Input value={draft} placeholder="Сообщение…" autoComplete="off" maxLength={2000}
                        onChange={e => setDraft(e.target.value)}
+                       onPaste={onComposerPaste}
                        onKeyDown={e => e.key === "Enter" && sendChat()} />
                 <IconButton icon="send" variant="accent" label="Отправить" onClick={sendChat} />
               </div>
@@ -1388,6 +1649,12 @@
                 </Button>
               </Card>
             </div>
+          </div>}
+
+        {/* картинка из чата на весь экран */}
+        {lightbox &&
+          <div className="lightbox" onClick={() => setLightbox(null)}>
+            <img src={lightbox} alt="изображение из чата" />
           </div>}
 
         {/* ошибка подключения */}

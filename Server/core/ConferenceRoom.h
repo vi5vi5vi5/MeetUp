@@ -16,6 +16,8 @@ struct ChatEntry
     QString senderName;
     QString text;
     qint64  timestampMs = 0;
+    QString image;               // JPEG в base64 (или шифротекст E2E); пусто — нет картинки
+    bool    imageDropped = false; // картинка была, но вытеснена из истории (см. appendChat)
 };
 
 // Одна конференция (комната). Держит список участников и историю чата, умеет
@@ -47,6 +49,13 @@ public:
     void addParticipant(ClientSession *session);
     void removeParticipant(ClientSession *session);
 
+    // Демонстрация экрана: в комнате может идти только одна. Сервер закрепляет
+    // её за участником и отклоняет остальных (error screen_busy); кадры
+    // экрана от других участников не ретранслируются. Выход ведущего из
+    // комнаты снимает закрепление (removeParticipant).
+    ClientSession *screenSharer() const { return m_screenSharer; }
+    void setScreenSharer(ClientSession *session) { m_screenSharer = session; }
+
     // Рассылка всем участникам; except (если задан) пропускается.
     void broadcastJson(const QJsonObject &obj, ClientSession *except = nullptr) const;
     void broadcastBinary(const QByteArray &data, ClientSession *except = nullptr) const;
@@ -63,9 +72,15 @@ private:
     QString m_code;
     int m_ownerId = -1;
     QList<ClientSession *> m_sessions;   // не владеет сессиями
+    ClientSession *m_screenSharer = nullptr;   // кто ведёт демонстрацию; не владеет
     QList<ChatEntry> m_history;
     qint64 m_emptySinceMs = 0;
     qint64 m_liveSinceMs = 0;
 
     static constexpr int kMaxHistory = 500;
+
+    // Картинки тяжелее текста на порядки: без потолка история из kMaxHistory
+    // сообщений могла бы держать сотни мегабайт на комнату. Старые картинки
+    // вытесняются (imageDropped), текст сообщений остаётся.
+    static constexpr int kMaxHistoryImages = 24;
 };

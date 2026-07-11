@@ -98,6 +98,8 @@ void ConferenceServer::onText(ClientSession *session, const QString &text)
         handleChat(session, msg);
     else if (type == QLatin1String("state"))
         handleState(session, msg);
+    else if (type == QLatin1String("screen"))
+        handleScreen(session, msg);
     else
         sendError(session, QStringLiteral("unknown_type"));
 }
@@ -192,6 +194,8 @@ void ConferenceServer::handleJoin(ClientSession *session, const QJsonObject &msg
     };
     if (!roomTitle.isEmpty())
         joinOk.insert(QStringLiteral("room_title"), roomTitle);
+    if (room->screenSharer())
+        joinOk.insert(QStringLiteral("screen_id"), qint64(room->screenSharer()->id()));
     session->sendJson(joinOk);
 
     // Теперь добавляем в комнату и уведомляем остальных.
@@ -226,6 +230,7 @@ void ConferenceServer::dropDuplicate(ConferenceRoom *room, quint32 id)
     // Старое соединение вытесняется новым: session_replaced говорит клиенту
     // не переподключаться (иначе две вкладки выбивали бы друг друга вечно).
     sendError(dup, QStringLiteral("session_replaced"));
+    const bool wasSharer = room->screenSharer() == dup;
     room->removeParticipant(dup);
     dup->setRoom(nullptr);
     dup->close();
@@ -233,6 +238,12 @@ void ConferenceServer::dropDuplicate(ConferenceRoom *room, quint32 id)
         {"type", "participant_left"},
         {"id", qint64(id)},
     });
+    if (wasSharer)
+        room->broadcastJson(QJsonObject{
+            {"type", "screen"},
+            {"id", qint64(id)},
+            {"on", false},
+        });
 
     qInfo().noquote() << QStringLiteral("join: id=%1 replaced by a new connection in room '%2'")
                              .arg(id).arg(room->code());
@@ -247,21 +258,31 @@ void ConferenceServer::handleChat(ClientSession *session, const QJsonObject &msg
     }
 
     const QString text = msg.value(QStringLiteral("text")).toString().left(2000);
-    if (text.isEmpty())
+    const QString image = msg.value(QStringLiteral("image")).toString();
+    if (image.size() > kMaxChatImageB64) {
+        sendError(session, QStringLiteral("image_too_large"));
+        return;
+    }
+    if (text.isEmpty() && image.isEmpty())
         return;
 
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    room->appendChat(ChatEntry{session->id(), session->name(), text, now});
+    ChatEntry entry{session->id(), session->name(), text, now};
+    entry.image = image;
+    room->appendChat(entry);
 
     // Рассылаем всем, включая отправителя — единая лента у всех. Имя дублируем
     // в сообщении: получатель мог зайти позже отправителя и не знать его id.
-    room->broadcastJson(QJsonObject{
+    QJsonObject out{
         {"type", "chat"},
         {"sender_id", qint64(session->id())},
         {"sender_name", session->name()},
         {"text", text},
         {"timestamp_ms", now},
-    });
+    };
+    if (!image.isEmpty())
+        out.insert(QStringLiteral("image"), image);
+    room->broadcastJson(out);
 }
 
 void ConferenceServer::handleState(ClientSession *session, const QJsonObject &msg)
@@ -285,6 +306,39 @@ void ConferenceServer::handleState(ClientSession *session, const QJsonObject &ms
     }, session);
 }
 
+// Демонстрация экрана: клиент просит закрепить её за собой ({"on": true})
+// или отпускает ({"on": false}). Подтверждение — то же сообщение "screen"
+// всем участникам, включая просившего; занято — error screen_busy.
+void ConferenceServer::handleScreen(ClientSession *session, const QJsonObject &msg)
+{
+    ConferenceRoom *room = session->room();
+    if (!room) {
+        sendError(session, QStringLiteral("not_in_room"));
+        return;
+    }
+
+    const bool on = msg.value(QStringLiteral("on")).toBool();
+    if (on) {
+        // Одна демонстрация на комнату — так клиентам не нужно делить
+        // сцену между несколькими экранами.
+        if (room->screenSharer() && room->screenSharer() != session) {
+            sendError(session, QStringLiteral("screen_busy"));
+            return;
+        }
+        room->setScreenSharer(session);
+    } else {
+        if (room->screenSharer() != session)
+            return;
+        room->setScreenSharer(nullptr);
+    }
+
+    room->broadcastJson(QJsonObject{
+        {"type", "screen"},
+        {"id", qint64(session->id())},
+        {"on", on},
+    });
+}
+
 void ConferenceServer::onBinary(ClientSession *session, const QByteArray &data)
 {
     ConferenceRoom *room = session->room();
@@ -293,6 +347,13 @@ void ConferenceServer::onBinary(ClientSession *session, const QByteArray &data)
 
     // Заголовок клиента: [type:1][timestamp_ms:8]. Минимум 9 байт.
     if (data.size() < 9)
+        return;
+
+    // Кадры экрана идут только от ведущего демонстрации: остальные могли
+    // не услышать отказ и продолжать слать — их кадры молча отбрасываются.
+    const quint8 type = quint8(data.at(0));
+    if ((type == kMsgScreenCoded || type == kMsgScreenJpeg)
+        && room->screenSharer() != session)
         return;
 
     // Сервер вставляет sender_id (uint32 LE) сразу после message_type,
@@ -314,11 +375,18 @@ void ConferenceServer::onDisconnected(ClientSession *session)
 {
     ConferenceRoom *room = session->room();
     if (room) {
+        const bool wasSharer = room->screenSharer() == session;
         room->removeParticipant(session);
         room->broadcastJson(QJsonObject{
             {"type", "participant_left"},
             {"id", qint64(session->id())},
         });
+        if (wasSharer)
+            room->broadcastJson(QJsonObject{
+                {"type", "screen"},
+                {"id", qint64(session->id())},
+                {"on", false},
+            });
         // Опустевшую комнату не удаляем сразу: participants могли отвалиться
         // по сети и вернуться. Брошенные комнаты собирает purgeIdleRooms().
     }

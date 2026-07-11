@@ -23,6 +23,8 @@ void ConferenceRoom::addParticipant(ClientSession *session)
 
 void ConferenceRoom::removeParticipant(ClientSession *session)
 {
+    if (session == m_screenSharer)
+        m_screenSharer = nullptr;
     m_sessions.removeAll(session);
     if (m_sessions.isEmpty()) {
         m_emptySinceMs = QDateTime::currentMSecsSinceEpoch();
@@ -63,6 +65,22 @@ void ConferenceRoom::appendChat(const ChatEntry &entry)
     m_history.append(entry);
     if (m_history.size() > kMaxHistory)
         m_history.removeFirst();
+
+    if (entry.image.isEmpty())
+        return;
+
+    // Держим только kMaxHistoryImages свежих картинок: у более старых
+    // освобождаем данные, оставляя пометку — клиент покажет заглушку.
+    int images = 0;
+    for (int i = m_history.size() - 1; i >= 0; --i) {
+        ChatEntry &e = m_history[i];
+        if (e.image.isEmpty())
+            continue;
+        if (++images > kMaxHistoryImages) {
+            e.image.clear();
+            e.imageDropped = true;
+        }
+    }
 }
 
 QJsonArray ConferenceRoom::historyJson() const
@@ -74,6 +92,10 @@ QJsonArray ConferenceRoom::historyJson() const
         o["sender_name"] = e.senderName;
         o["text"] = e.text;
         o["timestamp_ms"] = e.timestampMs;
+        if (!e.image.isEmpty())
+            o["image"] = e.image;
+        if (e.imageDropped)
+            o["image_dropped"] = true;
         arr.append(o);
     }
     return arr;

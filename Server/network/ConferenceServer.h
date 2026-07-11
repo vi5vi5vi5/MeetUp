@@ -48,6 +48,7 @@ private:
     void handleJoin(ClientSession *session, const QJsonObject &msg);
     void handleChat(ClientSession *session, const QJsonObject &msg);
     void handleState(ClientSession *session, const QJsonObject &msg);
+    void handleScreen(ClientSession *session, const QJsonObject &msg);
     void sendError(ClientSession *session, const QString &reason);
 
     // Выгнать из комнаты участника с тем же id (повторный вход с аккаунта:
@@ -65,6 +66,15 @@ private:
     // id авторизованных живут в верхней половине диапазона quint32 —
     // счётчик анонимов туда не дотянется, коллизий нет.
     static constexpr quint32 kAccountIdBase = 0x80000000;
+
+    // Бинарные типы кадров демонстрации экрана (см. web/assets/meetup-media.js):
+    // ретранслируются только от участника, за которым закреплена демонстрация.
+    static constexpr quint8 kMsgScreenCoded = 5;
+    static constexpr quint8 kMsgScreenJpeg = 7;
+
+    // Потолок картинки в чате (base64): клиент ужимает до ~480 тыс. символов,
+    // лимит с запасом на накладные расходы E2E-шифрования.
+    static constexpr int kMaxChatImageB64 = 600000;
 
     // Пустые комнаты живут ещё 10 минут: обрыв связи последнего участника
     // или пауза между созданием комнаты и первым join не убивают её.

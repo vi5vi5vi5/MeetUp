@@ -10,6 +10,10 @@ ClientSession::ClientSession(QWebSocket *socket, QObject *parent)
     // Сессия становится владельцем сокета: удалится вместе с ней.
     m_socket->setParent(this);
 
+    // Самое крупное легитимное сообщение — чат с картинкой (~600 КБ base64);
+    // потолок с запасом отсекает попытки завалить сервер гигантским фреймом.
+    m_socket->setMaxAllowedIncomingMessageSize(2 * 1024 * 1024);
+
     connect(m_socket, &QWebSocket::textMessageReceived,
             this, &ClientSession::onTextMessageReceived);
     connect(m_socket, &QWebSocket::binaryMessageReceived,
