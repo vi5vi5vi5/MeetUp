@@ -190,10 +190,24 @@
     return out.buffer;
   }
 
+  // Пресеты качества отправки (выбор в настройках конференции). Разрешение
+  // камеры задаёт страница при захвате — сюда приходит уже готовый кадр,
+  // здесь только битрейты кодеков и целевой fps.
+  const QUALITY = {
+    cam:    { low:  { bitrate: 400000,  framerate: 15 },
+              med:  { bitrate: 1200000, framerate: 24 },
+              high: { bitrate: 2500000, framerate: 30 } },
+    screen: { low:  { bitrate: 600000,  framerate: 5 },
+              med:  { bitrate: 1500000, framerate: 15 },
+              high: { bitrate: 4000000, framerate: 30 } },
+    audio:  { low: 16000, med: 32000, high: 64000 },
+  };
+
   function create(opts) {
     // opts: send(buf), buffered()->число, micOn()->bool,
     //       onSelfSpeaking(), onSpeaking(id), onFrameActivity(id), onLocked(id, bool)
     const st = {
+      quality: { cam: "med", screen: "med", audio: "med" },
       ctx: null, masterGain: null, workletsReady: null,
       volume: 1, sens: 1, micLevel: 0,
       cipher: null,
@@ -239,10 +253,12 @@
     })();
 
     function videoCfg(choice, w, h, screen) {
+      const kind = screen ? "screen" : "cam";
+      const q = QUALITY[kind][st.quality[kind]];
       return Object.assign({
         codec: choice.codec, width: w, height: h,
-        bitrate: screen ? 1500000 : 1200000,
-        framerate: screen ? 15 : 24,
+        bitrate: q.bitrate,
+        framerate: q.framerate,
         latencyMode: "realtime",
       }, choice.extra);
     }
@@ -345,7 +361,8 @@
           },
           error: () => { st.aenc = null; },
         });
-        st.aenc.configure({ codec: "opus", sampleRate: AUDIO_RATE, numberOfChannels: 1, bitrate: 32000 });
+        st.aenc.configure({ codec: "opus", sampleRate: AUDIO_RATE, numberOfChannels: 1,
+                            bitrate: QUALITY.audio[st.quality.audio] });
         return true;
       } catch (e) {
         st.aenc = null;
@@ -468,7 +485,15 @@
         }, "image/jpeg", 0.7);
       }
 
-      return { start, stop, forceKey: () => { if (s.active) s.keyNext = true; } };
+      // Смена качества на лету: энкодер закрывается, следующий кадр создаст
+      // его заново с новым пресетом и сразу пошлёт опорный кадр.
+      function resetEncoder() {
+        if (s.venc) { try { s.venc.close(); } catch (e) {} s.venc = null; }
+        s.keyNext = true;
+      }
+
+      return { start, stop, resetEncoder,
+               forceKey: () => { if (s.active) s.keyNext = true; } };
     }
 
     const camSender = makeVideoSender(false);
@@ -807,6 +832,17 @@
       micLevel: () => st.micLevel,
       setVolume: (v) => { st.volume = v; if (st.masterGain) st.masterGain.gain.value = v; },
       setSensitivity: (v) => { st.sens = v; },
+      // Качество отправки: "cam" | "screen" | "audio" -> "low" | "med" | "high".
+      // Применяется на лету — энкодер пересоздаётся со следующим чанком.
+      setQuality: (kind, level) => {
+        if (!QUALITY[kind] || !(level in QUALITY[kind]) || st.quality[kind] === level) return;
+        st.quality[kind] = level;
+        if (kind === "audio") {
+          if (st.aenc) { try { st.aenc.close(); } catch (e) {} st.aenc = null; }
+        } else {
+          (kind === "screen" ? screenSender : camSender).resetEncoder();
+        }
+      },
       setSinkId: (id) => {
         if (st.ctx && st.ctx.setSinkId) {
           const p = st.ctx.setSinkId(id);

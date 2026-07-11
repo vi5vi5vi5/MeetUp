@@ -245,9 +245,9 @@
 <script src="assets/react.js"></script>
 <script src="assets/react-dom.js"></script>
 <script src="assets/babel.js"></script>
-<script src="assets/meetup-ds.js?v=3"></script>
-<script src="assets/meetup-common.js?v=3"></script>
-<script src="assets/meetup-media.js?v=3"></script>
+<script src="assets/meetup-ds.js?v=4"></script>
+<script src="assets/meetup-common.js?v=4"></script>
+<script src="assets/meetup-media.js?v=4"></script>
 <script type="text/babel">
   const { useState, useRef, useEffect } = React;
   const { Badge, Icon, IconButton, Input, Field, Button, Card, VideoTile, ParticipantRow, ChatMessage, ControlDock } =
@@ -264,12 +264,27 @@
   const AV_KEY = "meetup.av";
   const clampPct = (v) => Math.max(0, Math.min(200, Number(v) || 0));
 
+  // Уровни качества отправки: пресеты битрейтов живут в meetup-media.js,
+  // страница хранит выбор и разрешение захвата камеры под него.
+  const Q_LEVELS = ["low", "med", "high"];
+  const CAM_RES = { low: { width: 640, height: 360 },
+                    med: { width: 1280, height: 720 },
+                    high: { width: 1920, height: 1080 } };
+  const Q_LABELS = {
+    cam: { low: "360p · эко", med: "720p", high: "1080p" },
+    screen: { low: "Эко", med: "Стандарт", high: "Плавное" },
+    audio: { low: "16 кбит/с", med: "32 кбит/с", high: "64 кбит/с" },
+  };
+
   function loadAvSettings() {
-    const def = { micId: "", camId: "", outId: "", volume: 100, sens: 100 };
+    const def = { micId: "", camId: "", outId: "", volume: 100, sens: 100,
+                  qCam: "med", qScreen: "med", qAudio: "med" };
     let s = def;
     try { s = { ...def, ...JSON.parse(localStorage.getItem(AV_KEY) || "{}") }; } catch (e) {}
     s.volume = clampPct(s.volume);
     s.sens = clampPct(s.sens);
+    for (const k of ["qCam", "qScreen", "qAudio"])
+      if (!Q_LEVELS.includes(s[k])) s[k] = "med";
     return s;
   }
 
@@ -397,6 +412,8 @@
     const [volume, setVolume] = useState(M.pref.volume);
     const [sens, setSens] = useState(M.pref.sens);
     const [micLevel, setMicLevel] = useState(0);
+    const [quality, setQuality] = useState(
+      { cam: M.pref.qCam, screen: M.pref.qScreen, audio: M.pref.qAudio });
 
     // ---- E2E-шифрование ----
     const [lockedIds, setLockedIds] = useState(() => new Set());
@@ -706,16 +723,20 @@
       await engine.ensureAudio();
       engine.setVolume(M.pref.volume / 100);
       engine.setSensitivity(M.pref.sens / 100);
+      engine.setQuality("cam", M.pref.qCam);
+      engine.setQuality("screen", M.pref.qScreen);
+      engine.setQuality("audio", M.pref.qAudio);
       if (M.pref.outId) engine.setSinkId(M.pref.outId);
       await startMic();
       await startCamera();
     }
 
     // getUserMedia с выбранным устройством; если оно пропало — системное.
+    // Разрешение камеры следует выбранному качеству отправки.
     function mediaConstraints(kind, id) {
       const base = kind === "audio"
         ? { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
-        : { width: 1280, height: 720 };
+        : { ...CAM_RES[M.pref.qCam] };
       if (id) base.deviceId = { exact: id };
       return { [kind]: base };
     }
@@ -912,6 +933,22 @@
       setSens(v);
       saveAvSettings({ sens: v });
       engine.setSensitivity(v / 100);
+    }
+
+    // Качество отправки: битрейт применяет движок на лету; смена качества
+    // камеры дополнительно перезахватывает её с новым разрешением.
+    async function selectQuality(kind, level) {
+      setQuality(q => ({ ...q, [kind]: level }));
+      const prefKey = kind === "cam" ? "qCam" : kind === "screen" ? "qScreen" : "qAudio";
+      M.pref[prefKey] = level;
+      saveAvSettings({ [prefKey]: level });
+      engine.setQuality(kind, level);
+      if (kind !== "cam" || !M.camStream) return;
+      let stream;
+      try { stream = await grabStream("video", M.pref.camId); } catch (e) { return; }
+      M.camStream.getTracks().forEach(t => t.stop());
+      M.camStream = stream;
+      if (stateRef.current.cam) engine.startVideo(stream);
     }
 
     // ================= E2E-шифрование =================
@@ -1682,6 +1719,22 @@
                          min="0" max="200" step="5" value={sens}
                          style={{ background: "linear-gradient(90deg, var(--accent) " + (sens / 2) + "%, var(--surface-3) " + (sens / 2) + "%)" }}
                          onChange={e => changeSens(Number(e.target.value))} />
+                </Field>
+
+                <Field label="Качество отправки"
+                       hint="Выше качество — больше нагрузка на сеть. Применяется сразу."
+                       style={{ marginTop: 18 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                    {[["cam", "Камера"], ["screen", "Экран"], ["audio", "Звук"]].map(([k, label]) => (
+                      <div key={k}>
+                        <div style={{ fontSize: 11, color: "var(--text-faint)", marginBottom: 4 }}>{label}</div>
+                        <select className="set-select" value={quality[k]} aria-label={"Качество: " + label}
+                                onChange={e => selectQuality(k, e.target.value)}>
+                          {Q_LEVELS.map(l => <option key={l} value={l}>{Q_LABELS[k][l]}</option>)}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
                 </Field>
 
                 <Field label={"Сквозное шифрование" + (e2eOn ? " · включено" : "")} htmlFor="set-e2e"
