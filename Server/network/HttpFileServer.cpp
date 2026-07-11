@@ -145,6 +145,15 @@ void HttpFileServer::serveFile(QTcpSocket *socket, const QString &urlPath)
 
 void HttpFileServer::sendApiResponse(QTcpSocket *socket, const ApiResponse &resp)
 {
+    // Бинарный ответ (аватарки): contentType задан — body-JSON не используется.
+    if (!resp.contentType.isEmpty()) {
+        sendResponse(socket, resp.status, statusText(resp.status), resp.contentType,
+                     resp.rawBody,
+                     resp.cacheControl.isEmpty() ? QByteArrayLiteral("no-store")
+                                                 : resp.cacheControl,
+                     resp.headers);
+        return;
+    }
     sendResponse(socket, resp.status, statusText(resp.status),
                  "application/json; charset=utf-8",
                  QJsonDocument(resp.body).toJson(QJsonDocument::Compact),

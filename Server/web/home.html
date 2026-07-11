@@ -157,17 +157,16 @@
 <script src="assets/react.js"></script>
 <script src="assets/react-dom.js"></script>
 <script src="assets/babel.js"></script>
-<script src="assets/meetup-ds.js"></script>
+<script src="assets/meetup-ds.js?v=2"></script>
 <script src="assets/meetup-common.js"></script>
 <script type="text/babel">
   const { useState, useRef, useEffect } = React;
   const { Card, Button, IconButton, Icon, Badge, Input, Field } = window.MeetUpDesignSystem_2584b5;
 
-  // Аватарка пока живёт в браузере — загрузка на сервер в следующей итерации.
-  // Личная комната хранится на сервере (/api/me/room); старый локальный
-  // черновик используется один раз — чтобы заполнить форму создания.
+  // Аватарка хранится на сервере (POST/DELETE /api/me/avatar, файл один на
+  // пользователя). Личная комната — тоже на сервере (/api/me/room); старый
+  // локальный черновик используется один раз — чтобы заполнить форму создания.
   const THEME_KEY = "meetup.theme";
-  const AVATAR_KEY = "meetup.avatar";
   const ROOM_KEY = "meetup.room.draft";
   function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
   function lsSet(k, v) {
@@ -175,6 +174,41 @@
   }
   function loadRoomDraft() {
     try { return JSON.parse(lsGet(ROOM_KEY) || "null"); } catch (e) { return null; }
+  }
+
+  // URL аватарки: версия в адресе делает кэш вечным (см. сервер).
+  function avatarSrc(user) {
+    return user && user.avatar_ver > 0
+      ? "/api/users/" + user.id + "/avatar?v=" + user.avatar_ver
+      : null;
+  }
+
+  // Аватарка перед загрузкой: центр-кроп в квадрат и ужатие до 256px JPEG.
+  async function fileToAvatarB64(file) {
+    let img;
+    try {
+      img = await createImageBitmap(file);
+    } catch (e) {
+      const url = URL.createObjectURL(file);
+      try {
+        img = new Image();
+        await new Promise((ok, err) => { img.onload = ok; img.onerror = err; img.src = url; });
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    }
+    const w = img.width || img.naturalWidth, h = img.height || img.naturalHeight;
+    if (!w || !h) throw new Error("empty image");
+    const side = Math.min(w, h);
+    const c = document.createElement("canvas");
+    c.width = c.height = 256;
+    const g = c.getContext("2d");
+    g.fillStyle = "#fff";   // прозрачность → белый фон
+    g.fillRect(0, 0, 256, 256);
+    g.drawImage(img, (w - side) / 2, (h - side) / 2, side, side, 0, 0, 256, 256);
+    if (img.close) img.close();
+    const dataUrl = c.toDataURL("image/jpeg", 0.85);
+    return dataUrl.slice(dataUrl.indexOf(",") + 1);
   }
 
   // Текст для машинных кодов ошибок /api/me/room.
@@ -309,13 +343,15 @@
 
   function AvatarEditor({ name, avatar, onChange }) {
     const inputRef = useRef(null);
+    const [busy, setBusy] = useState(false);
+    async function apply(fileOrNull) {
+      setBusy(true);
+      try { await onChange(fileOrNull); } finally { setBusy(false); }
+    }
     function onFile(e) {
       const f = e.target.files && e.target.files[0];
-      if (!f) return;
-      const rd = new FileReader();
-      rd.onload = () => onChange(rd.result);
-      rd.readAsDataURL(f);
       e.target.value = "";
+      if (f) apply(f);
     }
     return (
       <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
@@ -323,14 +359,15 @@
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <input ref={inputRef} type="file" accept="image/*" onChange={onFile} style={{ display: "none" }} />
           <div style={{ display: "flex", gap: 8 }}>
-            <Button variant={avatar ? "secondary" : "primary"} size="sm"
+            <Button variant={avatar ? "secondary" : "primary"} size="sm" disabled={busy}
                     icon={avatar ? undefined : "plus"} onClick={() => inputRef.current && inputRef.current.click()}>
               {avatar ? "Заменить" : "Загрузить фото"}
             </Button>
-            {avatar && <Button variant="ghost" size="sm" icon="x" onClick={() => onChange(null)}>Удалить</Button>}
+            {avatar && <Button variant="ghost" size="sm" icon="x" disabled={busy}
+                               onClick={() => apply(null)}>Удалить</Button>}
           </div>
           <span style={{ fontSize: 11, color: "var(--text-faint)" }}>
-            PNG или JPG · пока хранится только в этом браузере
+            PNG или JPG · видна другим участникам конференции
           </span>
         </div>
       </div>
@@ -698,7 +735,6 @@
   function HomeScreen() {
     const [user, setUser] = useState(null);
     const [theme, setTheme] = useState(lsGet(THEME_KEY) === "light" ? "light" : "dark");
-    const [avatar, setAvatar] = useState(lsGet(AVATAR_KEY));
     const [room, setRoom] = useState(null);   // личная комната с сервера
     const [profileOpen, setProfileOpen] = useState(false);
     const [createOpen, setCreateOpen] = useState(false);
@@ -719,6 +755,7 @@
           if (r.ok && r.body && r.body.room) setRoom(r.body.room);
           setUser(resp.body.user);
           MeetUp.saveName(resp.body.user.display_name);
+          lsSet("meetup.avatar", null);   // старый локальный черновик больше не нужен
         } else {
           location.replace("login.html");
         }
@@ -752,7 +789,19 @@
       location.href = "login.html";
     }
 
-    function saveAvatar(a) { setAvatar(a); lsSet(AVATAR_KEY, a); }
+    // null — убрать аватарку, File — ужать и загрузить. Сервер отвечает
+    // обновлённым профилем (avatar_ver двигает URL мимо кэша).
+    async function saveAvatar(fileOrNull) {
+      let resp;
+      if (fileOrNull == null) {
+        resp = await MeetUp.api("DELETE", "/api/me/avatar");
+      } else {
+        let image;
+        try { image = await fileToAvatarB64(fileOrNull); } catch (e) { return; }
+        resp = await MeetUp.api("POST", "/api/me/avatar", { image });
+      }
+      if (resp.ok && resp.body && resp.body.user) setUser(resp.body.user);
+    }
 
     // Операции с личной комнатой: null — успех, иначе машинный код ошибки
     // (текст подбирают модалки через roomErrText).
@@ -782,6 +831,7 @@
     if (!user) return null;   // идёт проверка сессии
 
     const name = user.display_name;
+    const avatar = avatarSrc(user);
     return (
       <div className="page">
         <div className="topbar">

@@ -51,6 +51,10 @@ public:
 
     AuthResult changeDisplayName(const QString &token, const QString &rawDisplayName);
 
+    // Версия аватарки: сам файл кладёт/удаляет HTTP-слой, сервис обновляет
+    // только счётчик в профиле (0 — аватарки нет, растёт с каждой загрузкой).
+    AuthResult setAvatarVer(const QString &token, int ver);
+
     // Периодическая чистка протухших сессий (зовётся по таймеру из main).
     int purgeExpiredSessions();
 

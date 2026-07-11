@@ -67,7 +67,7 @@ void ConferenceServer::onNewConnection()
             socket->request().rawHeader(QByteArrayLiteral("Cookie")), kSessionCookieName));
         if (!token.isEmpty()) {
             if (const std::optional<User> user = m_auth->userByToken(token))
-                session->setAccount(user->id, user->displayName);
+                session->setAccount(user->id, user->displayName, user->avatarVer);
         }
 
         connect(session, &ClientSession::textReceived,
@@ -100,6 +100,13 @@ void ConferenceServer::onText(ClientSession *session, const QString &text)
         handleState(session, msg);
     else if (type == QLatin1String("screen"))
         handleScreen(session, msg);
+    else if (type == QLatin1String("ping"))
+        // Замер задержки: клиент шлёт свою метку времени, сервер возвращает
+        // её как есть — RTT считается на клиенте.
+        session->sendJson(QJsonObject{
+            {"type", "pong"},
+            {"t", msg.value(QStringLiteral("t"))},
+        });
     else
         sendError(session, QStringLiteral("unknown_type"));
 }
@@ -202,13 +209,20 @@ void ConferenceServer::handleJoin(ClientSession *session, const QJsonObject &msg
     room->addParticipant(session);
     session->setRoom(room);
 
-    room->broadcastJson(QJsonObject{
+    QJsonObject joined{
         {"type", "participant_joined"},
         {"id", qint64(session->id())},
         {"name", session->name()},
         {"mic", session->micOn()},
         {"cam", session->camOn()},
-    }, session);
+    };
+    if (session->userId() >= 0) {
+        // Аватарка авторизованного: клиент строит URL по user_id и версии.
+        joined.insert(QStringLiteral("user_id"), session->userId());
+        if (session->avatarVer() > 0)
+            joined.insert(QStringLiteral("avatar"), session->avatarVer());
+    }
+    room->broadcastJson(joined, session);
 
     qInfo().noquote() << QStringLiteral("join: %1 (id=%2) -> room '%3', participants: %4")
                              .arg(name).arg(session->id()).arg(roomCode)

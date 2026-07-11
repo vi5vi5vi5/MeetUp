@@ -237,7 +237,7 @@
 <script src="assets/react.js"></script>
 <script src="assets/react-dom.js"></script>
 <script src="assets/babel.js"></script>
-<script src="assets/meetup-ds.js"></script>
+<script src="assets/meetup-ds.js?v=2"></script>
 <script src="assets/meetup-common.js"></script>
 <script src="assets/meetup-media.js?v=2"></script>
 <script type="text/babel">
@@ -286,6 +286,12 @@
     } catch (e) { /* приватный режим */ }
   }
 
+  // Аватарки лежат на сервере одним файлом на пользователя; версия в URL
+  // делает кэш вечным — после замены ссылка меняется сама.
+  function avatarUrl(userId, ver) {
+    return "/api/users/" + userId + "/avatar?v=" + ver;
+  }
+
   // Секрет E2E на комнату (только в этой вкладке, на сервер не уходит):
   // "p:<фраза>" или "k:<base64-ключ из ссылки>".
   const E2E_KEY = "meetup.e2e." + roomCode;
@@ -325,6 +331,10 @@
     // на комнату, закрепляется сервером.
     const [screenId, setScreenId] = useState(null);
     const [screenFrames, setScreenFrames] = useState(() => new Set());
+    // Закреплённый участник: его камера — во весь стейдж (клик по плитке),
+    // важнее демонстрации. Локальная настройка, на других не влияет.
+    const [pinnedId, setPinnedId] = useState(null);
+    const [ping, setPing] = useState(null);
     const [notice, setNotice] = useState("");
     const [lightbox, setLightbox] = useState(null);
     const [tab, setTab] = useState("chat");
@@ -340,8 +350,9 @@
 
     const msgRef = useRef(null);
     const selfVideoRef = useRef(null);
-    const stageSelfRef = useRef(null);   // превью собственной демонстрации на сцене
-    const fileRef = useRef(null);        // скрытый <input type=file> для картинок чата
+    const stageSelfRef = useRef(null);      // превью собственной демонстрации на сцене
+    const stagePinSelfRef = useRef(null);   // своя камера на сцене (закрепление себя)
+    const fileRef = useRef(null);           // скрытый <input type=file> для картинок чата
     const touchX = useRef(null);
 
     // Зеркало актуального состояния для обработчиков вне рендера
@@ -360,7 +371,7 @@
         roomPass: "", waitTimer: null, noticeTimer: null,
         camStream: null, micStream: null, displayStream: null,
         speakingUntil: new Map(), chatChain: Promise.resolve(),
-        mediaStarted: false, joinedAt: 0,
+        mediaStarted: false, joinedAt: 0, profile: null,
         // pref — выбранные устройства и гейны из localStorage.
         pref: av,
         // Медиадвижок (кодеки, приём, E2E) и ключ шифрования — только на клиенте.
@@ -505,6 +516,7 @@
           setPhase("live");
           setPeers((msg.participants || []).map(p => ({
             id: p.id, name: p.name, mic: p.mic !== false, cam: p.cam !== false,
+            userId: p.user_id || 0, avatar: p.avatar || 0,
           })));
           // История чата: новый участник видит разговор, который шёл до него
           // (зашифрованные сообщения читаются при наличии ключа).
@@ -520,6 +532,9 @@
           engine.clearPeers();
           engine.requestKeyframe();   // просим у вещающих опорные кадры
           pushState(stateRef.current.mic, stateRef.current.cam);
+          // Первый замер пинга сразу, дальше — по таймеру раз в 4 с.
+          if (M.ws && M.ws.readyState === 1)
+            M.ws.send(JSON.stringify({ type: "ping", t: Date.now() }));
           // Реконнект посреди своей демонстрации: слот на сервере освободился
           // при обрыве — просим закрепить его за нами снова.
           if (M.displayStream && M.ws && M.ws.readyState === 1)
@@ -530,6 +545,7 @@
         case "participant_joined":
           setPeers(prev => prev.some(p => p.id === msg.id) ? prev : [...prev, {
             id: msg.id, name: msg.name, mic: msg.mic !== false, cam: msg.cam !== false,
+            userId: msg.user_id || 0, avatar: msg.avatar || 0,
           }]);
           engine.forceKeyframe();   // новичку нужен опорный кадр, не ждать 3 с
           break;
@@ -541,12 +557,17 @@
           dropFromSet(setLockedIds, msg.id);
           dropFromSet(setScreenFrames, msg.id);
           setScreenId(cur => (cur === msg.id ? null : cur));
+          setPinnedId(cur => (cur === msg.id ? null : cur));
+          break;
+        case "pong":
+          setPing(Math.max(0, Date.now() - Number(msg.t)));
           break;
         case "screen":
           // Сервер закрепил/освободил демонстрацию. Своё подтверждение —
           // сигнал начать слать кадры экрана.
           if (msg.on) {
             setScreenId(msg.id);
+            setPinnedId(null);   // новая демонстрация выходит на сцену
             if (msg.id === M.myId && M.displayStream) {
               engine.startScreen(M.displayStream);
               setSharing(true);
@@ -1116,6 +1137,7 @@
         // с аккаунтом по куке в WS-хендшейке и выдаст постоянный id.
         const me = await MeetUp.authMe();
         if (me.ok && me.body && me.body.user) {
+          M.profile = me.body.user;   // id и avatar_ver — для своей плитки
           nameRef.current = me.body.user.display_name;
           MeetUp.saveName(nameRef.current);
           setIsAccount(true);
@@ -1158,6 +1180,12 @@
         }
       }, 250);
 
+      // Замер пинга: метка времени туда — эхо обратно (см. case "pong").
+      const pingTimer = setInterval(() => {
+        if (M.ws && M.ws.readyState === 1)
+          M.ws.send(JSON.stringify({ type: "ping", t: Date.now() }));
+      }, 4000);
+
       // Таймер «в эфире».
       const elapsedTimer = setInterval(() => {
         if (!M.joinedAt) return;
@@ -1176,7 +1204,7 @@
         const tag = (e.target && e.target.tagName) || "";
         if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
         if (stateRef.current.settingsOpen) return;
-        if (stateRef.current.screenId != null) return;   // при демонстрации страниц нет
+        if (stateRef.current.stageMode) return;   // в режиме сцены страниц нет
         if (e.key === "ArrowLeft") setPage(p => Math.max(0, p - 1));
         if (e.key === "ArrowRight") setPage(p => Math.min(stateRef.current.pages - 1, p + 1));
       };
@@ -1191,6 +1219,7 @@
         mq.removeEventListener("change", updMq);
         clearInterval(staleTimer);
         clearInterval(speakTimer);
+        clearInterval(pingTimer);
         clearInterval(elapsedTimer);
         clearTimeout(M.noticeTimer);
         window.removeEventListener("keydown", onKey);
@@ -1219,35 +1248,56 @@
         const p = stage.play();
         if (p && p.catch) p.catch(() => {});
       }
+      // Своя камера на сцене (когда закрепили себя); поток тот же, что в
+      // плёнке — MediaStream спокойно играет в двух <video> сразу.
+      const pin = stagePinSelfRef.current;
+      if (pin && M.camStream && pin.srcObject !== M.camStream) {
+        pin.srcObject = M.camStream;
+        const p = pin.play();
+        if (p && p.catch) p.catch(() => {});
+      }
     });
 
     // ================= Плитки и страницы =================
 
+    const selfAvatar = M.profile && M.profile.avatar_ver > 0
+      ? avatarUrl(M.profile.id, M.profile.avatar_ver) : null;
     const tiles = [{
       key: "self", id: myId, name: nameRef.current || "Вы", self: true,
       mic, cam, speaking: myId != null && speaking.has(myId), hasFrame: true,
+      avatar: selfAvatar,
     }].concat(peers.map(p => ({
       key: "p" + p.id, id: p.id, name: p.name, self: false,
       mic: p.mic, cam: p.cam, speaking: speaking.has(p.id), hasFrame: hasFrame.has(p.id),
+      avatar: p.userId && p.avatar ? avatarUrl(p.userId, p.avatar) : null,
     })));
 
-    // Идёт демонстрация экрана: сцена + плёнка камер вместо сетки.
+    // Режим сцены: демонстрация экрана или закреплённый участник —
+    // сцена + плёнка камер вместо сетки. Закрепление важнее демонстрации.
     const screenActive = screenId != null;
     const screenSelf = screenActive && myId != null && screenId === myId;
     const sharerName = screenSelf
       ? "Вы"
       : ((peers.find(p => p.id === screenId) || {}).name || "");
     const stageReady = screenSelf || screenFrames.has(screenId);
+    const pinnedTile = pinnedId != null ? tiles.find(t => t.id === pinnedId) : null;
+    const pinActive = !!pinnedTile;
+    const stageMode = screenActive || pinActive;
+
+    function togglePin(t) {
+      if (t.id == null) return;
+      setPinnedId(cur => (cur === t.id ? null : t.id));
+    }
 
     const perPage = isMobile ? 6 : 9;
-    const pages = screenActive ? 1 : Math.max(1, Math.ceil(tiles.length / perPage));
+    const pages = stageMode ? 1 : Math.max(1, Math.ceil(tiles.length / perPage));
     const curPage = Math.min(page, pages - 1);
     const visible = tiles.slice(curPage * perPage, curPage * perPage + perPage);
 
     // Актуальный снимок состояния для обработчиков вне рендера
     // (WS-сообщения, таймеры, аудио-callback).
     useEffect(() => {
-      stateRef.current = { phase, mic, cam, sharing, screenId, tab, panelOpen, isMobile, pages, settingsOpen };
+      stateRef.current = { phase, mic, cam, sharing, screenId, stageMode, tab, panelOpen, isMobile, pages, settingsOpen };
     });
 
     // Индикатор уровня микрофона — обновляется только при открытых настройках.
@@ -1280,18 +1330,29 @@
 
     function renderTile(t, idx, film) {
       const locked = !t.self && lockedIds.has(t.id);
+      // Камера закреплённого рисуется на сцене: у чужого потока один canvas
+      // (второй перехватил бы кадры у сцены) — в плёнке остаётся аватарка.
+      const onStage = pinActive && !t.self && t.id === pinnedId;
       let media = null;
       if (t.self) {
         if (cam)
           media = <video ref={selfVideoRef} className="tile-media mirror"
                          autoPlay muted playsInline />;
-      } else if (t.cam && t.hasFrame && !locked) {
+      } else if (t.cam && t.hasFrame && !locked && !onStage) {
         media = <canvas className="tile-media" ref={engine.videoSinkRef(t.id)} />;
       }
+      if (!media && t.avatar && !locked)
+        media = <img className="tile-media" src={t.avatar} alt="" />;
       const spanSelf = !film && featured && tiles.length === 3 && idx === 0;
+      const pinned = pinActive && t.id === pinnedId;
       return (
         <div key={t.key} className={film ? "film-cell" : undefined}
-             style={film ? undefined : { minHeight: 0, ...(spanSelf ? { gridRow: "1 / 3" } : null) }}>
+             onClick={() => togglePin(t)}
+             title={pinned ? "Вернуть обычный вид" : "Развернуть на весь экран"}
+             style={{ cursor: "pointer",
+                      ...(pinned ? { outline: "2px solid var(--accent)", outlineOffset: -2,
+                                     borderRadius: "var(--radius-lg)" } : null),
+                      ...(film ? null : { minHeight: 0, ...(spanSelf ? { gridRow: "1 / 3" } : null) }) }}>
           <VideoTile name={t.name} self={t.self} muted={!t.mic} speaking={t.speaking}
                      style={{ aspectRatio: "auto", height: "100%" }}>
             {(media || locked) ? <>
@@ -1304,6 +1365,23 @@
           </VideoTile>
         </div>
       );
+    }
+
+    // Что показывает сцена при закреплённом участнике.
+    function stagePinMedia() {
+      const t = pinnedTile;
+      if (t.self) {
+        if (cam)
+          return <video ref={stagePinSelfRef} className="stage-media mirror"
+                        autoPlay muted playsInline />;
+      } else if (t.cam && t.hasFrame && !lockedIds.has(t.id)) {
+        return <canvas key={"pin" + t.id} className="stage-media"
+                       ref={engine.videoSinkRef(t.id)} />;
+      }
+      if (t.avatar) return <img className="stage-media" src={t.avatar} alt="" />;
+      return <div className="stage-wait">
+        {!t.self && t.cam ? "Подключаем камеру…" : "Камера выключена"}
+      </div>;
     }
 
     function onTouchStart(e) { touchX.current = e.touches[0].clientX; }
@@ -1325,6 +1403,11 @@
       };
     }
 
+    // Пинг: до 80 мс — отлично, до 200 — терпимо, дальше подсвечиваем бедой.
+    function pingTone(ms) {
+      return ms < 80 ? "accent" : ms < 200 ? "muted" : "danger";
+    }
+
     // Содержимое пузыря сообщения: картинка (или её заглушка) + текст.
     function msgContent(m) {
       const img = m.image
@@ -1342,7 +1425,6 @@
       </>;
     }
 
-    const shortCode = roomCode.length > 10 ? roomCode.slice(0, 8) + "…" : roomCode;
     const participantRows = [{ id: "self", name: nameRef.current || "Вы", you: true, muted: !mic }]
       .concat(peers.map(p => ({ id: p.id, name: p.name, you: false, muted: !p.mic })));
 
@@ -1366,7 +1448,10 @@
               <span title="Сквозное шифрование включено: видео, голос и чат зашифрованы ключом участников">
                 <Badge tone="accent">E2E 🔒</Badge>
               </span>}
-            <span title={roomCode}><Badge tone="accent">{shortCode}</Badge></span>
+            {phase === "live" && ping != null &&
+              <span title="Задержка до сервера (туда-обратно)">
+                <Badge tone={pingTone(ping)}>{ping + " мс"}</Badge>
+              </span>}
             <IconButton icon="copy" size="sm" label="Скопировать ссылку-приглашение" onClick={openShare} />
             <IconButton icon={theme === "dark" ? "sun" : "moon"} size="sm" label="Сменить тему" onClick={toggleTheme} />
           </div>
@@ -1374,20 +1459,30 @@
           <div className="gridwrap"
                onTouchStart={pages > 1 ? onTouchStart : undefined}
                onTouchEnd={pages > 1 ? onTouchEnd : undefined}>
-            {screenActive ? <>
+            {stageMode ? <>
               <div className="film">
                 {tiles.map((t, i) => renderTile(t, i, true))}
               </div>
-              <div className="stagebox">
-                {screenSelf
-                  ? <video ref={stageSelfRef} className="stage-media" autoPlay muted playsInline />
-                  : <canvas key={"scr" + screenId} className="stage-media"
-                            ref={engine.screenSinkRef(screenId)} />}
-                {!stageReady && <div className="stage-wait">Демонстрация начинается…</div>}
-                <div className="stage-chip">
-                  <Icon name="screen" size={14} />
-                  {screenSelf ? "Вы демонстрируете экран" : "Демонстрация — " + (sharerName || "участник")}
-                </div>
+              <div className="stagebox"
+                   onClick={pinActive ? () => setPinnedId(null) : undefined}
+                   style={pinActive ? { cursor: "zoom-out" } : undefined}>
+                {pinActive ? <>
+                  {stagePinMedia()}
+                  <div className="stage-chip">
+                    <Icon name="video" size={14} />
+                    {(pinnedTile.self ? "Вы" : pinnedTile.name) + " — нажмите, чтобы вернуть"}
+                  </div>
+                </> : <>
+                  {screenSelf
+                    ? <video ref={stageSelfRef} className="stage-media" autoPlay muted playsInline />
+                    : <canvas key={"scr" + screenId} className="stage-media"
+                              ref={engine.screenSinkRef(screenId)} />}
+                  {!stageReady && <div className="stage-wait">Демонстрация начинается…</div>}
+                  <div className="stage-chip">
+                    <Icon name="screen" size={14} />
+                    {screenSelf ? "Вы демонстрируете экран" : "Демонстрация — " + (sharerName || "участник")}
+                  </div>
+                </>}
               </div>
             </> : (
               <div className="grid" style={gridStyle}>
@@ -1496,7 +1591,7 @@
               <div className="composer">
                 <input ref={fileRef} type="file" accept="image/*"
                        style={{ display: "none" }} onChange={onPickImage} />
-                <IconButton icon="image" label="Отправить изображение"
+                <IconButton icon="paperclip" label="Прикрепить изображение"
                             onClick={() => fileRef.current && fileRef.current.click()} />
                 <Input value={draft} placeholder="Сообщение…" autoComplete="off" maxLength={2000}
                        onChange={e => setDraft(e.target.value)}

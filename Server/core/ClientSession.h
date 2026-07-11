@@ -29,10 +29,12 @@ public:
     // -1 — аноним. Авторизованный получает постоянный id и имя из профиля.
     int userId() const { return m_userId; }
     QString accountName() const { return m_accountName; }
-    void setAccount(int userId, const QString &displayName)
+    int avatarVer() const { return m_avatarVer; }
+    void setAccount(int userId, const QString &displayName, int avatarVer)
     {
         m_userId = userId;
         m_accountName = displayName;
+        m_avatarVer = avatarVer;
     }
 
     ConferenceRoom *room() const { return m_room; }
@@ -68,6 +70,7 @@ private:
     QString m_name;
     int m_userId = -1;                  // id аккаунта; -1 — аноним
     QString m_accountName;              // отображаемое имя из профиля
+    int m_avatarVer = 0;                // версия аватарки на момент подключения
     ConferenceRoom *m_room = nullptr;   // nullptr до join
     bool m_micOn = true;
     bool m_camOn = true;

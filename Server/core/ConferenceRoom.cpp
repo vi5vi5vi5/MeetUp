@@ -55,6 +55,12 @@ QJsonArray ConferenceRoom::participantsJson() const
         o["name"] = s->name();
         o["mic"] = s->micOn();
         o["cam"] = s->camOn();
+        if (s->userId() >= 0) {
+            // Аватарка авторизованного: клиент строит URL по user_id и версии.
+            o["user_id"] = s->userId();
+            if (s->avatarVer() > 0)
+                o["avatar"] = s->avatarVer();
+        }
         arr.append(o);
     }
     return arr;

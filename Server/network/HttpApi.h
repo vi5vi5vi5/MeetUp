@@ -15,11 +15,15 @@ struct HttpRequest;
 struct PersonalRoom;
 
 // Ответ API: HTTP-статус, JSON-тело и дополнительные заголовки (Set-Cookie).
+// Если contentType непуст, вместо JSON уходит rawBody (бинарные аватарки).
 struct ApiResponse
 {
     int status = 200;
     QJsonObject body;
     QList<QPair<QByteArray, QByteArray>> headers;
+    QByteArray rawBody;
+    QByteArray contentType;
+    QByteArray cacheControl;   // пусто — no-store, как у остальных ответов API
 };
 
 // Маршрутизация /api/*: разбирает запрос, зовёт сервисы, собирает JSON.
@@ -35,7 +39,7 @@ public:
 
     HttpApi(std::shared_ptr<AuthService> auth,
             std::shared_ptr<PersonalRoomService> personalRooms,
-            RoomRegistry *rooms);
+            RoomRegistry *rooms, const QString &dataDir);
 
     // false — путь не из /api, пусть обрабатывает статика. true — маршрут
     // взят в работу и respond будет позван (возможно, уже позван).
@@ -47,6 +51,14 @@ private:
     ApiResponse handleLogout(const HttpRequest &req);
     ApiResponse handleMe(const HttpRequest &req);
     ApiResponse handlePatchMe(const HttpRequest &req);
+
+    // Аватарка: один файл на пользователя (<data>/avatars/<id>.jpg),
+    // новая перезаписывает старую — истории нет. POST/DELETE — своя,
+    // GET /api/users/<id>/avatar — публичная раздача с вечным кэшем
+    // (URL меняется через ?v=<avatar_ver>).
+    ApiResponse handleMyAvatar(const HttpRequest &req);
+    ApiResponse handleUserAvatar(const QString &idStr);
+    QString avatarPath(int userId) const;
     ApiResponse handleCreateRoom();
     ApiResponse handleCheckRoom(const QString &code);
 
@@ -67,4 +79,9 @@ private:
     std::shared_ptr<AuthService> m_auth;
     std::shared_ptr<PersonalRoomService> m_personalRooms;
     RoomRegistry *m_rooms;   // не владеет (общий с ConferenceServer)
+    QString m_dataDir;       // персистентные данные (БД, аватарки)
+
+    // Аватарка ужимается клиентом до 256px JPEG (~10–40 КБ); потолок
+    // декодированного файла — защита от заливки гигантов.
+    static constexpr int kMaxAvatarBytes = 256 * 1024;
 };

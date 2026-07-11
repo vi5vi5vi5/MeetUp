@@ -266,6 +266,21 @@ AuthResult AuthService::changeDisplayName(const QString &token, const QString &r
     return r;
 }
 
+AuthResult AuthService::setAvatarVer(const QString &token, int ver)
+{
+    std::optional<User> user = userByToken(token);
+    if (!user.has_value())
+        return AuthResult::fail("no_session");
+
+    user->avatarVer = qMax(0, ver);
+    m_users->save(*user);
+
+    AuthResult r;
+    r.ok = true;
+    r.user = *user;
+    return r;
+}
+
 int AuthService::purgeExpiredSessions()
 {
     return m_sessions->removeExpired(QDateTime::currentMSecsSinceEpoch());

@@ -96,7 +96,7 @@ int main(int argc, char *argv[])
     auto auth = std::make_shared<AuthService>(users, sessions);
     auto rooms = std::make_shared<PersonalRoomService>(personalRooms);
 
-    HttpApi api(auth, rooms, &registry);
+    HttpApi api(auth, rooms, &registry, dataDir);
     ConferenceServer conference(wsPort, &registry, auth, rooms);
     HttpFileServer http(httpPort, webRoot, &api);
 

@@ -1,7 +1,10 @@
 #include "network/HttpApi.h"
 
 #include <QDebug>
+#include <QDir>
+#include <QFile>
 #include <QJsonArray>
+#include <QSaveFile>
 
 #include "core/ClientSession.h"
 #include "core/ConferenceRoom.h"
@@ -17,8 +20,9 @@ constexpr qint64 kCookieMaxAgeS = AuthService::kSessionTtlMs / 1000;
 
 HttpApi::HttpApi(std::shared_ptr<AuthService> auth,
                  std::shared_ptr<PersonalRoomService> personalRooms,
-                 RoomRegistry *rooms)
-    : m_auth(std::move(auth)), m_personalRooms(std::move(personalRooms)), m_rooms(rooms)
+                 RoomRegistry *rooms, const QString &dataDir)
+    : m_auth(std::move(auth)), m_personalRooms(std::move(personalRooms)), m_rooms(rooms),
+      m_dataDir(dataDir)
 {
 }
 
@@ -51,6 +55,21 @@ bool HttpApi::route(const HttpRequest &req, const Respond &respond)
         else respond(err(405, QStringLiteral("method_not_allowed")));
         return true;
     }
+    if (p == QLatin1String("/api/me/avatar")) {
+        if (m == "POST" || m == "DELETE") respond(handleMyAvatar(req));
+        else respond(err(405, QStringLiteral("method_not_allowed")));
+        return true;
+    }
+    if (p.startsWith(QLatin1String("/api/users/")) && p.endsWith(QLatin1String("/avatar"))) {
+        if (m == "GET") {
+            const int base = int(qstrlen("/api/users/"));
+            respond(handleUserAvatar(p.mid(base, p.size() - base - int(qstrlen("/avatar")))));
+        } else {
+            respond(err(405, QStringLiteral("method_not_allowed")));
+        }
+        return true;
+    }
+
     if (p == QLatin1String("/api/me/room")) {
         respond(handleMyRoom(req));
         return true;
@@ -162,6 +181,81 @@ ApiResponse HttpApi::handlePatchMe(const HttpRequest &req)
     if (!res.ok)
         return err(statusForError(res.error), res.error);
     return ApiResponse{200, QJsonObject{{"user", res.user.publicJson()}}, {}};
+}
+
+// ---------- Аватарки ----------
+
+QString HttpApi::avatarPath(int userId) const
+{
+    return QDir(m_dataDir).filePath(QStringLiteral("avatars/%1.jpg").arg(userId));
+}
+
+// POST {"image": "<base64 JPEG>"} — заменить; DELETE — убрать. Файл один на
+// пользователя и перезаписывается на месте: старые аватарки не копятся.
+ApiResponse HttpApi::handleMyAvatar(const HttpRequest &req)
+{
+    const QString token = sessionToken(req);
+    const std::optional<User> user = m_auth->userByToken(token);
+    if (!user.has_value())
+        return err(401, QStringLiteral("no_session"));
+
+    if (req.method == "DELETE") {
+        QFile::remove(avatarPath(user->id));
+        const AuthResult res = m_auth->setAvatarVer(token, 0);
+        if (!res.ok)
+            return err(statusForError(res.error), res.error);
+        return ApiResponse{200, QJsonObject{{"user", res.user.publicJson()}}, {}};
+    }
+
+    bool okJson = false;
+    const QJsonObject body = req.jsonBody(&okJson);
+    if (!okJson)
+        return err(400, QStringLiteral("invalid_json"));
+
+    const auto decoded = QByteArray::fromBase64Encoding(
+        body.value(QLatin1String("image")).toString().toLatin1(),
+        QByteArray::AbortOnBase64DecodingErrors);
+    if (!decoded)
+        return err(400, QStringLiteral("bad_image"));
+    const QByteArray &img = *decoded;
+    // Клиент шлёт JPEG (canvas.toDataURL); всё остальное — не наш файл.
+    if (img.size() < 4 || img.size() > kMaxAvatarBytes
+        || !img.startsWith(QByteArrayLiteral("\xFF\xD8\xFF")))
+        return err(400, QStringLiteral("bad_image"));
+
+    if (!QDir(m_dataDir).mkpath(QStringLiteral("avatars")))
+        return err(500, QStringLiteral("storage_error"));
+    QSaveFile file(avatarPath(user->id));
+    if (!file.open(QIODevice::WriteOnly))
+        return err(500, QStringLiteral("storage_error"));
+    file.write(img);
+    if (!file.commit())
+        return err(500, QStringLiteral("storage_error"));
+
+    const AuthResult res = m_auth->setAvatarVer(token, user->avatarVer + 1);
+    if (!res.ok)
+        return err(statusForError(res.error), res.error);
+    return ApiResponse{200, QJsonObject{{"user", res.user.publicJson()}}, {}};
+}
+
+// Публичная раздача: URL versioned (?v=<avatar_ver>), поэтому кэш вечный —
+// после замены клиент получает новую версию по новому URL.
+ApiResponse HttpApi::handleUserAvatar(const QString &idStr)
+{
+    bool okId = false;
+    const int id = idStr.toInt(&okId);
+    if (!okId || id <= 0)
+        return err(404, QStringLiteral("no_avatar"));
+
+    QFile file(avatarPath(id));
+    if (!file.open(QIODevice::ReadOnly))
+        return err(404, QStringLiteral("no_avatar"));
+
+    ApiResponse resp;
+    resp.rawBody = file.readAll();
+    resp.contentType = QByteArrayLiteral("image/jpeg");
+    resp.cacheControl = QByteArrayLiteral("public, max-age=31536000, immutable");
+    return resp;
 }
 
 // ---------- Комнаты ----------
