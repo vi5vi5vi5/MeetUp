@@ -65,20 +65,29 @@
     }
     registerProcessor("mu-capture", MuCapture);`;
 
-  // ---- Плеер: очередь чанков + предбуфер 60 мс, дроп при лаге >240 мс ----
+  // ---- Плеер: очередь чанков + предбуфер 60 мс, дроп при лаге >160 мс.
+  // Раз в ~170 мс шлёт наружу глубину буфера (в сэмплах) — по ней приёмник
+  // придерживает видеокадры, чтобы губы совпадали со звуком. ----
   const PLAYER_WORKLET = `
     class MuPlayer extends AudioWorkletProcessor {
       constructor() {
         super();
         this.queue = []; this.cur = null; this.off = 0; this.priming = true;
+        this.ticks = 0;
         this.port.onmessage = (e) => {
           this.queue.push(e.data);
-          if (this.queue.length > 12) this.queue.splice(0, this.queue.length - 6);
+          if (this.queue.length > 8) this.queue.splice(0, this.queue.length - 4);
         };
+      }
+      depth() {
+        let d = this.cur ? this.cur.length - this.off : 0;
+        for (const q of this.queue) d += q.length;
+        return d;
       }
       process(_in, outputs) {
         const out = outputs[0] && outputs[0][0];
         if (!out) return true;
+        if (++this.ticks % 64 === 0) this.port.postMessage(this.depth());
         if (this.priming) {
           if (this.queue.length < 3) return true;   // тишина, копим предбуфер
           this.priming = false;
@@ -330,8 +339,9 @@
           output: (chunk) => {
             const u8 = new Uint8Array(chunk.byteLength);
             chunk.copyTo(u8);
-            enqueueSend(MSG.AUDIO_CODED, 0, OPUS_ID,
-                        BigInt(Math.max(0, Math.round(chunk.timestamp || 0))), u8, "a");
+            // Метка — стенные часы отправителя (мс): у видео та же шкала,
+            // приёмник синхронизирует картинку со звуком по этим меткам.
+            enqueueSend(MSG.AUDIO_CODED, 0, OPUS_ID, BigInt(Date.now()), u8, "a");
           },
           error: () => { st.aenc = null; },
         });
@@ -407,8 +417,9 @@
               output: (chunk) => {
                 const u8 = new Uint8Array(chunk.byteLength);
                 chunk.copyTo(u8);
+                // Стенные часы (мс) — общая шкала с аудио, см. ensureAudioEncoder.
                 enqueueSend(codedType, chunk.type === "key" ? FLAG_KEYFRAME : 0, choice.id,
-                            BigInt(Math.max(0, Math.round(chunk.timestamp || 0))), u8, lane);
+                            BigInt(Date.now()), u8, lane);
               },
               error: () => { s.venc = null; },   // пересоздастся следующим кадром
             });
@@ -501,6 +512,9 @@
               cam: { dec: null, codec: 0, awaitKey: true },
               scr: { dec: null, codec: 0, awaitKey: true },
               adec: null, player: null,
+              // Синхронизация губ: часы звука (метка чанка + когда встал в
+              // буфер), глубина буфера плеера и придержанные видеокадры.
+              aClock: null, aDepth: 0, frameQ: [], drainTimer: null,
               pcmCursor: 0, fails: 0, locked: false };
         st.peers.set(id, p);
       }
@@ -539,8 +553,8 @@
       setLocked(peer, sender, false);
 
       switch (type) {
-        case MSG.VIDEO_CODED:  decodeVideo(peer.cam, st.sinks, false, sender, flags, codecId, ts, body); break;
-        case MSG.SCREEN_CODED: decodeVideo(peer.scr, st.screenSinks, true, sender, flags, codecId, ts, body); break;
+        case MSG.VIDEO_CODED:  decodeVideo(peer, peer.cam, st.sinks, false, sender, flags, codecId, ts, body); break;
+        case MSG.SCREEN_CODED: decodeVideo(peer, peer.scr, st.screenSinks, true, sender, flags, codecId, ts, body); break;
         case MSG.VIDEO_JPEG:   paintJpeg(st.sinks, false, sender, body); break;
         case MSG.SCREEN_JPEG:  paintJpeg(st.screenSinks, true, sender, body); break;
         case MSG.AUDIO_CODED:  decodeAudio(peer, codecId, ts, body, sender); break;
@@ -555,13 +569,13 @@
     }
 
     // sub — peer.cam или peer.scr: у камеры и экрана свои декодеры и синки.
-    function decodeVideo(sub, sinks, isScreen, sender, flags, codecId, ts, body) {
+    function decodeVideo(peer, sub, sinks, isScreen, sender, flags, codecId, ts, body) {
       if (!CODEC_BY_ID[codecId]) return;
       if (!sub.dec || sub.codec !== codecId) {
         if (sub.dec) { try { sub.dec.close(); } catch (e) {} }
         if (typeof VideoDecoder === "undefined") return;
         sub.dec = new VideoDecoder({
-          output: (frame) => paintFrame(sinks, isScreen, sender, frame),
+          output: (frame) => paintFrame(peer, sinks, isScreen, sender, frame),
           error: () => { sub.dec = null; sub.awaitKey = true; requestKeyframe(); },
         });
         try { sub.dec.configure({ codec: CODEC_BY_ID[codecId], optimizeForLatency: true }); }
@@ -583,7 +597,51 @@
       }
     }
 
-    function paintFrame(sinks, isScreen, sender, frame) {
+    // Где сейчас «играющий» звук пира в шкале часов отправителя (мс):
+    // метка чанка, вставшего в буфер, минус глубина буфера, плюс прошедшее
+    // время. null — звука нет или он устарел (мик выключен) — видео не ждёт.
+    function audioPlayhead(peer) {
+      if (!peer.aClock) return null;
+      const age = performance.now() - peer.aClock.at;
+      if (age > 700) return null;
+      return peer.aClock.ts - peer.aDepth / (AUDIO_RATE / 1000) + age;
+    }
+
+    function paintFrame(peer, sinks, isScreen, sender, frame) {
+      // Синхронизация губ: звук доходит до ушей позже картинки (джиттер-буфер),
+      // поэтому кадр камеры, обогнавший звук, придерживается до его метки.
+      // Экран не придерживаем: там важна отзывчивость, не губы. Верхняя
+      // граница отсекает бессмыслицу (другая шкала у старого клиента, скачок
+      // часов) — тогда рисуем сразу, как раньше.
+      if (!isScreen && peer) {
+        const ph = audioPlayhead(peer);
+        const lead = ph == null ? 0 : frame.timestamp - ph;
+        if (lead > 30 && lead < 1200) {
+          peer.frameQ.push(frame);
+          if (peer.frameQ.length > 12) peer.frameQ.shift().close();
+          drainFramesLater(peer, sinks, sender, lead);
+          return;
+        }
+      }
+      drawFrame(sinks, isScreen, sender, frame);
+    }
+
+    function drainFramesLater(peer, sinks, sender, delayMs) {
+      if (peer.drainTimer) return;
+      peer.drainTimer = setTimeout(() => {
+        peer.drainTimer = null;
+        const ph = audioPlayhead(peer);
+        while (peer.frameQ.length) {
+          const f = peer.frameQ[0];
+          const lead = ph == null ? 0 : f.timestamp - ph;
+          if (lead > 30) { drainFramesLater(peer, sinks, sender, lead); return; }
+          peer.frameQ.shift();
+          drawFrame(sinks, false, sender, f);
+        }
+      }, Math.max(15, Math.min(delayMs, 250)));
+    }
+
+    function drawFrame(sinks, isScreen, sender, frame) {
       const canvas = sinks.get(sender);
       if (canvas) {
         const w = frame.displayWidth, h = frame.displayHeight;
@@ -640,6 +698,7 @@
 
     async function playDecoded(peer, sender, ad) {
       const n = ad.numberOfFrames;
+      const adTs = ad.timestamp;   // метка чанка = Date.now() отправителя (мс)
       const f32 = new Float32Array(n);
       try {
         // Моно: planar и interleaved совпадают; формат зависит от браузера.
@@ -661,8 +720,11 @@
       if (!peer.player) {
         peer.player = new AudioWorkletNode(st.ctx, "mu-player",
           { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [1] });
+        // Плеер репортит глубину буфера — по ней считается audioPlayhead.
+        peer.player.port.onmessage = (e) => { peer.aDepth = e.data; };
         peer.player.connect(st.masterGain);
       }
+      peer.aClock = { ts: adTs, at: performance.now() };
       peer.player.port.postMessage(f32, [f32.buffer]);
     }
 
@@ -711,6 +773,8 @@
         if (p.scr.dec) { try { p.scr.dec.close(); } catch (e) {} }
         if (p.adec) { try { p.adec.close(); } catch (e) {} }
         if (p.player) { try { p.player.disconnect(); } catch (e) {} }
+        if (p.drainTimer) clearTimeout(p.drainTimer);
+        for (const f of p.frameQ) { try { f.close(); } catch (e) {} }
         st.peers.delete(id);
       }
       st.lastFrameAt.delete(id);

@@ -38,6 +38,14 @@
 
   /* видео/кадры внутри плитки */
   .tile-media { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+  /* аватарка вместо выключенной камеры: кружок по центру, как в шапке */
+  .tile-ava { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+  .tile-ava img {
+    width: 38%; max-width: 96px; min-width: 40px; aspect-ratio: 1;
+    border-radius: 50%; object-fit: cover;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, .28);
+  }
+  .stage-ava img { max-width: 168px; width: 20%; min-width: 72px; }
   .mirror { transform: scaleX(-1); }
 
   /* Демонстрация экрана: плёнка камер сверху + сцена. contain, а не cover —
@@ -237,9 +245,9 @@
 <script src="assets/react.js"></script>
 <script src="assets/react-dom.js"></script>
 <script src="assets/babel.js"></script>
-<script src="assets/meetup-ds.js?v=2"></script>
-<script src="assets/meetup-common.js"></script>
-<script src="assets/meetup-media.js?v=2"></script>
+<script src="assets/meetup-ds.js?v=3"></script>
+<script src="assets/meetup-common.js?v=3"></script>
+<script src="assets/meetup-media.js?v=3"></script>
 <script type="text/babel">
   const { useState, useRef, useEffect } = React;
   const { Badge, Icon, IconButton, Input, Field, Button, Card, VideoTile, ParticipantRow, ChatMessage, ControlDock } =
@@ -1348,7 +1356,7 @@
         media = <canvas className="tile-media" ref={engine.videoSinkRef(t.id)} />;
       }
       if (!media && t.avatar && !locked)
-        media = <img className="tile-media" src={t.avatar} alt="" />;
+        media = <div className="tile-ava"><img src={t.avatar} alt="" /></div>;
       const spanSelf = !film && featured && tiles.length === 3 && idx === 0;
       const pinned = pinActive && t.id === pinnedId;
       return (
@@ -1384,7 +1392,7 @@
         return <canvas key={"pin" + t.id} className="stage-media"
                        ref={engine.videoSinkRef(t.id)} />;
       }
-      if (t.avatar) return <img className="stage-media" src={t.avatar} alt="" />;
+      if (t.avatar) return <div className="tile-ava stage-ava"><img src={t.avatar} alt="" /></div>;
       return <div className="stage-wait">
         {!t.self && t.cam ? "Подключаем камеру…" : "Камера выключена"}
       </div>;
@@ -1481,9 +1489,16 @@
                 </> : <>
                   {screenSelf
                     ? <video ref={stageSelfRef} className="stage-media" autoPlay muted playsInline />
-                    : <canvas key={"scr" + screenId} className="stage-media"
-                              ref={engine.screenSinkRef(screenId)} />}
-                  {!stageReady && <div className="stage-wait">Демонстрация начинается…</div>}
+                    : lockedIds.has(screenId)
+                      // Демонстрация зашифрована, ключа нет: canvas не рисуем
+                      // вовсе, иначе на нём висел бы последний открытый кадр.
+                      ? <div className="tile-lock">
+                          <div><b>🔒</b>Зашифровано — нужен ключ</div>
+                        </div>
+                      : <canvas key={"scr" + screenId} className="stage-media"
+                                ref={engine.screenSinkRef(screenId)} />}
+                  {!stageReady && !lockedIds.has(screenId) &&
+                    <div className="stage-wait">Демонстрация начинается…</div>}
                   <div className="stage-chip">
                     <Icon name="screen" size={14} />
                     {screenSelf ? "Вы демонстрируете экран" : "Демонстрация — " + (sharerName || "участник")}
