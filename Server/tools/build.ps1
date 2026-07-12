@@ -1,5 +1,5 @@
 # Сборка MeetUpServer (Qt6 MinGW).
-# Запуск:  powershell -ExecutionPolicy Bypass -File build.ps1
+# Запуск:  powershell -ExecutionPolicy Bypass -File tools\build.ps1
 $ErrorActionPreference = 'Stop'
 
 # --- Пути к комплекту Qt и инструментам (правь здесь, если Qt переедет) ---
@@ -8,7 +8,9 @@ $MinGW = 'P:\Qt\QTSHIT\Tools\mingw1310_64'
 $CMake = 'P:\Qt\QTSHIT\Tools\CMake_64\bin'
 $Ninja = 'P:\Qt\QTSHIT\Tools\Ninja'
 
-$src = $PSScriptRoot
+# Скрипт лежит в tools/; исходники (CMakeLists.txt) — в корне репозитория, на
+# уровень выше. build/ создаётся там же, рядом с исходниками.
+$src = Split-Path -Parent $PSScriptRoot
 $env:PATH = "$MinGW\bin;$CMake;$Ninja;$QtKit\bin;$env:PATH"
 
 Write-Host "== Configure ==" -ForegroundColor Cyan
