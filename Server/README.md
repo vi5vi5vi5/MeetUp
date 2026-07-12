@@ -84,8 +84,9 @@ powershell -ExecutionPolicy Bypass -File run.ps1
 `localhost`. Значит, с чужих устройств страница обязана открываться по
 **https**, а WebSocket — по **wss** (страница https не имеет права открыть
 `ws://`). Это делает nginx-прокси из [`proxy/`](proxy/README.md): терминирует
-TLS и разводит трафик внутрь. Домена нет, поэтому сертификат самоподписанный —
+TLS и разводит трафик внутрь. Без домена сертификат самоподписанный —
 браузер один раз предупредит: «Дополнительно → Перейти на сайт», это ожидаемо.
+С доменом выпускается доверенный сертификат Let's Encrypt (см. ниже).
 
 ```
 браузер ──► https://IP/    ──► proxy:443 ──► app:80    (веб-клиент)
@@ -101,15 +102,25 @@ docker compose up -d --build
 Затем открой **https://<IP-сервера>/**. Порт 80 отдаёт редирект на https.
 Переопределить порты хоста: `HTTPS_PORT=8443 HTTP_PORT=8081 docker compose up -d --build`.
 
+### С доменом (доверенный сертификат Let's Encrypt)
+
+Если домен указывает на сервер и порты 80/443 доступны из интернета, задай
+`DOMAIN` — прокси сам выпустит и будет продлевать сертификат Let's Encrypt:
+
+```bash
+DOMAIN=meetup.linkpc.net LETSENCRYPT_EMAIL=you@mail.com docker compose up -d --build
+```
+
+Браузер больше не предупреждает. Без `DOMAIN` поведение прежнее (самоподписанный).
+В режиме с доменом `HTTP_PORT` переопределять нельзя — Let's Encrypt проверяет
+домен через внешний порт 80. Подробности — в [`proxy/README.md`](proxy/README.md).
+
 Обновление с GitHub и пересборка — одной командой (см. [`tools/`](tools/README.md)):
 
 ```bash
 ./tools/update.sh                                                 # Linux / macOS / Git Bash
 powershell -ExecutionPolicy Bypass -File tools\update.ps1         # Windows
 ```
-
-Появится домен — самоподписанный сертификат меняется на Let's Encrypt,
-остальная схема не трогается (см. [`proxy/README.md`](proxy/README.md)).
 
 ## Проверка видео
 

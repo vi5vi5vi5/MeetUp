@@ -5,17 +5,23 @@
 #    powershell -ExecutionPolicy Bypass -File tools\update.ps1 -Force
 #  Переопределить порты хоста:
 #    powershell -ExecutionPolicy Bypass -File tools\update.ps1 -HttpsPort 8443 -HttpPort 8081
+#  С доменом и Let's Encrypt (HttpPort переопределять нельзя):
+#    powershell -ExecutionPolicy Bypass -File tools\update.ps1 -Domain meetup.linkpc.net -Email you@mail.com
 # ============================================================
 param(
     [switch]$Force,
     [int]$HttpPort = 0,
-    [int]$HttpsPort = 0
+    [int]$HttpsPort = 0,
+    [string]$Domain = "",
+    [string]$Email  = ""
 )
 $ErrorActionPreference = 'Stop'
 
-# Порты пробрасываются в docker-compose.yml через переменные окружения.
+# Порты и домен пробрасываются в docker-compose.yml через переменные окружения.
 if ($HttpPort -gt 0)  { $env:HTTP_PORT  = $HttpPort }
 if ($HttpsPort -gt 0) { $env:HTTPS_PORT = $HttpsPort }
+if ($Domain)          { $env:DOMAIN            = $Domain }
+if ($Email)           { $env:LETSENCRYPT_EMAIL = $Email }
 
 # Скрипт лежит в tools/; все операции идут из корня репозитория — на уровень выше.
 $RepoRoot = Split-Path -Parent $PSScriptRoot
@@ -49,7 +55,12 @@ docker compose ps
 
 Write-Host ""
 Write-Host "Готово. HEAD = $newRev" -ForegroundColor Green
-$portSuffix = ""
-if ($HttpsPort -gt 0 -and $HttpsPort -ne 443) { $portSuffix = ":$HttpsPort" }
-Write-Host "Веб-клиент: https://<IP-сервера>$portSuffix/"
-Write-Host "Сертификат самоподписанный — браузер предупредит; это ожидаемо."
+if ($Domain) {
+    Write-Host "Веб-клиент: https://$Domain/"
+    Write-Host "Сертификат Let's Encrypt (домен $Domain); автопродление в контейнере proxy."
+} else {
+    $portSuffix = ""
+    if ($HttpsPort -gt 0 -and $HttpsPort -ne 443) { $portSuffix = ":$HttpsPort" }
+    Write-Host "Веб-клиент: https://<IP-сервера>$portSuffix/"
+    Write-Host "Сертификат самоподписанный — браузер предупредит; это ожидаемо."
+}
