@@ -16,7 +16,7 @@ set(TS_FILES Client_ru_RU.ts)
 
 set(PROJECT_SOURCES
         main.cpp
-        muclient.cpp
+        Client.cpp
         muclient.h
         muclient.ui
         ${TS_FILES}
@@ -26,6 +26,12 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
     qt_add_executable(Client
         MANUAL_FINALIZATION
         ${PROJECT_SOURCES}
+        AuthForm.cpp
+        AuthForm.h
+        RegisterForm.h
+        RegisterForm.cpp
+        HomePage.h
+        HomePage.cpp
     )
 # Define target properties for Android with Qt 6 as:
 #    set_property(TARGET Client APPEND PROPERTY QT_ANDROID_PACKAGE_SOURCE_DIR
