@@ -16,6 +16,8 @@ qt_standard_project_setup(REQUIRES 6.5)
 
 qt_add_executable(Win11Client
     src/main.cpp
+    src/net/ApiClient.cpp  
+    src/net/AuthController.cpp 
 )
 
 # The Theme and MockData QML files are exposed to every screen as singletons.
@@ -85,4 +87,5 @@ target_link_libraries(Win11Client PRIVATE
     Qt6::Qml
     Qt6::Quick
     Qt6::QuickControls2
+    Qt6::Network
 )
