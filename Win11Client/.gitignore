@@ -2,7 +2,7 @@
 /out/
 /dist/
 /build/
-
+/docs/
 # IDE / tooling
 /.vs/
 CMakeUserPresets.json.user
