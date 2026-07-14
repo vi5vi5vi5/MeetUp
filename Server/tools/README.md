@@ -111,7 +111,7 @@ HTTP-01-challenge всегда стучится на 80 — по нему цен
 ./tools/update.sh --force
 
 # боевой режим: Let's Encrypt для домена
-./tools/update.sh --domain meetup.linkpc.net --email igoranikin79@gmail.com
+./tools/update.sh --domain meetup.linkpc.net --email admin@example.com
 
 # другие порты хоста (только в самоподписанном режиме)
 HTTPS_PORT=8443 HTTP_PORT=8081 ./tools/update.sh
@@ -137,7 +137,7 @@ powershell -ExecutionPolicy Bypass -File tools\update.ps1
 powershell -ExecutionPolicy Bypass -File tools\update.ps1 -Force
 
 # Let's Encrypt для домена
-powershell -ExecutionPolicy Bypass -File tools\update.ps1 -Domain meetup.linkpc.net -Email igoranikin79@gmail.com
+powershell -ExecutionPolicy Bypass -File tools\update.ps1 -Domain meetup.linkpc.net -Email admin@example.com
 
 # другие порты хоста (самоподписанный режим)
 powershell -ExecutionPolicy Bypass -File tools\update.ps1 -HttpsPort 8443 -HttpPort 8081

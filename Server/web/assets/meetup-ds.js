@@ -900,7 +900,7 @@ function ConferenceScreen({
     muted: true
   }, {
     id: 3,
-    name: "Игорь",
+    name: "Пётр",
     muted: false
   }];
   const [mic, setMic] = useState(true);

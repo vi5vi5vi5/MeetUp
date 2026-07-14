@@ -1,0 +1,101 @@
+import QtQuick
+import QtQuick.Effects
+import MeetUp
+
+// Centered modal dialog over a dark scrim. Reproduces the web Modal: a titled,
+// elevated card with a close button; clicking the scrim closes it. Child items
+// stack in the body below the header.
+Item {
+    id: root
+
+    property bool open: false
+    property string title: ""
+    property string subtitle: ""
+    property real modalWidth: 460
+    property int padding: Theme.padCard
+    signal closed()
+
+    default property alias content: body.data
+
+    anchors.fill: parent
+    visible: open
+    z: 200
+
+    // Scrim: tint + click-to-close.
+    Rectangle {
+        anchors.fill: parent
+        color: Qt.rgba(6 / 255, 6 / 255, 8 / 255, 0.55)
+        MouseArea { anchors.fill: parent; onClicked: root.closed() }
+    }
+
+    MultiEffect {
+        source: panel
+        anchors.fill: panel
+        shadowEnabled: true
+        shadowColor: Theme.shadowColor
+        shadowVerticalOffset: 12
+        shadowBlur: 0.9
+        autoPaddingEnabled: true
+    }
+
+    Rectangle {
+        id: panel
+        anchors.centerIn: parent
+        width: Math.min(root.modalWidth, root.width - 40)
+        height: Math.min(col.implicitHeight + root.padding * 2, root.height - 40)
+        radius: Theme.radiusCard
+        color: Theme.surface
+        border.width: 1
+        border.color: Theme.border
+
+        // Absorb clicks so they don't reach the scrim behind.
+        MouseArea { anchors.fill: parent }
+
+        Column {
+            id: col
+            x: root.padding
+            y: root.padding
+            width: parent.width - root.padding * 2
+            spacing: 14
+
+            // Header: title/subtitle + close button.
+            Item {
+                width: parent.width
+                implicitHeight: Math.max(hcol.implicitHeight, 36)
+                Column {
+                    id: hcol
+                    width: parent.width - 44
+                    spacing: 4
+                    Text {
+                        visible: root.title !== ""
+                        text: root.title
+                        color: Theme.text
+                        font.family: Theme.displayFont
+                        font.pixelSize: Theme.textXl
+                        font.weight: Font.Bold
+                        font.letterSpacing: -0.5
+                    }
+                    Text {
+                        visible: root.subtitle !== ""
+                        width: parent.width
+                        wrapMode: Text.Wrap
+                        text: root.subtitle
+                        color: Theme.textMuted
+                        font.family: Theme.uiFont
+                        font.pixelSize: Theme.textSm
+                    }
+                }
+                IconButton {
+                    anchors.top: parent.top
+                    anchors.right: parent.right
+                    size: "sm"
+                    icon: "x"
+                    onClicked: root.closed()
+                }
+            }
+
+            // Body slot.
+            Column { id: body; width: parent.width; spacing: 14 }
+        }
+    }
+}

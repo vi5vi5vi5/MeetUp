@@ -395,7 +395,10 @@ void ConferenceServer::onBinary(ClientSession *session, const QByteArray &data)
     if (!room)
         return;
 
-    // Заголовок клиента: [type:1][timestamp_ms:8]. Минимум 9 байт.
+    // Сервер не разбирает содержимое кадра: всё после первого байта (type)
+    // для него непрозрачно. Клиент шлёт заголовок 11 байт
+    // ([type:1][flags:1][codec:1][timestamp_ms:8]), но проверяем лишь нижнюю
+    // границу — минимум type + 8-байтовая метка времени.
     if (data.size() < 9)
         return;
 
@@ -406,8 +409,9 @@ void ConferenceServer::onBinary(ClientSession *session, const QByteArray &data)
         && room->screenSharer() != session)
         return;
 
-    // Сервер вставляет sender_id (uint32 LE) сразу после message_type,
-    // получая заголовок 13 байт: [type:1][sender_id:4][timestamp_ms:8].
+    // Сервер вставляет sender_id (uint32 LE) сразу после message_type и
+    // остальное копирует как есть — из клиентских 11 байт получается
+    // заголовок 15: [type:1][sender_id:4][flags:1][codec:1][timestamp_ms:8].
     const quint32 id = session->id();
     QByteArray out;
     out.reserve(data.size() + 4);
@@ -416,7 +420,7 @@ void ConferenceServer::onBinary(ClientSession *session, const QByteArray &data)
     out.append(char((id >> 8) & 0xFF));
     out.append(char((id >> 16) & 0xFF));
     out.append(char((id >> 24) & 0xFF));
-    out.append(data.mid(1));                // timestamp_ms(8) + payload
+    out.append(data.mid(1));                // flags(1) + codec(1) + timestamp_ms(8) + payload
 
     room->broadcastBinary(out, session);
 }

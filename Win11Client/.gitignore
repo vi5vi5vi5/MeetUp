@@ -1,0 +1,13 @@
+# Build output
+/out/
+/dist/
+/build/
+
+# IDE / tooling
+/.vs/
+CMakeUserPresets.json.user
+*.user
+
+# OS
+Thumbs.db
+Desktop.ini
