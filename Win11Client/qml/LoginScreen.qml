@@ -1,4 +1,4 @@
-import QtQuick
+﻿import QtQuick
 import MeetUp
 
 // Reproduces login.html: sign in, create account, or continue anonymously.
@@ -33,7 +33,7 @@ AuthScaffold {
             width: parent.width
             isPassword: true
             placeholderText: "••••••••"
-            onAccepted: root.loginRequested(loginInput.text, passInput.text)
+            onAccepted: Auth.login(loginInput.text, passInput.text)
         }
     }
 
@@ -42,7 +42,8 @@ AuthScaffold {
         text: "Войти"
         variant: "primary"
         iconRight: "arrow-right"
-        onClicked: root.loginRequested(loginInput.text, passInput.text)
+        enabled: !Auth.busy
+        onClicked: Auth.login(loginInput.text, passInput.text)
     }
     AppButton {
         width: parent.width
@@ -66,8 +67,9 @@ AuthScaffold {
         width: parent.width
         horizontalAlignment: Text.AlignHCenter
         wrapMode: Text.WordWrap
-        text: root.err !== "" ? root.err : "Аккаунт хранит ваше имя между встречами."
-        color: root.err !== "" ? Theme.danger : Theme.textFaint
+        text: Auth.errorText !== "" ? Auth.errorText
+                                : "Аккаунт хранит ваше имя между встречами."
+        color: Auth.errorText !== "" ? Theme.danger : Theme.textFaint   // <— красный при ошибке
         font.family: Theme.uiFont
         font.pixelSize: Theme.textXs
     }

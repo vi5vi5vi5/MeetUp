@@ -1,13 +1,12 @@
-// MeetUp Win11 client — application entry point.
-//
-// M0: boots the QML UI shell (dark "Prism Minimal" theme, lobby + conference
-// screens on mock data). Networking, media and E2E arrive in later milestones
-// (see docs/ROADMAP.md).
+﻿// MeetUp Win11 client — application entry point.
+
 
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
+#include <QQmlContext>
 #include <QQuickStyle>
-#include <QIcon>
+#include "net/ApiClient.h"
+#include "net/AuthController.h"
 
 int main(int argc, char *argv[])
 {
@@ -16,12 +15,18 @@ int main(int argc, char *argv[])
     app.setOrganizationName("MeetUp");
     app.setApplicationName("MeetUp");
     app.setApplicationDisplayName("MeetUp");
-
-    // Use the Basic style so our custom dark theme is not overridden by the
-    // native Windows look on Controls we do use (StackView, TextField, TabBar).
     QQuickStyle::setStyle("Basic");
 
+    // Транспорт и контроллер живут всё приложение (стек main).
+    ApiClient api;
+    AuthController auth(&api);
+
     QQmlApplicationEngine engine;
+    // Кладём объект в глобальный контекст QML под именем "Auth".
+    // Теперь в любом .qml доступно Auth.login(...), Auth.busy, Auth.errorText.
+    engine.rootContext()->setContextProperty("Auth", &auth);
+
+
     QObject::connect(
         &engine, &QQmlApplicationEngine::objectCreationFailed,
         &app, []() { QCoreApplication::exit(-1); },

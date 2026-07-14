@@ -12,6 +12,7 @@ ApiClient::ApiClient(QObject* parent) : QObject(parent) {
     // TODO: Сделать обёртку QNAM для хранения сессии в QSettings
 }
 
+// Собираем QNetworkRequest: URL + заголовки, общие для всех запросов.
 QNetworkRequest ApiClient::makeRequest(const QString& path) const {
     QNetworkRequest req{ QUrl(m_base + path) };
     // Просим сервер отвечать JSON-ом (как это делает web: header "Accept").
@@ -31,3 +32,4 @@ QNetworkReply* ApiClient::post(const QString& path, const QJsonObject& body) {
     const QByteArray data = QJsonDocument(body).toJson(QJsonDocument::Compact);
     return m_nam.post(req, data);
 }
+

@@ -1,4 +1,4 @@
-import QtQuick
+﻿import QtQuick
 import QtQuick.Controls.Basic
 import MeetUp
 
@@ -27,6 +27,19 @@ ApplicationWindow {
         pushEnter:    Transition { NumberAnimation { property: "opacity"; from: 0; to: 1; duration: Theme.durMed } }
         popEnter:     Transition { NumberAnimation { property: "opacity"; from: 0; to: 1; duration: Theme.durMed } }
     }
+
+    // Реакция на успешный вход (из любого места: и обычный login, и авто-вход).
+    Connections {
+        target: Auth
+        function onLoggedIn() {
+            // Если мы уже на home — не дублируем.
+            if (stack.currentItem && stack.currentItem.objectName === "home") return;
+            stack.replace(homePage);
+        }
+    }
+
+    // Авто-вход при старте: спрашиваем /api/me один раз.
+    Component.onCompleted: Auth.checkSession()
 
     Component {
         id: loginPage

@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include <QObject>
 #include <QNetworkAccessManager>
+#include <QJsonObject>
 
 class QNetworkReply;
 
