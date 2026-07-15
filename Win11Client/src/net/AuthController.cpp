@@ -45,7 +45,7 @@ void AuthController::login(const QString& login, const QString& password) {
         // Успех: 200 и есть объект user.
         if (status == 200 && obj.contains("user")) {
             const QJsonObject user = obj["user"].toObject();
-            m_displayName = user["displayName"].toString();
+            m_displayName = user["display_name"].toString();
             emit displayNameChanged();
             // Кука meetup_session уже сохранилась в cookie jar внутри ApiClient.
             emit loggedIn();

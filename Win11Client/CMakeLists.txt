@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.21)
+﻿cmake_minimum_required(VERSION 3.21)
 project(Win11Client VERSION 0.1 LANGUAGES CXX)
 
 # ---- MeetUp Win11 client ----------------------------------------------------
@@ -18,6 +18,7 @@ qt_add_executable(Win11Client
     src/main.cpp
     src/net/ApiClient.cpp  
     src/net/AuthController.cpp 
+    src/net/RoomController.cpp
 )
 
 # The Theme and MockData QML files are exposed to every screen as singletons.

@@ -3,7 +3,9 @@
 /dist/
 /build/
 /docs/
+
 # IDE / tooling
+/.qtcreator/
 /.vs/
 CMakeUserPresets.json.user
 *.user

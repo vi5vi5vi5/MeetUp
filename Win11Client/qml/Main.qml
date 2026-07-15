@@ -40,6 +40,15 @@ ApplicationWindow {
 
     // Авто-вход при старте: спрашиваем /api/me один раз.
     Component.onCompleted: Auth.checkSession()
+    
+    // Комната готова (создана/проверена/доверенная) — открываем конференцию,
+    // передавая код и имя как свойства нового экрана.
+    Connections {
+        target: Rooms
+        function onRoomReady(code, name) {
+            stack.push(confPage, { roomCode: code, myName: name });
+        }
+    }
 
     Component {
         id: loginPage
@@ -61,8 +70,6 @@ ApplicationWindow {
     Component {
         id: anonPage
         AnonLobbyScreen {
-            onJoinRequested: (code, name) => stack.push(confPage)
-            onCreateRequested: (name) => stack.push(confPage)
             onSignInRequested: () => stack.replace(loginPage)
         }
     }
@@ -71,7 +78,6 @@ ApplicationWindow {
         id: homePage
         HomeScreen {
             onLogoutRequested: () => stack.replace(loginPage)
-            onOpenConference: (code) => stack.push(confPage)
         }
     }
 

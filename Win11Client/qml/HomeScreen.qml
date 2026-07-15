@@ -1,4 +1,4 @@
-import QtQuick
+﻿import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls.Basic
 import MeetUp
@@ -13,7 +13,7 @@ Item {
     signal openConference(string code)
 
     readonly property var room: MockData.personalRoom
-    readonly property string name: MockData.userName
+    readonly property string name: Auth.displayName
 
     // Reusable dropdown row for the account menu.
     component MenuItem: Rectangle {
@@ -281,7 +281,7 @@ Item {
                             text: root.room.online ? "Войти в эфир" : "Открыть комнату"
                             variant: "primary"
                             iconRight: "arrow-right"
-                            onClicked: root.openConference(root.room.code)
+                            onClicked: Rooms.enter(room.code, Auth.displayName)
                         }
                         AppButton { text: "Настройки"; variant: "secondary"; icon: "settings"; onClicked: roomModal.open = true }
                         AppButton { visible: root.room.online; text: "Завершить"; variant: "danger"; icon: "phone-off" }
@@ -311,22 +311,37 @@ Item {
                         width: parent.width
                         label: "Код чужой комнаты"
                         hint: "Спросите код у организатора"
-                        AppInput { id: otherCode; width: parent.width; placeholderText: "Например: fRt7…" }
+                        AppInput {
+                            id: otherCode
+                            width: parent.width
+                            placeholderText: "Например: fRt7…"
+                            onAccepted: Rooms.joinByCode(otherCode.text, Auth.displayName)
+                            onTextChanged: Rooms.clearError()
+                        }
                     }
                     AppButton {
                         width: parent.width
                         text: "Подключиться"
                         variant: "primary"
                         iconRight: "arrow-right"
-                        onClicked: root.openConference(otherCode.text)
+                        enabled: !Rooms.busy
+                        onClicked: Rooms.joinByCode(otherCode.text, Auth.displayName)
+
                     }
                     Divider { width: parent.width; label: "или" }
-                    AppButton { width: parent.width; text: "Создать конференцию"; variant: "ghost"; icon: "plus" }
+                    AppButton { 
+                        width: parent.width; 
+                        text: "Создать конференцию"; 
+                        variant: "ghost"; 
+                        icon: "plus" 
+                        enabled: !Rooms.busy
+                        onClicked: Rooms.createRoom(Auth.displayName)}
                     Text {
                         width: parent.width
                         horizontalAlignment: Text.AlignHCenter
-                        text: "Код новой конференции сгенерирует сервер."
-                        color: Theme.textFaint
+                        text: Rooms.errorText !== "" ? Rooms.errorText
+                             : "Код новой конференции сгенерирует сервер."
+                        color: Rooms.errorText !== "" ? Theme.danger : Theme.textFaint
                         font.family: Theme.uiFont
                         font.pixelSize: Theme.textXs
                     }
@@ -386,7 +401,8 @@ Item {
                                 font.pixelSize: Theme.text2xs
                             }
                             HoverHandler { id: histHover; cursorShape: Qt.PointingHandCursor }
-                            TapHandler { onTapped: root.openConference(modelData.code) }
+                            TapHandler { onTapped: Rooms.enter(modelData.code, Auth.displayName) }
+
                         }
                     }
                 }

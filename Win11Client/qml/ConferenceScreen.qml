@@ -1,4 +1,4 @@
-import QtQuick
+﻿import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls.Basic
 import MeetUp
@@ -9,6 +9,9 @@ Item {
     id: root
 
     signal leaveRequested()
+
+    property string roomCode: ""
+    property string myName: ""
 
     property bool micOn: true
     property bool camOn: true
@@ -200,7 +203,7 @@ Item {
                 spacing: 12
 
                 Text {
-                    text: MockData.roomTitle
+                    text: root.roomCode !== "" ? root.roomCode : MockData.roomTitle
                     color: Theme.text
                     font.family: Theme.displayFont
                     font.pixelSize: 24
