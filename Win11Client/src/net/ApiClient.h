@@ -2,6 +2,7 @@
 #include <QObject>
 #include <QNetworkAccessManager>
 #include <QJsonObject>
+#include "SessionCookieJar.h"
 
 class QNetworkReply;
 
@@ -18,9 +19,14 @@ public:
 	// POST <base>/<path> с телом-объектом JSON (может быть пустым).
 	QNetworkReply* post(const QString& path, const QJsonObject& body = {});
 
+	QString wsUrl() const;
+
+	QString sessionToken() const; // "" если не залогинен
+
 private:
 	QNetworkRequest makeRequest(const QString& path) const;
 
 	QNetworkAccessManager m_nam;          // «движок»; живёт вместе с ApiClient
+	SessionCookieJar* m_jar = nullptr;
 	QString m_base = "https://meetup.linkpc.net";  // прод-сервер (Let's Encrypt)
 };

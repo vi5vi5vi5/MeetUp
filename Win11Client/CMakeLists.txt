@@ -10,7 +10,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Network WebSockets)
 
 qt_standard_project_setup(REQUIRES 6.5)
 
@@ -19,6 +19,7 @@ qt_add_executable(Win11Client
     src/net/ApiClient.cpp  
     src/net/AuthController.cpp 
     src/net/RoomController.cpp
+    src/net/SignalingClient.cpp
 )
 
 # The Theme and MockData QML files are exposed to every screen as singletons.
@@ -89,4 +90,5 @@ target_link_libraries(Win11Client PRIVATE
     Qt6::Quick
     Qt6::QuickControls2
     Qt6::Network
+    Qt6::WebSockets
 )
