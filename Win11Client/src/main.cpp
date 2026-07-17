@@ -14,6 +14,8 @@
 #include "SysBridge.h"
 #include "HistoryStore.h"
 
+#include "net/Protocol.h"   // + временный include в шапку
+
 int main(int argc, char *argv[])
 {
     QGuiApplication app(argc, argv);
@@ -49,6 +51,17 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("MyRoom", &myRoom);
     engine.rootContext()->setContextProperty("Sys", &sys);
     engine.rootContext()->setContextProperty("History", &history);
+
+    // ВРЕМЕННО (№9): доказательство, что бинарный протокол читается.
+    QObject::connect(&conf, &SignalingClient::binaryFrame, [](const QByteArray& d) {
+        static int n = 0;
+        Proto::FrameV2 f;
+        if (!Proto::unpack(d, f)) return;
+        if (++n % 50 != 1) return;          // печатаем каждый 50-й, не заливаем лог
+        qDebug() << "бинарь #" << n << "type" << f.type << "codec" << f.codec
+            << "flags" << f.flags << "sender" << f.sender
+            << "payload" << f.payload.size() << "байт";
+        });
 
     QObject::connect(
         &engine, &QQmlApplicationEngine::objectCreationFailed,

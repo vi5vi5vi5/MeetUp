@@ -9,6 +9,7 @@
 /.vs/
 CMakeUserPresets.json.user
 *.user
+/vcpkg_installed/
 
 # OS
 Thumbs.db

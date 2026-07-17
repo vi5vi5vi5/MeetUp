@@ -1,0 +1,24 @@
+Package: vcpkg-cmake-config
+Version: 2024-05-23
+Architecture: x64-windows
+Multi-Arch: same
+Abi: fe6dc01f9b099e608742f09b896d31ac543fd1161b31600dbb45c719071f2d2d
+Status: install ok installed
+
+Package: vcpkg-cmake
+Version: 2024-04-23
+Architecture: x64-windows
+Multi-Arch: same
+Abi: 82250ad3f587d0c55f428002a9f4135a28f9160d869a9848efe2a3b9debd52af
+Status: install ok installed
+
+Package: opus
+Version: 1.5.2
+Port-Version: 1
+Depends: vcpkg-cmake, vcpkg-cmake-config
+Architecture: x64-windows
+Multi-Arch: same
+Abi: 6d8f439a0c2a3325c11dbb089ceb297b8e54c0385e5e57b8ec534fb8d9a7ef60
+Description: Totally open, royalty-free, highly versatile audio codec
+Status: install ok installed
+

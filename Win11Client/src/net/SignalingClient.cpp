@@ -51,6 +51,8 @@ void SignalingClient::openSocket() {
     connect(m_ws, &QWebSocket::connected, this, &SignalingClient::onConnected);
     connect(m_ws, &QWebSocket::textMessageReceived, this, &SignalingClient::onTextMessage);
     connect(m_ws, &QWebSocket::disconnected, this, &SignalingClient::onDisconnected);
+    // Бинарные кадры (медиа v2) — наружу как есть: разбирает AudioEngine (M2+).
+    connect(m_ws, &QWebSocket::binaryMessageReceived, this, &SignalingClient::binaryFrame);
     // Диагностика: молча падающий сокет выглядит как вечное «переподключение»,
     // а причина (DNS, TLS, отказ сервера) видна только здесь.
     connect(m_ws, &QWebSocket::errorOccurred, this, [this](QAbstractSocket::SocketError e) {
@@ -113,6 +115,7 @@ void SignalingClient::onJson(const QJsonObject& msg) {
             m_joinedOnce = true;
             emit joinedRoom(m_roomCode, title);   // title пуст у разовых комнат
         }
+        emit joinOk();   // каждый вход, включая реконнект: медиа сбрасывает буферы
         // История чата: пересобираем ленту из join_ok (и на реконнекте — тоже,
         // чтобы не задвоить уже показанные сообщения).
         m_messages.clear();
@@ -151,6 +154,7 @@ void SignalingClient::onJson(const QJsonObject& msg) {
             if (m_participants[i].toMap().value("id").toLongLong() == id) {
                 m_participants.removeAt(i);
                 emit participantsChanged();
+                emit participantLeft(id);
                 break;
             }
         return;
@@ -219,6 +223,7 @@ void SignalingClient::rebuildParticipants(const QJsonArray& serverList) {
 // Разослать участникам, что у нас с микрофоном/камерой (веб шлёт state).
 void SignalingClient::setLocalState(bool mic, bool cam) {
     m_mic = mic; m_cam = cam;
+    emit localStateChanged(m_mic, m_cam);   // AudioEngine глушит/включает захват
     if (m_ws && m_ws->state() == QAbstractSocket::ConnectedState) {
         const QJsonObject st{ {"type","state"}, {"mic",mic}, {"cam",cam} };
         m_ws->sendTextMessage(QString::fromUtf8(
@@ -324,4 +329,9 @@ QVariantMap SignalingClient::makeMessage(qint64 senderId, const QString& senderN
     m["time"] = QDateTime::fromMSecsSinceEpoch(tsMs).toString("HH:mm");
     m["self"] = (senderId == m_myId);
     return m;
+}
+
+void SignalingClient::sendBinary(const QByteArray& frame) {
+    if (m_ws && m_ws->state() == QAbstractSocket::ConnectedState)
+        m_ws->sendBinaryMessage(frame);
 }

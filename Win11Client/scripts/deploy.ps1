@@ -38,6 +38,10 @@ if (Test-Path $dist) { Remove-Item -Recurse -Force $dist }
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
 Copy-Item $exe $dist
 
+# DLL внешних зависимостей: vcpkg положил их рядом с exe при сборке
+# (opus.dll; с M3 здесь же поедут avcodec и компания).
+Copy-Item (Join-Path $root "out/build/$($Config.ToLower())/*.dll") $dist -ErrorAction SilentlyContinue
+
 # Slim deployment: drop things this app doesn't need.
 $flags = @(
     "--qmldir", (Join-Path $root "qml"),  # scan our QML for the exact runtime imports

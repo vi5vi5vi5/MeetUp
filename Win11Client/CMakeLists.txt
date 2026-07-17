@@ -10,7 +10,9 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Network WebSockets)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Network WebSockets Multimedia)
+
+find_package(Opus CONFIG REQUIRED)
 
 qt_standard_project_setup(REQUIRES 6.5)
 
@@ -94,4 +96,6 @@ target_link_libraries(Win11Client PRIVATE
     Qt6::QuickControls2
     Qt6::Network
     Qt6::WebSockets
+    Qt6::Multimedia
+    Opus::opus
 )

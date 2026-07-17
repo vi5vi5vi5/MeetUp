@@ -38,6 +38,7 @@ public:
     // Выйти из комнаты (закрыть сокет без реконнекта).
     Q_INVOKABLE void leave();
     Q_INVOKABLE void sendChat(const QString& text);
+    void sendBinary(const QByteArray& frame); // не Q_INVOKABLE - зовёт C++ медиадвижок, не QML
 
 signals:
     void phaseChanged();
@@ -48,6 +49,11 @@ signals:
     // Первый успешный вход в комнату (не реконнект) — для локальной истории.
     void joinedRoom(const QString& code, const QString& title);
     void messagesChanged();
+
+    void binaryFrame(const QByteArray& frame); // сырой кадр v2 от сервера
+    void joinOk();                              // каждый join_ok — И РЕКОННЕКТ тоже
+    void participantLeft(qint64 id);            // участник ушёл (снести его декодер)
+    void localStateChanged(bool mic, bool cam); // локальные микрофон/камера
 
 private:
     void openSocket();
