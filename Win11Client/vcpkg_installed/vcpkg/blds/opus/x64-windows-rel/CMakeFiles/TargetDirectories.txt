@@ -1,8 +1,0 @@
-C:/Users/igora/OneDrive/Desktop/MeetUp/Win11Client/vcpkg_installed/vcpkg/blds/opus/x64-windows-rel/CMakeFiles/opus.dir
-C:/Users/igora/OneDrive/Desktop/MeetUp/Win11Client/vcpkg_installed/vcpkg/blds/opus/x64-windows-rel/CMakeFiles/package.dir
-C:/Users/igora/OneDrive/Desktop/MeetUp/Win11Client/vcpkg_installed/vcpkg/blds/opus/x64-windows-rel/CMakeFiles/package_source.dir
-C:/Users/igora/OneDrive/Desktop/MeetUp/Win11Client/vcpkg_installed/vcpkg/blds/opus/x64-windows-rel/CMakeFiles/edit_cache.dir
-C:/Users/igora/OneDrive/Desktop/MeetUp/Win11Client/vcpkg_installed/vcpkg/blds/opus/x64-windows-rel/CMakeFiles/rebuild_cache.dir
-C:/Users/igora/OneDrive/Desktop/MeetUp/Win11Client/vcpkg_installed/vcpkg/blds/opus/x64-windows-rel/CMakeFiles/list_install_components.dir
-C:/Users/igora/OneDrive/Desktop/MeetUp/Win11Client/vcpkg_installed/vcpkg/blds/opus/x64-windows-rel/CMakeFiles/install.dir
-C:/Users/igora/OneDrive/Desktop/MeetUp/Win11Client/vcpkg_installed/vcpkg/blds/opus/x64-windows-rel/CMakeFiles/install/local.dir
