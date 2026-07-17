@@ -9,15 +9,26 @@ static const char* kDefaultBase = "https://meetup.linkpc.net";
 SysBridge::SysBridge(ApiClient* api, QObject* parent)
     : QObject(parent), m_api(api) {}
 
+// Хост «как ввёл пользователь» — из строки адреса, НЕ через QUrl: с пустым
+// IDN-whitelist (см. main.cpp) QUrl показывал бы xn----8sbwpsp.xn--p1ai
+// вместо мит-ап.рф. Для сети ACE правильный, для глаз — юникод.
+static QString prettyHost(const QString& base) {
+    const int scheme = base.indexOf("://");
+    QString h = (scheme >= 0) ? base.mid(scheme + 3) : base;
+    const int slash = h.indexOf('/');
+    if (slash >= 0) h = h.left(slash);
+    return h;
+}
+
 QString SysBridge::host() const {
-    return QUrl(m_api->baseUrl()).host();   // https://meetup.linkpc.net -> meetup.linkpc.net
+    return prettyHost(m_api->baseUrl());    // https://мит-ап.рф -> мит-ап.рф
 }
 
 // В поле показываем коротко: для https — только хост; для http (локальная
 // разработка) — полный адрес, чтобы схема не потерялась при следующей правке.
 QString SysBridge::serverAddress() const {
-    const QUrl u(m_api->baseUrl());
-    return u.scheme() == "https" ? u.host() : m_api->baseUrl();
+    const QString b = m_api->baseUrl();
+    return b.startsWith("https://") ? prettyHost(b) : b;
 }
 
 void SysBridge::copyText(const QString& text) {

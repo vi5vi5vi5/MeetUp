@@ -5,6 +5,7 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickStyle>
+#include <QUrl>
 #include "net/ApiClient.h"
 #include "net/AuthController.h"
 #include "net/RoomController.h"
@@ -21,6 +22,14 @@ int main(int argc, char *argv[])
     app.setApplicationName("MeetUp");
     app.setApplicationDisplayName("MeetUp");
     QQuickStyle::setStyle("Basic");
+
+    // QUrl «красиво» декодирует punycode-домены (мит-ап.рф) обратно в юникод,
+    // а QWebSocket берёт хост для Host-заголовка ровно из url.host() —
+    // кириллица уезжала в хендшейк, и nginx не находил виртуальный хост
+    // (проверено wsprobe-репродюсером). Пустой IDN-whitelist заставляет QUrl
+    // держать хосты в ACE (xn--…) во всём приложении; человекочитаемый вид
+    // для интерфейса собирает SysBridge из строки адреса.
+    QUrl::setIdnWhitelist(QStringList());
 
     // Транспорт и контроллеры живут всё приложение (стек main).
     ApiClient api;
