@@ -8,7 +8,10 @@
 #include "net/ApiClient.h"
 #include "net/AuthController.h"
 #include "net/RoomController.h"
-#include "net/SignalingClient.h" 
+#include "net/SignalingClient.h"
+#include "net/PersonalRoomController.h"
+#include "SysBridge.h"
+#include "HistoryStore.h"
 
 int main(int argc, char *argv[])
 {
@@ -19,11 +22,14 @@ int main(int argc, char *argv[])
     app.setApplicationDisplayName("MeetUp");
     QQuickStyle::setStyle("Basic");
 
-    // Транспорт и контроллер живут всё приложение (стек main).
+    // Транспорт и контроллеры живут всё приложение (стек main).
     ApiClient api;
     AuthController auth(&api);
     RoomController rooms(&api);
     SignalingClient conf(&api);
+    PersonalRoomController myRoom(&api);   // тот же api -> та же сессия
+    SysBridge sys(&api);                   // буфер обмена + ссылки
+    HistoryStore history;                  // локальная история комнат (QSettings)
 
     QQmlApplicationEngine engine;
     // Кладём объект в глобальный контекст QML под именем "Auth".
@@ -31,6 +37,9 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("Auth", &auth);
     engine.rootContext()->setContextProperty("Rooms", &rooms);
     engine.rootContext()->setContextProperty("Conf", &conf);
+    engine.rootContext()->setContextProperty("MyRoom", &myRoom);
+    engine.rootContext()->setContextProperty("Sys", &sys);
+    engine.rootContext()->setContextProperty("History", &history);
 
     QObject::connect(
         &engine, &QQmlApplicationEngine::objectCreationFailed,

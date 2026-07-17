@@ -19,6 +19,33 @@ Item {
     property int activeTab: 0   // 0 = chat, 1 = participants
     readonly property bool showSide: width > 760
 
+    // Честный бейдж эфира: считаем от момента СВОЕГО входа (начало эфира
+    // разовой комнаты серверу неизвестно — вебу, впрочем, тоже).
+    property bool linkCopied: false
+    property double joinedAtMs: 0
+    property double nowMs: Date.now()
+
+    // «05:14», после часа — «1:05:14» (как на главной)
+    function fmtDuration(ms) {
+        var s = Math.max(0, Math.floor(ms / 1000))
+        function two(n) { return (n < 10 ? "0" : "") + n }
+        var h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60
+        return (h ? h + ":" + two(m) : two(m)) + ":" + two(s % 60)
+    }
+
+    Timer {
+        interval: 1000; repeat: true
+        running: Conf.phase === "live"
+        onTriggered: root.nowMs = Date.now()
+    }
+    Connections {
+        target: Conf
+        function onPhaseChanged() {
+            if (Conf.phase === "live" && root.joinedAtMs === 0) root.joinedAtMs = Date.now()
+        }
+    }
+    Timer { id: linkCopyReset; interval: 1400; onTriggered: root.linkCopied = false }
+
     Component.onCompleted: Conf.open(root.roomCode, root.myName)
     Component.onDestruction: Conf.leave()
 
@@ -223,13 +250,26 @@ Item {
                     font.weight: Font.Bold
                     font.letterSpacing: -0.8
                 }
-                Badge { tone: "live"; dot: true; text: "в эфире · 05:14" }
-                Badge { tone: "muted"; text: "38 ms" }
-                Badge { tone: "accent"; text: "🔒 E2E" }
+                Badge {
+                    visible: Conf.phase === "live"
+                    tone: "live"; dot: true
+                    text: "в эфире · " + root.fmtDuration(root.nowMs - root.joinedAtMs)
+                }
+                Badge { visible: false; tone: "muted"; text: "38 ms" }    // вернём в M8 (ping/RTT)
+                Badge { visible: false; tone: "accent"; text: "🔒 E2E" }  // вернём в M5 (шифрование)
 
                 Item { Layout.fillWidth: true }
 
-                IconButton { size: "sm"; icon: "copy"; variant: "neutral" }
+                IconButton { // поделиться ссылкой на комнату
+                    size: "sm"
+                    icon: root.linkCopied ? "check" : "copy"
+                    variant: root.linkCopied ? "active" : "neutral"
+                    onClicked: {
+                        Sys.copyText(Sys.roomLink(root.roomCode))
+                        root.linkCopied = true
+                        linkCopyReset.restart()
+                    }
+                }
                 IconButton { size: "sm"; icon: Theme.dark ? "sun" : "moon"; variant: "neutral"; onClicked: Theme.toggle() }
             }
         }

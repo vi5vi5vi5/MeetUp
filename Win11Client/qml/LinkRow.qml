@@ -3,11 +3,11 @@ import QtQuick.Layouts
 import MeetUp
 
 // Inset row showing a room invite link with a copy button (reproduces the web
-// .hu-link). Copy shows a brief check; real clipboard write is wired later.
+// .hu-link). Показываем короткий вид (без https://), копируем полный URL.
 Rectangle {
     id: root
     property string code: ""
-    readonly property string linkText: MockData.serverAddress + "/conference.html?room=" + code
+    readonly property string linkText: Sys.host + "/conference.html?room=" + code
 
     implicitHeight: 46
     radius: Theme.radiusMd
@@ -34,7 +34,11 @@ Rectangle {
             size: "sm"
             icon: root._copied ? "check" : "copy"
             variant: root._copied ? "active" : "neutral"
-            onClicked: { root._copied = true; copyReset.restart() }
+            onClicked: {
+                Sys.copyText(Sys.roomLink(root.code))   // полная ссылка, с https://
+                root._copied = true
+                copyReset.restart()
+            }
         }
     }
     Timer { id: copyReset; interval: 1400; onTriggered: root._copied = false }

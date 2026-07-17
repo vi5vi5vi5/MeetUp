@@ -32,6 +32,7 @@ void SignalingClient::open(const QString& roomCode, const QString& name) {
     m_attempts = 0;
     m_manualClose = false;
     m_fatal = false;
+    m_joinedOnce = false;
     m_participants.clear();
     emit participantsChanged();
     // Остатки прошлой конференции: заголовок личной комнаты и флаг реконнекта.
@@ -50,6 +51,15 @@ void SignalingClient::openSocket() {
     connect(m_ws, &QWebSocket::connected, this, &SignalingClient::onConnected);
     connect(m_ws, &QWebSocket::textMessageReceived, this, &SignalingClient::onTextMessage);
     connect(m_ws, &QWebSocket::disconnected, this, &SignalingClient::onDisconnected);
+    // Диагностика: молча падающий сокет выглядит как вечное «переподключение»,
+    // а причина (DNS, TLS, отказ сервера) видна только здесь.
+    connect(m_ws, &QWebSocket::errorOccurred, this, [this](QAbstractSocket::SocketError e) {
+        qWarning() << "SignalingClient: ошибка сокета:" << e << m_ws->errorString();
+        });
+    connect(m_ws, &QWebSocket::sslErrors, this, [](const QList<QSslError>& errors) {
+        for (const QSslError& e : errors)
+            qWarning() << "SignalingClient: TLS:" << e.errorString();
+        });
 
     // Хендшейк-запрос: URL + (для аккаунта) кука сессии.
     QNetworkRequest req{ QUrl(m_api->wsUrl()) };
@@ -99,6 +109,10 @@ void SignalingClient::onJson(const QJsonObject& msg) {
         setPhase("live");
         // Разослать своё состояние микрофона/камеры (как делает веб после join_ok).
         setLocalState(m_mic, m_cam);
+        if (!m_joinedOnce) {          // реконнект историю не задваивает (как веб)
+            m_joinedOnce = true;
+            emit joinedRoom(m_roomCode, title);   // title пуст у разовых комнат
+        }
         // История чата: пересобираем ленту из join_ok (и на реконнекте — тоже,
         // чтобы не задвоить уже показанные сообщения).
         m_messages.clear();

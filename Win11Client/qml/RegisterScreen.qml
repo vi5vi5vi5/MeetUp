@@ -3,13 +3,11 @@ import QtQuick.Layouts
 import MeetUp
 
 // Reproduces register.html: create an account (login, display name, password).
+// Кнопка зовёт Auth.registerAccount — валидация и тексты ошибок в контроллере.
 AuthScaffold {
     id: root
 
-    signal registerSubmitted(string login, string name, string password)
     // signInRequested is inherited from AuthScaffold.
-
-    property string err: ""
 
     heroTitle: "Свой аккаунт —<br/>своя <font color='" + Theme.accentInk + "'>комната</font>"
     heroSub: "Логин и пароль — для входа. Отображаемое имя увидят собеседники, его можно поменять в любой момент."
@@ -17,18 +15,37 @@ AuthScaffold {
     Field {
         width: parent.width
         label: "Логин"
-        AppInput { id: loginInput; width: parent.width; placeholderText: "anna" }
+        AppInput {
+            id: loginInput
+            width: parent.width
+            placeholderText: "anna"
+            maximumLength: 32                          // как maxLength у веба
+            onTextChanged: Auth.clearError()
+        }
     }
     Field {
         width: parent.width
         label: "Отображаемое имя"
-        AppInput { id: nameInput; width: parent.width; placeholderText: "Анна" }
+        AppInput {
+            id: nameInput
+            width: parent.width
+            placeholderText: "Анна"
+            maximumLength: 40
+            onTextChanged: Auth.clearError()
+        }
     }
     Field {
         width: parent.width
         label: "Пароль"
         hint: "Минимум 8 символов"
-        AppInput { id: passInput; width: parent.width; isPassword: true; placeholderText: "••••••••" }
+        AppInput {
+            id: passInput
+            width: parent.width
+            isPassword: true
+            placeholderText: "••••••••"
+            maximumLength: 128
+            onTextChanged: Auth.clearError()
+        }
     }
     Field {
         width: parent.width
@@ -38,7 +55,10 @@ AuthScaffold {
             width: parent.width
             isPassword: true
             placeholderText: "••••••••"
-            onAccepted: root.registerSubmitted(loginInput.text, nameInput.text, passInput.text)
+            maximumLength: 128
+            onTextChanged: Auth.clearError()
+            onAccepted: Auth.registerAccount(loginInput.text, nameInput.text,
+                                             passInput.text, pass2Input.text)   // Enter
         }
     }
 
@@ -47,7 +67,9 @@ AuthScaffold {
         text: "Создать аккаунт"
         variant: "primary"
         iconRight: "arrow-right"
-        onClicked: root.registerSubmitted(loginInput.text, nameInput.text, passInput.text)
+        enabled: !Auth.busy
+        onClicked: Auth.registerAccount(loginInput.text, nameInput.text,
+                                        passInput.text, pass2Input.text)
     }
 
     Row {
@@ -74,8 +96,8 @@ AuthScaffold {
         width: parent.width
         horizontalAlignment: Text.AlignHCenter
         wrapMode: Text.WordWrap
-        text: root.err !== "" ? root.err : "Пароль хранится только в виде хеша."
-        color: root.err !== "" ? Theme.danger : Theme.textFaint
+        text: Auth.errorText !== "" ? Auth.errorText : "Пароль хранится только в виде хеша."
+        color: Auth.errorText !== "" ? Theme.danger : Theme.textFaint
         font.family: Theme.uiFont
         font.pixelSize: Theme.textXs
     }

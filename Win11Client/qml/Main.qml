@@ -1,4 +1,4 @@
-﻿import QtQuick
+import QtQuick
 import QtQuick.Controls.Basic
 import MeetUp
 
@@ -17,7 +17,6 @@ ApplicationWindow {
 
     // Account flow: login <-> register / anon-lobby -> home -> conference.
     // Peer screens use replace(); the conference is push()ed so leaving pops back.
-    // With networking (M1+) these transitions are driven by server responses.
     StackView {
         id: stack
         anchors.fill: parent
@@ -28,7 +27,7 @@ ApplicationWindow {
         popEnter:     Transition { NumberAnimation { property: "opacity"; from: 0; to: 1; duration: Theme.durMed } }
     }
 
-    // Реакция на успешный вход (из любого места: и обычный login, и авто-вход).
+    // Вход/выход из аккаунта (и обычный login, и авто-вход, и logout).
     Connections {
         target: Auth
         function onLoggedIn() {
@@ -36,11 +35,15 @@ ApplicationWindow {
             if (stack.currentItem && stack.currentItem.objectName === "home") return;
             stack.replace(homePage);
         }
+        function onLoggedOut() {
+            MyRoom.reset();               // чужая комната не должна мигнуть следующему
+            stack.replace(loginPage);     // выход всегда ведёт на форму входа
+        }
     }
 
     // Авто-вход при старте: спрашиваем /api/me один раз.
     Component.onCompleted: Auth.checkSession()
-    
+
     // Комната готова (создана/проверена/доверенная) — открываем конференцию,
     // передавая код и имя как свойства нового экрана.
     Connections {
@@ -50,11 +53,16 @@ ApplicationWindow {
         }
     }
 
+    // Успешный вход в комнату — пополняем локальную историю для главной.
+    Connections {
+        target: Conf
+        function onJoinedRoom(code, title) { History.record(code, title) }
+    }
+
     Component {
         id: loginPage
         LoginScreen {
-            onLoginRequested: (login, password) => stack.replace(homePage)
-            onRegisterRequested: () => stack.replace(registerPage)
+            onRegisterRequested: () => { Auth.clearError(); stack.replace(registerPage) }
             onAnonRequested: () => stack.replace(anonPage)
         }
     }
@@ -62,8 +70,7 @@ ApplicationWindow {
     Component {
         id: registerPage
         RegisterScreen {
-            onRegisterSubmitted: (login, name, password) => stack.replace(homePage)
-            onSignInRequested: () => stack.replace(loginPage)
+            onSignInRequested: () => { Auth.clearError(); stack.replace(loginPage) }
         }
     }
 
@@ -76,9 +83,7 @@ ApplicationWindow {
 
     Component {
         id: homePage
-        HomeScreen {
-            onLogoutRequested: () => stack.replace(loginPage)
-        }
+        HomeScreen {}
     }
 
     Component {

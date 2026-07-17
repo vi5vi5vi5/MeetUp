@@ -45,6 +45,8 @@ signals:
     void roomTitleChanged();
     void reconnectingChanged();
     void participantsChanged();
+    // Первый успешный вход в комнату (не реконнект) — для локальной истории.
+    void joinedRoom(const QString& code, const QString& title);
     void messagesChanged();
 
 private:
@@ -74,6 +76,7 @@ private:
     bool    m_mic = true, m_cam = true;      // локальное состояние для self-плитки
     int     m_attempts = 0;
     bool    m_manualClose = false, m_fatal = false;
+    bool    m_joinedOnce = false;            // защита от записи истории на каждом реконнекте
 
     QString m_phase = "connecting";
     QString m_errorText, m_roomTitle;

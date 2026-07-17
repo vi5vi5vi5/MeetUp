@@ -2,16 +2,12 @@
 import MeetUp
 
 // Reproduces login.html: sign in, create account, or continue anonymously.
-// Buttons emit navigation signals; the real auth logic is added later
-// (see docs/account-login-guide.md).
+// «Войти» ходит на сервер через Auth (инструкция №1); остальные кнопки — навигация.
 AuthScaffold {
     id: root
 
-    signal loginRequested(string login, string password)
     signal registerRequested()
     signal anonRequested()
-
-    property string err: ""
 
     heroTitle: "С возвращением<br/>в <font color='" + Theme.accentInk + "'>эфир</font>"
     heroSub: "Войдите в аккаунт, чтобы продолжить встречи, историю комнат и контакты."
@@ -72,5 +68,28 @@ AuthScaffold {
         color: Auth.errorText !== "" ? Theme.danger : Theme.textFaint   // <— красный при ошибке
         font.family: Theme.uiFont
         font.pixelSize: Theme.textXs
+    }
+
+    Rectangle { width: parent.width; height: 1; color: Theme.border }
+
+    // Адрес сервера: по умолчанию прод, правка сохраняется между запусками.
+    Field {
+        width: parent.width
+        label: "Сервер"
+        hint: "Пусто — вернуть адрес по умолчанию."
+        AppInput {
+            id: serverInput
+            width: parent.width
+            text: Sys.serverAddress
+            placeholderText: "meetup.linkpc.net"
+            // Enter или уход фокуса — применяем и показываем нормализованный вид.
+            onEditingFinished: {
+                if (text !== Sys.serverAddress) {
+                    Sys.setServer(text)
+                    text = Sys.serverAddress
+                    Auth.checkSession()   // вдруг на этом сервере жива сессия — сразу впустит
+                }
+            }
+        }
     }
 }

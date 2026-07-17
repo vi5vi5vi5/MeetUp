@@ -15,7 +15,7 @@ AuthScaffold {
     Field {
         width: parent.width
         label: "Ваше имя"
-        AppInput { id: nameInput; width: parent.width; placeholderText: "Анна"; text: "Игорь" }
+        AppInput { id: nameInput; width: parent.width; placeholderText: "Анна" }
     }
     Field {
         width: parent.width
