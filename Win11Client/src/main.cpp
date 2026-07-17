@@ -8,6 +8,7 @@
 #include "net/ApiClient.h"
 #include "net/AuthController.h"
 #include "net/RoomController.h"
+#include "net/SignalingClient.h" 
 
 int main(int argc, char *argv[])
 {
@@ -22,12 +23,14 @@ int main(int argc, char *argv[])
     ApiClient api;
     AuthController auth(&api);
     RoomController rooms(&api);
+    SignalingClient conf(&api);
 
     QQmlApplicationEngine engine;
     // Кладём объект в глобальный контекст QML под именем "Auth".
     // Теперь в любом .qml доступно Auth.login(...), Auth.busy, Auth.errorText.
     engine.rootContext()->setContextProperty("Auth", &auth);
     engine.rootContext()->setContextProperty("Rooms", &rooms);
+    engine.rootContext()->setContextProperty("Conf", &conf);
 
     QObject::connect(
         &engine, &QQmlApplicationEngine::objectCreationFailed,

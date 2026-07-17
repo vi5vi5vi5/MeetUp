@@ -19,6 +19,9 @@ Item {
     property int activeTab: 0   // 0 = chat, 1 = participants
     readonly property bool showSide: width > 760
 
+    Component.onCompleted: Conf.open(root.roomCode, root.myName)
+    Component.onDestruction: Conf.leave()
+
     // ---------------------------------------------------------------- Side panel
     Rectangle {
         id: side
@@ -83,7 +86,7 @@ Item {
                 anchors.margins: Theme.padPanel
                 clip: true
                 spacing: 12
-                model: MockData.messages
+                model: Conf.messages
                 boundsBehavior: Flickable.StopAtBounds
                 delegate: ChatMessage {
                     required property var modelData
@@ -93,6 +96,8 @@ Item {
                     time: modelData.time
                     self: modelData.self
                 }
+                // держим ленту прокрученной вниз при новом сообщении/истории
+                onCountChanged: positionViewAtEnd()
                 Component.onCompleted: positionViewAtEnd()
             }
 
@@ -111,12 +116,19 @@ Item {
                     anchors.fill: parent
                     anchors.margins: 12
                     spacing: 8
-                    IconButton { size: "sm"; icon: "paperclip"; variant: "neutral" }
+                    IconButton { size: "sm"; icon: "paperclip"; variant: "neutral"; enabled: false }  // картинки — M5
                     AppInput {
+                        id: chatInput
                         Layout.fillWidth: true
                         placeholderText: "Сообщение…"
+                        enabled: Conf.phase === "live"
+                        onAccepted: { Conf.sendChat(chatInput.text); chatInput.text = ""; }
                     }
-                    IconButton { size: "sm"; icon: "send"; variant: "accent" }
+                    IconButton {
+                        size: "sm"; icon: "send"; variant: "accent"
+                        enabled: Conf.phase === "live"
+                        onClicked: { Conf.sendChat(chatInput.text); chatInput.text = ""; }
+                    }
                 }
             }
         }
@@ -128,7 +140,7 @@ Item {
             anchors.margins: 10
             clip: true
             spacing: 2
-            model: MockData.participants
+            model: Conf.participants
             boundsBehavior: Flickable.StopAtBounds
             delegate: Item {
                 required property var modelData
@@ -203,7 +215,8 @@ Item {
                 spacing: 12
 
                 Text {
-                    text: root.roomCode !== "" ? root.roomCode : MockData.roomTitle
+                    text: Conf.roomTitle !== "" ? Conf.roomTitle
+                        : (root.roomCode !== "" ? root.roomCode : MockData.roomTitle)
                     color: Theme.text
                     font.family: Theme.displayFont
                     font.pixelSize: 24
@@ -231,10 +244,10 @@ Item {
             anchors.bottomMargin: 116   // clear the floating dock
             columnSpacing: Theme.gapGrid
             rowSpacing: Theme.gapGrid
-            columns: Math.max(1, Math.ceil(Math.sqrt(MockData.participants.length)))
+            columns: Math.max(1, Math.ceil(Math.sqrt(Conf.participants.length)))
 
             Repeater {
-                model: MockData.participants
+                model: Conf.participants // было: MockData.participants
                 delegate: VideoTile {
                     required property var modelData
                     Layout.fillWidth: true
@@ -256,10 +269,93 @@ Item {
             micOn: root.micOn
             camOn: root.camOn
             sharing: root.sharing
-            onToggleMic: root.micOn = !root.micOn
-            onToggleCam: root.camOn = !root.camOn
+            onToggleMic: { root.micOn = !root.micOn; Conf.setLocalState(root.micOn, root.camOn); }
+            onToggleCam: { root.camOn = !root.camOn; Conf.setLocalState(root.micOn, root.camOn); }
             onToggleShare: root.sharing = !root.sharing
             onLeave: root.leaveRequested()
+        }
+
+        // Баннер «идёт переподключение»: связь оборвалась, попытки продолжаются
+        // (phase остаётся "live", поэтому оверлей ниже не показывается).
+        Badge {
+            visible: Conf.reconnecting
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: parent.top
+            anchors.topMargin: 74
+            z: 60
+            tone: "danger"
+            dot: true
+            text: "переподключение…"
+        }
+
+        Rectangle {
+            anchors.fill: parent
+            visible: Conf.phase !== "live"
+            color: Theme.bg
+            z: 50
+
+            Column {
+                anchors.centerIn: parent
+                width: Math.min(360, parent.width - 48)
+                spacing: 16
+
+                Text {
+                    width: parent.width
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.WordWrap
+                    color: Theme.text
+                    font.family: Theme.displayFont
+                    font.pixelSize: 22
+                    font.weight: Font.Bold
+                    text: Conf.phase === "connecting" ? "Подключение…"
+                        : Conf.phase === "waiting"    ? (Conf.roomTitle || "Комната") + " ещё не в эфире"
+                        : Conf.phase === "gate"       ? "Комната защищена паролем"
+                        : /* error */                   "Не удалось войти"
+                }
+
+                Text {
+                    width: parent.width
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.WordWrap
+                    color: Conf.errorText !== "" ? Theme.danger : Theme.textMuted
+                    font.family: Theme.uiFont
+                    font.pixelSize: Theme.textSm
+                    visible: text !== ""
+                    text: Conf.errorText !== "" ? Conf.errorText
+                        : Conf.phase === "waiting" ? "Ждём, пока владелец откроет комнату. Мы войдём автоматически."
+                        : ""
+                }
+
+                // Гейт пароля
+                Field {
+                    visible: Conf.phase === "gate"
+                    width: parent.width
+                    label: "Пароль комнаты"
+                    AppInput {
+                        id: gatePass
+                        width: parent.width
+                        isPassword: true
+                        placeholderText: "••••••"
+                        onAccepted: Conf.submitPassword(gatePass.text)
+                    }
+                }
+                AppButton {
+                    visible: Conf.phase === "gate"
+                    width: parent.width
+                    text: "Войти"
+                    variant: "primary"
+                    onClicked: Conf.submitPassword(gatePass.text)
+                }
+
+                // Фатальная ошибка — только выйти
+                AppButton {
+                    visible: Conf.phase === "error"
+                    width: parent.width
+                    text: "Назад"
+                    variant: "secondary"
+                    onClicked: root.leaveRequested()
+                }
+            }
         }
     }
 }
