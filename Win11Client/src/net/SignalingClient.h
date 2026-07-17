@@ -54,6 +54,7 @@ signals:
     void joinOk();                              // каждый join_ok — И РЕКОННЕКТ тоже
     void participantLeft(qint64 id);            // участник ушёл (снести его декодер)
     void localStateChanged(bool mic, bool cam); // локальные микрофон/камера
+    void left();    // вышли из комнаты (leave) — медиа немедленно глушится
 
 private:
     void openSocket();

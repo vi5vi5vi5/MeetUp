@@ -15,9 +15,13 @@ $binDir = Join-Path $root "out/build/$($Config.ToLower())"
 . (Join-Path $PSScriptRoot "_vsdevenv.ps1")
 Enter-MsvcEnv
 
-if (-not (Test-Path (Join-Path $binDir "build.ninja"))) {
-    & (Join-Path $PSScriptRoot "configure.ps1") -Config $Config
-}
+# Always (re)configure: cmake --preset is cheap/idempotent when nothing changed,
+# but it's the only thing that picks up drift (new deps in vcpkg.json, edited
+# CMakeLists.txt/presets) for a build dir that was configured earlier. Skipping
+# this when build.ninja already exists left stale caches (e.g. missing the
+# vcpkg toolchain after Opus was added) that ninja's own incremental
+# "re-running CMake" step can't fix, since it just replays the old cache.
+& (Join-Path $PSScriptRoot "configure.ps1") -Config $Config
 
 Push-Location $root
 try {

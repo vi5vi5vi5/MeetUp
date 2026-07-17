@@ -243,6 +243,7 @@ void SignalingClient::leave() {
     m_reconnectTimer->stop();
     m_waitTimer->stop();
     if (m_ws) { m_ws->close(); m_ws->deleteLater(); m_ws = nullptr; }
+    emit left();
 }
 
 void SignalingClient::setPhase(const QString& p) {

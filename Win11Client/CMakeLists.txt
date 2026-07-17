@@ -25,6 +25,7 @@ qt_add_executable(Win11Client
     src/net/RoomController.cpp
     src/net/SignalingClient.cpp
     src/net/PersonalRoomController.cpp
+    src/media/AudioEngine.cpp
 )
 
 # The Theme and MockData QML files are exposed to every screen as singletons.
