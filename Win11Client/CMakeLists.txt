@@ -14,6 +14,13 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Netwo
 
 find_package(Opus CONFIG REQUIRED)
 
+# FFmpeg: Find-модуль vcpkg должен победить одноимённый модуль самого Qt.
+# Qt кладёт свой каталог модулей в CMAKE_MODULE_PATH при find_package(Qt6)
+# выше, а его FindFFMPEG.cmake требует avformat, который мы осознанно не
+# собираем, — и оставляет FFMPEG_LIBRARIES без swscale (LNK2019 на sws_*).
+list(PREPEND CMAKE_MODULE_PATH "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/ffmpeg")
+find_package(FFMPEG REQUIRED)   # наполняет переменные FFMPEG_*
+
 qt_standard_project_setup(REQUIRES 6.5)
 
 qt_add_executable(Win11Client
@@ -26,6 +33,8 @@ qt_add_executable(Win11Client
     src/net/SignalingClient.cpp
     src/net/PersonalRoomController.cpp
     src/media/AudioEngine.cpp
+    src/media/VideoDecoder.cpp
+    src/media/VideoEngine.cpp
 )
 
 # The Theme and MockData QML files are exposed to every screen as singletons.
@@ -100,3 +109,8 @@ target_link_libraries(Win11Client PRIVATE
     Qt6::Multimedia
     Opus::opus
 )
+
+# FFmpeg из vcpkg не даёт CMake-целей — только переменные Find-модуля.
+target_include_directories(Win11Client PRIVATE ${FFMPEG_INCLUDE_DIRS})
+target_link_directories(Win11Client PRIVATE ${FFMPEG_LIBRARY_DIRS})
+target_link_libraries(Win11Client PRIVATE ${FFMPEG_LIBRARIES})

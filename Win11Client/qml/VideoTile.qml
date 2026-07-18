@@ -1,9 +1,11 @@
 import QtQuick
+import QtMultimedia
 import MeetUp
 
-// A participant tile. Monochrome gradient stands in for the (not-yet-wired)
-// video; camera-off shows an initials avatar; a 2px accent border marks the
-// active speaker; a frosted chip carries the name and muted-mic indicator.
+// A participant tile. Live video (M3) fills the tile when frames arrive;
+// otherwise a monochrome gradient stands in; camera-off shows an initials
+// avatar; a 2px accent border marks the active speaker; a frosted chip
+// carries the name and muted-mic indicator.
 Item {
     id: root
 
@@ -12,6 +14,8 @@ Item {
     property bool cam: true
     property bool speaking: false
     property bool isSelf: false
+    property var pid: 0          // id участника — ключ привязки к Media
+    property bool live: false    // Media сообщил: картинка реально идёт
 
     readonly property string _initials: {
         var parts = String(name).trim().split(/\s+/).filter(function (s) { return s.length > 0 })
@@ -67,6 +71,16 @@ Item {
             }
         }
 
+        // Живое видео участника (M3). Показываем, только когда участник не
+        // выключил камеру (cam из state) И кадры реально приходят (live от
+        // Media) — иначе сквозь прозрачные места смотрели бы на watermark.
+        VideoOutput {
+            id: out
+            anchors.fill: parent
+            visible: !root.isSelf && root.cam && root.live
+            fillMode: VideoOutput.PreserveAspectCrop
+        }
+
         // Frosted name chip (bottom-left).
         Rectangle {
             anchors.left: parent.left
@@ -97,6 +111,17 @@ Item {
                     font.weight: Font.Medium
                 }
             }
+        }
+    }
+
+    // Свою плитку не привязываем: собственная камера — веха M4.
+    Component.onCompleted:   if (!isSelf && pid) Media.attach(pid, out.videoSink)
+    Component.onDestruction: if (!isSelf && pid) Media.detach(pid)
+
+    Connections {
+        target: Media
+        function onVideoChanged(id, active) {
+            if (!root.isSelf && id === root.pid) root.live = active
         }
     }
 }

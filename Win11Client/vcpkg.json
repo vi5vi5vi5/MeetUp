@@ -1,7 +1,12 @@
 {
   "name": "win11client",
   "dependencies": [
-    "opus"
+    "opus",
+    {
+      "name": "ffmpeg",
+      "default-features": false,
+      "features": [ "avcodec", "swscale" ]
+    }
   ],
   "builtin-baseline": "908da3a305a0a8028d9602ab241b433652b3df69"
 }

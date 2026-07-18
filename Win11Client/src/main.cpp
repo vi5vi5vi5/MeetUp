@@ -15,6 +15,7 @@
 #include "HistoryStore.h"
 
 #include "media/AudioEngine.h"
+#include "media/VideoEngine.h"
 
 int main(int argc, char *argv[])
 {
@@ -42,6 +43,7 @@ int main(int argc, char *argv[])
     SysBridge sys(&api);                   // буфер обмена + ссылки
     HistoryStore history;                  // локальная история комнат (QSettings)
     AudioEngine audio(&conf);
+    VideoEngine video(&conf);
 
     QQmlApplicationEngine engine;
     // Кладём объект в глобальный контекст QML под именем "Auth".
@@ -52,6 +54,8 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("MyRoom", &myRoom);
     engine.rootContext()->setContextProperty("Sys", &sys);
     engine.rootContext()->setContextProperty("History", &history);
+    // Имя "Video" занято QML-типом из QtMultimedia — поэтому Media.
+    engine.rootContext()->setContextProperty("Media", &video);
 
     
 

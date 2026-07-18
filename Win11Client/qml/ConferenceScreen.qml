@@ -292,6 +292,7 @@ Item {
                     required property var modelData
                     Layout.fillWidth: true
                     Layout.fillHeight: true
+                    pid: modelData.id
                     name: modelData.name
                     isSelf: modelData.isSelf
                     speaking: modelData.speaking
