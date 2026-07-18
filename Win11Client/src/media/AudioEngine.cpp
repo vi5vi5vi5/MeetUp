@@ -2,13 +2,16 @@
 #include "../net/SignalingClient.h"
 #include "../net/Protocol.h"
 #include <QAudioSource>
+#include <QAudioSink>
 #include <QAudioFormat>
 #include <QAudioDevice>
 #include <QMediaDevices>
 #include <QIODevice>
+#include <QTimer>
 #include <QDateTime>
 #include <QDebug>
 #include <opus.h>
+
 
 // Формат конференции — как у веба: 48 кГц, моно, Int16.
 
@@ -31,13 +34,24 @@ AudioEngine::AudioEngine(SignalingClient* conf, QObject* parent)
     connect(conf, &SignalingClient::phaseChanged, this, &AudioEngine::onPhase);
     connect(conf, &SignalingClient::localStateChanged, this, &AudioEngine::onLocalState);
     connect(conf, &SignalingClient::left, this, &AudioEngine::onLeft);
+
+    connect(conf, &SignalingClient::binaryFrame, this, &AudioEngine::onBinaryFrame);
+    connect(conf, &SignalingClient::joinOk, this, &AudioEngine::onJoinOk);
+    connect(conf, &SignalingClient::participantLeft, this, &AudioEngine::onParticipantLeft);
+
+    // Насос вывода: 10 мс, точный таймер (обычный на Windows может «плавать» до 15 мс).
+    m_pumpTimer = new QTimer(this);
+    m_pumpTimer->setTimerType(Qt::PreciseTimer);
+    m_pumpTimer->setInterval(10);
+    connect(m_pumpTimer, &QTimer::timeout, this, &AudioEngine::pump);
 }
 
-AudioEngine::~AudioEngine() { stopCapture(); }
+AudioEngine::~AudioEngine() { stopCapture(); stopPlayback(); }
 
 void AudioEngine::onPhase() {
     m_live = (m_conf->phase() == "live");
     updateCapture();
+    updatePlayback();
 }
 
 void AudioEngine::onLocalState(bool mic, bool /*cam*/) {
@@ -48,6 +62,7 @@ void AudioEngine::onLocalState(bool mic, bool /*cam*/) {
 void AudioEngine::onLeft() {
     m_live = false;         // фаза осталась "live", но комнаты уже нет
     updateCapture();
+    updatePlayback();
 }
 
 // Захват идёт <=> мы в эфире И микрофон включён. Все дороги ведут сюда.
@@ -120,4 +135,114 @@ void AudioEngine::onCaptured() {
             quint64(QDateTime::currentMSecsSinceEpoch()),
             QByteArray(reinterpret_cast<const char*>(packet), bytes)));
     }
+}
+
+// Играем <=> мы в эфире.
+void AudioEngine::updatePlayback() {
+    if (m_live && !m_sink)      startPlayback();
+    else if (!m_live && m_sink) stopPlayback();
+}
+
+void AudioEngine::startPlayback() {
+    const QAudioDevice dev = QMediaDevices::defaultAudioOutput();
+    if (dev.isNull()) { qWarning() << "AudioEngine: устройств вывода нет"; return; }
+
+    m_sink = new QAudioSink(dev, confFormat(), this);
+    // Потолок задержки вывода ~200 мс (10 кадров). Больше — эхо-канал
+    // разговора «на секунду позже»; меньше — хрупко к загрузке системы.
+    m_sink->setBufferSize(kFrameBytes * 10);
+    m_out = m_sink->start();          // push-режим: мы пишем, синк играет
+    m_pumpTimer->start();
+}
+
+void AudioEngine::stopPlayback() {
+    m_pumpTimer->stop();
+    if (m_sink) {
+        m_sink->stop();
+        m_sink->deleteLater();
+        m_sink = nullptr;
+        m_out = nullptr;
+    }
+    resetPeers();
+}
+
+void AudioEngine::resetPeers() {
+    for (Peer& p : m_peers)
+        if (p.dec) opus_decoder_destroy(p.dec);
+    m_peers.clear();
+}
+
+// Каждый join_ok — в т.ч. РЕКОННЕКТ: всё накопленное до обрыва — мусор,
+// а у анонимов после реконнекта ещё и все id новые (§2.3 гайда).
+void AudioEngine::onJoinOk() { resetPeers(); }
+
+void AudioEngine::onParticipantLeft(qint64 id) {
+    auto it = m_peers.find(quint32(id));
+    if (it != m_peers.end()) {
+        if (it->dec) opus_decoder_destroy(it->dec);
+        m_peers.erase(it);
+    }
+}
+
+void AudioEngine::onBinaryFrame(const QByteArray& d) {
+    Proto::FrameV2 f;
+    if (!Proto::unpack(d, f)) return;                 // мусор короче заголовка
+
+    if (f.type != Proto::AUDIO_CODED) return;         // видео/экран — M3, M7
+    if (f.codec != Proto::CODEC_OPUS) return;         // незнакомый кодек — молча мимо
+    if (f.flags & Proto::FLAG_ENCRYPTED) return;      // E2E (M5): тишина честнее каши
+    if (!m_out) return;                               // не играем — не тратим CPU
+
+    Peer& p = m_peers[f.sender];                      // operator[] создаст пустого
+    if (!p.dec) {
+        int err = 0;
+        p.dec = opus_decoder_create(kRate, 1, &err);
+        if (err != OPUS_OK) { m_peers.remove(f.sender); return; }
+    }
+
+    QByteArray chunk(kFrameBytes, 0);
+    const int samples = opus_decode(p.dec,
+        reinterpret_cast<const unsigned char*>(f.payload.constData()),
+        f.payload.size(),
+        reinterpret_cast<opus_int16*>(chunk.data()), kFrameSamples, 0);
+    if (samples != kFrameSamples) return;             // битый/нестандартный кадр
+
+    p.queue.append(chunk);
+    if (p.queue.size() > 12)                          // лаг раздулся — срезаем
+        while (p.queue.size() > 6)
+            p.queue.removeFirst();
+}
+
+// Каждые 10 мс: пока синк готов взять целый кадр — отдаём кадр микса.
+void AudioEngine::pump() {
+    if (!m_sink || !m_out) return;
+    while (m_sink->bytesFree() >= kFrameBytes)
+        m_out->write(mixOneFrame());
+}
+
+// Один кадр (960 сэмплов) — сумма всех «играющих» участников с клампом.
+// Никто не играет — кадр тишины (нули): динамики любят непрерывность.
+QByteArray AudioEngine::mixOneFrame() {
+    qint32 acc[kFrameSamples] = {};                   // 32 бита: сумма не переполнится
+
+    for (Peer& p : m_peers) {
+        if (!p.playing) {
+            if (p.queue.size() >= 3) p.playing = true;    // предбуфер ~60 мс набран
+            else continue;                                 // ещё копит — молчит
+        }
+        if (p.queue.isEmpty()) {                           // сеть икнула сильнее запаса
+            p.playing = false;                             // уходим добуферизоваться
+            continue;
+        }
+        const QByteArray chunk = p.queue.takeFirst();
+        const qint16* s = reinterpret_cast<const qint16*>(chunk.constData());
+        for (int i = 0; i < kFrameSamples; ++i)
+            acc[i] += s[i];                                // микс = сложение волн
+    }
+
+    QByteArray out(kFrameBytes, 0);
+    qint16* o = reinterpret_cast<qint16*>(out.data());
+    for (int i = 0; i < kFrameSamples; ++i)
+        o[i] = qint16(qBound(-32768, acc[i], 32767));      // кламп в Int16
+    return out;
 }
