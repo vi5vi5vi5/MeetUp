@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls.Basic
 import QtQuick.Effects
 import MeetUp
 
@@ -42,7 +43,11 @@ Item {
         id: panel
         anchors.centerIn: parent
         width: Math.min(root.modalWidth, root.width - 40)
-        height: Math.min(col.implicitHeight + root.padding * 2, root.height - 40)
+        // Заголовок фиксирован, тело прокручивается: панель не выше окна,
+        // а содержимое, что не влезло, доступно скроллом (как .settings-card
+        // { max-height; overflow:auto } у веба).
+        height: Math.min(header.implicitHeight + bodyFlick.height
+                         + col.spacing + root.padding * 2, root.height - 40)
         radius: Theme.radiusCard
         color: Theme.surface
         border.width: 1
@@ -58,8 +63,9 @@ Item {
             width: parent.width - root.padding * 2
             spacing: 14
 
-            // Header: title/subtitle + close button.
+            // Header: title/subtitle + close button (фиксирован, не скроллится).
             Item {
+                id: header
                 width: parent.width
                 implicitHeight: Math.max(hcol.implicitHeight, 36)
                 Column {
@@ -94,8 +100,23 @@ Item {
                 }
             }
 
-            // Body slot.
-            Column { id: body; width: parent.width; spacing: 14 }
+            // Body slot — прокручиваемый, если выше доступной высоты.
+            Flickable {
+                id: bodyFlick
+                width: parent.width
+                height: Math.min(body.implicitHeight,
+                                 root.height - 40 - root.padding * 2
+                                 - header.implicitHeight - col.spacing)
+                contentWidth: width
+                contentHeight: body.implicitHeight
+                clip: true
+                interactive: contentHeight > height
+                boundsBehavior: Flickable.StopAtBounds
+                ScrollBar.vertical: ScrollBar {
+                    policy: bodyFlick.interactive ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
+                }
+                Column { id: body; width: bodyFlick.width; spacing: 14 }
+            }
         }
     }
 }

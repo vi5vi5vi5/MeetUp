@@ -228,6 +228,13 @@ Item {
                 spacing: 12
 
                 Text {
+                    // Может расти лишь до своей полной ширины, а под давлением —
+                    // сжимается и обрезается многоточием (как .conf-title у веба),
+                    // чтобы длинное название не толкало кнопки за край панели.
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 0
+                    Layout.maximumWidth: implicitWidth
+                    elide: Text.ElideRight
                     text: Conf.roomTitle !== "" ? Conf.roomTitle
                         : (root.roomCode !== "" ? root.roomCode : MockData.roomTitle)
                     color: Theme.text

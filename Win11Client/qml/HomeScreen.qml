@@ -156,15 +156,29 @@ Item {
     }
 
     // ---------------------------------------------------------------- Stage
-    Item {
+    Flickable {
         id: content
         anchors { top: topbar.bottom; left: parent.left; right: parent.right; bottom: parent.bottom }
+        contentWidth: width
+        contentHeight: stage.implicitHeight + 48
+        clip: true
+        interactive: contentHeight > height
+        boundsBehavior: Flickable.StopAtBounds
+        ScrollBar.vertical: ScrollBar {
+            policy: content.interactive ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
+        }
 
-        RowLayout {
+        // Две колонки на широком окне, одна — на узком (<900); при нехватке
+        // высоты страница листается, при достатке — центрируется по вертикали.
+        GridLayout {
             id: stage
-            anchors.centerIn: parent
-            width: Math.min(content.width - Theme.padStage * 2, 1000)
-            spacing: 44
+            columns: content.width > 900 ? 2 : 1
+            columnSpacing: 44
+            rowSpacing: 34
+            width: content.width > 900 ? Math.min(content.width - Theme.padStage * 2, 1000)
+                                       : Math.min(content.width - Theme.padStage * 2, 460)
+            x: Math.round((content.width - width) / 2)
+            y: Math.max(24, (content.height - implicitHeight) / 2)
 
             // ----- Left column: greeting + personal room -----
             ColumnLayout {
@@ -308,7 +322,7 @@ Item {
 
                     LinkRow { width: parent.width; code: root.room.code || "" }
 
-                    RowLayout { // actions
+                    Flow { // actions — переносятся на след. строку, если не влезли
                         width: parent.width
                         spacing: 10
                         AppButton {

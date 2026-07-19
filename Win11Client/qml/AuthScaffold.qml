@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import QtQuick.Controls.Basic
 import MeetUp
 
 // Shared layout for the login / register / anon-lobby pages: a top bar, then a
@@ -62,13 +63,25 @@ Item {
     }
 
     // ---- Stage ----
-    Item {
+    // Прокрутка по вертикали: высокая карточка (регистрация) на низком окне
+    // не обрезается. Пока помещается — band центрируется, не помещается —
+    // прижимается к верху и листается.
+    Flickable {
         id: content
         anchors { top: topbar.bottom; left: parent.left; right: parent.right; bottom: parent.bottom }
+        contentWidth: width
+        contentHeight: band.height + 48
+        clip: true
+        interactive: contentHeight > height
+        boundsBehavior: Flickable.StopAtBounds
+        ScrollBar.vertical: ScrollBar {
+            policy: content.interactive ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
+        }
 
         Item {
             id: band
-            anchors.centerIn: parent
+            x: Math.round((content.width - width) / 2)
+            y: Math.max(24, (content.height - height) / 2)
             width: Math.min(content.width - Theme.padStage * 2, root.wide ? 900 : 420)
             height: root.wide ? Math.max(hero.implicitHeight, card.implicitHeight)
                               : hero.implicitHeight + 32 + card.implicitHeight
