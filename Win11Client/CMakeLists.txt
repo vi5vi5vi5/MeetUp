@@ -95,6 +95,7 @@ qt_add_qml_module(Win11Client
         resources/icons/copy.svg
         resources/icons/image.svg
         resources/icons/paperclip.svg
+        resources/icons/more.svg
 )
 
 set_target_properties(Win11Client PROPERTIES
