@@ -1,10 +1,17 @@
 #include "VideoEngine.h"
 #include "VideoDecoder.h"
+#include "VideoSendWorker.h"
+#include "../MediaSettings.h"
 #include "../net/SignalingClient.h"
 #include "../net/Protocol.h"
 #include <QVideoSink>
 #include <QVideoFrame>
 #include <QVideoFrameFormat>
+#include <QCamera>
+#include <QCameraDevice>
+#include <QCameraFormat>
+#include <QMediaCaptureSession>
+#include <QThread>
 #include <QDateTime>
 #include <QImage>
 #include <QTimer>
@@ -15,13 +22,38 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
-VideoEngine::VideoEngine(SignalingClient* conf, QObject* parent)
-    : QObject(parent), m_conf(conf)
+// Затор в сокете, после которого видеокадры пропускаются (§5.5).
+static const qint64 kMaxBuffered = 1500000;
+
+VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings, QObject* parent)
+    : QObject(parent), m_conf(conf), m_settings(settings)
 {
-    connect(conf, &SignalingClient::binaryFrame,     this, &VideoEngine::onBinaryFrame);
-    connect(conf, &SignalingClient::joinOk,          this, &VideoEngine::onJoinOk);
-    connect(conf, &SignalingClient::participantLeft, this, &VideoEngine::onParticipantLeft);
-    connect(conf, &SignalingClient::left,            this, &VideoEngine::onLeft);
+    connect(conf, &SignalingClient::binaryFrame,       this, &VideoEngine::onBinaryFrame);
+    connect(conf, &SignalingClient::joinOk,            this, &VideoEngine::onJoinOk);
+    connect(conf, &SignalingClient::participantLeft,   this, &VideoEngine::onParticipantLeft);
+    connect(conf, &SignalingClient::left,              this, &VideoEngine::onLeft);
+
+    // Отправка: захват идёт, пока мы в эфире и камера включена.
+    connect(conf, &SignalingClient::phaseChanged,      this, &VideoEngine::onPhase);
+    connect(conf, &SignalingClient::localStateChanged, this, &VideoEngine::onLocalState);
+    // Новичок в комнате не должен ждать опорный кадр до 3 с (§4.2).
+    connect(conf, &SignalingClient::participantJoined, this, [this](qint64) { forceKeyframe(); });
+    // Смена камеры или пресета качества — перезапуск захвата на лету.
+    connect(settings, &MediaSettings::camIdChanged,      this, &VideoEngine::restartCapture);
+    connect(settings, &MediaSettings::camQualityChanged, this, &VideoEngine::restartCapture);
+
+    // Кодирующий поток: тяжёлые sws_scale + encode уходят с GUI-потока, чтобы
+    // окно не дёргалось при перетаскивании во время захвата.
+    m_encThread = new QThread(this);
+    m_encThread->setObjectName("video-encode");
+    m_worker = new VideoSendWorker;            // без parent — живёт на своём потоке
+    m_worker->moveToThread(m_encThread);
+    connect(m_encThread, &QThread::finished, m_worker, &QObject::deleteLater);
+    connect(this, &VideoEngine::frameToEncode, m_worker, &VideoSendWorker::encode);
+    // Готовый пакет возвращается на GUI-поток и уходит в сокет (queued).
+    connect(m_worker, &VideoSendWorker::packetReady, this,
+            [this](const QByteArray& frame) { m_conf->sendBinary(frame); });
+    m_encThread->start();
 
     // Сторож замёрзших плиток: раз в секунду проверяем, у кого кадры иссякли.
     // Работает всегда — вне конференции m_peers пуст, обход бесплатен.
@@ -32,6 +64,11 @@ VideoEngine::VideoEngine(SignalingClient* conf, QObject* parent)
 }
 
 VideoEngine::~VideoEngine() {
+    stopCapture();
+    if (m_encThread) {                         // остановить поток кодирования
+        m_encThread->quit();
+        m_encThread->wait();                   // finished -> deleteLater воркера
+    }
     for (Peer& p : m_peers) {
         delete p.dec;
         if (p.sws) sws_freeContext(p.sws);
@@ -59,6 +96,10 @@ void VideoEngine::detach(qint64 id) {
     it->active = false;
 }
 
+void VideoEngine::attachPreview(QVideoSink* sink) { m_preview = sink; }
+
+void VideoEngine::detachPreview() { m_preview = nullptr; }
+
 // ---------- жизненный цикл ----------
 
 // Мягкий сброс: всё декодированное состояние — в мусор, а вот привязки
@@ -81,9 +122,17 @@ void VideoEngine::resetPeers() {
 
 // Каждый join_ok — в т.ч. РЕКОННЕКТ: декодеры отстали от потока навсегда,
 // а у анонимов ещё и id новые. Свежие keyframe попросят attach'и плиток.
-void VideoEngine::onJoinOk() { resetPeers(); }
+// Пирам после нашего обрыва тоже нужен опорный кадр — шлём без просьбы.
+void VideoEngine::onJoinOk() {
+    resetPeers();
+    m_keyNext = true;
+}
 
-void VideoEngine::onLeft()   { resetPeers(); }
+void VideoEngine::onLeft() {
+    resetPeers();
+    m_live = false;                    // фаза осталась "live", но комнаты уже нет
+    updateCapture();
+}
 
 void VideoEngine::onParticipantLeft(qint64 id) {
     auto it = m_peers.find(quint32(id));
@@ -121,6 +170,10 @@ void VideoEngine::onBinaryFrame(const QByteArray& d) {
     Proto::FrameV2 f;
     if (!Proto::unpack(d, f)) return;
 
+    if (f.type == Proto::KEYFRAME_REQ) {           // кто-то просит опорный кадр
+        forceKeyframe();
+        return;
+    }
     if (f.type == Proto::VIDEO_JPEG) {             // legacy-браузеры без WebCodecs
         if (f.flags & Proto::FLAG_ENCRYPTED) return;
         paintJpeg(m_peers[f.sender], f.sender, f.payload);
@@ -205,4 +258,115 @@ void VideoEngine::paintJpeg(Peer& p, quint32 sender, const QByteArray& jpeg) {
 
     p.lastFrameAt = QDateTime::currentMSecsSinceEpoch();
     if (!p.active) { p.active = true; emit videoChanged(qint64(sender), true); }
+}
+
+// ---------- отправка ----------
+
+void VideoEngine::onPhase() {
+    m_live = (m_conf->phase() == "live");
+    updateCapture();
+}
+
+void VideoEngine::onLocalState(bool /*mic*/, bool cam) {
+    m_camOn = cam;
+    updateCapture();
+}
+
+// Захват идёт <=> мы в эфире И камера включена. Все дороги ведут сюда.
+void VideoEngine::updateCapture() {
+    const bool want = m_live && m_camOn;
+    if (want && !m_camera)       startCapture();
+    else if (!want && m_camera)  stopCapture();
+}
+
+void VideoEngine::restartCapture() {
+    if (!m_camera) return;         // не снимаем — новые настройки подхватит старт
+    stopCapture();
+    updateCapture();
+}
+
+void VideoEngine::startCapture() {
+    const QCameraDevice dev = m_settings->camera();
+    if (dev.isNull()) { qWarning() << "VideoEngine: камера не найдена"; return; }
+
+    const MediaSettings::CamPreset q = m_settings->camPreset();
+
+    // Формат камеры: ближайший к пресету по площади кадра; формат, не дотянувший
+    // по fps, штрафуется — пусть лучше будет чуть крупнее, но плавно.
+    QCameraFormat best;
+    qint64 bestScore = -1;
+    for (const QCameraFormat& f : dev.videoFormats()) {
+        const QSize r = f.resolution();
+        qint64 score = qAbs(qint64(r.width()) * r.height() - qint64(q.width) * q.height);
+        if (f.maxFrameRate() > 0 && f.maxFrameRate() < q.fps) score += 4000000;
+        if (bestScore < 0 || score < bestScore) { bestScore = score; best = f; }
+    }
+
+    m_camera = new QCamera(dev, this);
+    if (!best.isNull()) m_camera->setCameraFormat(best);
+    m_session = new QMediaCaptureSession(this);
+    m_capSink = new QVideoSink(this);
+    m_session->setCamera(m_camera);
+    m_session->setVideoSink(m_capSink);
+    connect(m_capSink, &QVideoSink::videoFrameChanged, this, &VideoEngine::onCamFrame);
+    connect(m_camera, &QCamera::errorOccurred, this,
+            [](QCamera::Error e, const QString& s) {
+                if (e != QCamera::NoError) qWarning() << "VideoEngine: камера:" << s;
+            });
+
+    m_keyNext = true;              // первый кадр нового захвата — опорный
+    m_lastEncodeAt = 0;
+    m_camera->start();
+}
+
+void VideoEngine::stopCapture() {
+    if (m_camera) {
+        m_camera->stop();
+        m_camera->deleteLater();  m_camera = nullptr;
+        m_session->deleteLater(); m_session = nullptr;
+        m_capSink->deleteLater(); m_capSink = nullptr;
+    }
+    // Энкодер и sws живут на кодирующем потоке — сброс тоже там (queued).
+    if (m_worker) QMetaObject::invokeMethod(m_worker, "reset", Qt::QueuedConnection);
+    m_keyNext = true;
+    if (m_preview) m_preview->setVideoFrame(QVideoFrame());   // стереть стоп-кадр
+    setPreviewActive(false);
+}
+
+void VideoEngine::setPreviewActive(bool on) {
+    if (m_previewActive == on) return;
+    m_previewActive = on;
+    emit previewActiveChanged();
+}
+
+// Просьба прислать опорный кадр (KEYFRAME_REQ, новичок, реконнект).
+// Rate-limit 500 мс — как у веба: спам запросов не роняет битрейт.
+void VideoEngine::forceKeyframe() {
+    if (!m_camera) return;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (now - m_lastForceAt < 500) return;
+    m_lastForceAt = now;
+    m_keyNext = true;
+}
+
+void VideoEngine::onCamFrame(const QVideoFrame& frame) {
+    if (!frame.isValid()) return;
+
+    // Превью в self-плитку — всегда и прямо здесь (на GUI/рендер-потоке): своё
+    // лицо живёт без задержек и не зависит от заторов; это дёшево.
+    if (m_preview) m_preview->setVideoFrame(frame);
+    setPreviewActive(true);
+
+    if (!m_live) return;
+    const MediaSettings::CamPreset q = m_settings->camPreset();
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (now - m_lastEncodeAt < 1000 / q.fps) return;         // троттлинг к fps пресета
+    if (m_conf->bufferedBytes() > kMaxBuffered) return;      // затор — кадр в мусор (§5.5)
+    m_lastEncodeAt = now;
+
+    // Тяжёлый sws+encode — на кодирующем потоке. QVideoFrame неявно расшарен:
+    // копия дешёвая, буфер общий; воркер маппит его read-only у себя.
+    const bool forceKey = m_keyNext;
+    m_keyNext = false;
+    emit frameToEncode(frame, q.width, q.height, q.fps, q.bitrate, forceKey, now);
 }

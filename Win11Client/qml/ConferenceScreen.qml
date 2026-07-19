@@ -184,24 +184,10 @@ Item {
                     anchors.leftMargin: 10
                     anchors.rightMargin: 12
                     spacing: 10
-                    Rectangle {
-                        width: 34; height: 34; radius: 17
-                        gradient: Gradient {
-                            GradientStop { position: 0.0; color: Theme.surface3 }
-                            GradientStop { position: 1.0; color: Theme.surface }
-                        }
-                        border.width: 1; border.color: Theme.border
-                        Text {
-                            anchors.centerIn: parent
-                            text: {
-                                var p = String(modelData.name).trim().split(/\s+/)
-                                return (p[0] ? p[0][0] : "?").toUpperCase()
-                            }
-                            color: Theme.text
-                            font.family: Theme.displayFont
-                            font.pixelSize: 14
-                            font.weight: Font.DemiBold
-                        }
+                    Avatar {
+                        name: modelData.name
+                        source: modelData.isSelf ? Auth.avatarUrl : (modelData.avatarUrl || "")
+                        size: 34
                     }
                     Text {
                         Layout.fillWidth: true
@@ -298,6 +284,7 @@ Item {
                     speaking: modelData.speaking
                     mic: modelData.isSelf ? root.micOn : modelData.mic
                     cam: modelData.isSelf ? root.camOn : modelData.cam
+                    avatar: modelData.isSelf ? Auth.avatarUrl : (modelData.avatarUrl || "")
                 }
             }
         }
@@ -313,6 +300,7 @@ Item {
             onToggleMic: { root.micOn = !root.micOn; Conf.setLocalState(root.micOn, root.camOn); }
             onToggleCam: { root.camOn = !root.camOn; Conf.setLocalState(root.micOn, root.camOn); }
             onToggleShare: root.sharing = !root.sharing
+            onOpenSettings: settings.open = true
             onLeave: root.leaveRequested()
         }
 
@@ -399,4 +387,11 @@ Item {
             }
         }
     }
+
+    // Настройки: устройства, громкость/чувствительность, качество отправки.
+    SettingsModal {
+        id: settings
+        onClosed: settings.open = false
+    }
 }
+

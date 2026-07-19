@@ -27,6 +27,7 @@ qt_add_executable(Win11Client
     src/main.cpp
     src/SysBridge.cpp
     src/HistoryStore.cpp
+    src/MediaSettings.cpp
     src/net/ApiClient.cpp
     src/net/AuthController.cpp
     src/net/RoomController.cpp
@@ -34,6 +35,8 @@ qt_add_executable(Win11Client
     src/net/PersonalRoomController.cpp
     src/media/AudioEngine.cpp
     src/media/VideoDecoder.cpp
+    src/media/VideoEncoder.cpp
+    src/media/VideoSendWorker.cpp
     src/media/VideoEngine.cpp
 )
 
@@ -63,6 +66,7 @@ qt_add_qml_module(Win11Client
         qml/VideoTile.qml
         qml/ChatMessage.qml
         qml/ControlDock.qml
+        qml/SettingsModal.qml
         qml/LoginScreen.qml
         qml/RegisterScreen.qml
         qml/AnonLobbyScreen.qml

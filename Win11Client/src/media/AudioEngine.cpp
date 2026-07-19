@@ -1,4 +1,5 @@
 ﻿#include "AudioEngine.h"
+#include "../MediaSettings.h"
 #include "../net/SignalingClient.h"
 #include "../net/Protocol.h"
 #include <QAudioSource>
@@ -10,6 +11,7 @@
 #include <QTimer>
 #include <QDateTime>
 #include <QDebug>
+#include <QtMath>
 #include <opus.h>
 
 
@@ -18,7 +20,6 @@
 static const int kRate = 48000;
 static const int kFrameSamples = 960;                 // 20 мс при 48 кГц
 static const int kFrameBytes = kFrameSamples * 2;   // Int16 = 2 байта/сэмпл
-static const int kBitrate = 32000;               // пресет med веба
 
 static QAudioFormat confFormat() {
     QAudioFormat f;
@@ -28,8 +29,8 @@ static QAudioFormat confFormat() {
     return f;
 }
 
-AudioEngine::AudioEngine(SignalingClient* conf, QObject* parent)
-    : QObject(parent), m_conf(conf)
+AudioEngine::AudioEngine(SignalingClient* conf, MediaSettings* settings, QObject* parent)
+    : QObject(parent), m_conf(conf), m_settings(settings)
 {
     connect(conf, &SignalingClient::phaseChanged, this, &AudioEngine::onPhase);
     connect(conf, &SignalingClient::localStateChanged, this, &AudioEngine::onLocalState);
@@ -38,6 +39,15 @@ AudioEngine::AudioEngine(SignalingClient* conf, QObject* parent)
     connect(conf, &SignalingClient::binaryFrame, this, &AudioEngine::onBinaryFrame);
     connect(conf, &SignalingClient::joinOk, this, &AudioEngine::onJoinOk);
     connect(conf, &SignalingClient::participantLeft, this, &AudioEngine::onParticipantLeft);
+
+    // Настройки на лету: смена устройств перезапускает соответствующую сторону,
+    // битрейт Opus меняется без пересоздания кодера. Громкость/чувствительность
+    // читаются по месту — на каждый кадр, сигналов не нужно.
+    connect(settings, &MediaSettings::micIdChanged, this, &AudioEngine::restartCapture);
+    connect(settings, &MediaSettings::outIdChanged, this, &AudioEngine::restartPlayback);
+    connect(settings, &MediaSettings::audioQualityChanged, this, [this]() {
+        if (m_enc) opus_encoder_ctl(m_enc, OPUS_SET_BITRATE(m_settings->audioBitrate()));
+        });
 
     // Насос вывода: 10 мс, точный таймер (обычный на Windows может «плавать» до 15 мс).
     m_pumpTimer = new QTimer(this);
@@ -73,13 +83,13 @@ void AudioEngine::updateCapture() {
 }
 
 void AudioEngine::startCapture() {
-    const QAudioDevice dev = QMediaDevices::defaultAudioInput();
+    const QAudioDevice dev = m_settings->audioInput();
     if (dev.isNull()) { qWarning() << "AudioEngine: микрофон не найден"; return; }
 
     const QAudioFormat fmt = confFormat();
     if (!dev.isFormatSupported(fmt)) {
         // Windows в shared-режиме почти всегда умеет 48к/моно/Int16. Если нет —
-        // честный warning; ресемплинг и выбор устройства — тема M8.
+        // честный warning; ресемплинг — не наша тема.
         qWarning() << "AudioEngine: устройство не умеет 48 кГц/моно/Int16:"
             << dev.description();
         return;
@@ -92,7 +102,7 @@ void AudioEngine::startCapture() {
         m_enc = nullptr;
         return;
     }
-    opus_encoder_ctl(m_enc, OPUS_SET_BITRATE(kBitrate));
+    opus_encoder_ctl(m_enc, OPUS_SET_BITRATE(m_settings->audioBitrate()));
 
     m_pcm.clear();
     m_source = new QAudioSource(dev, fmt, this);
@@ -112,6 +122,26 @@ void AudioEngine::stopCapture() {
         m_enc = nullptr;
     }
     m_pcm.clear();                // недособранный хвост кадра — в мусор
+    m_settings->reportMicLevel(0);   // индикатор в настройках гаснет
+}
+
+// Смена микрофона в настройках: перезапуск захвата (если он вообще шёл).
+void AudioEngine::restartCapture() {
+    if (!m_source) return;
+    stopCapture();
+    updateCapture();
+}
+
+// Смена динамиков: перезапуск воспроизведения. Декодеры и буферы участников
+// живут — потеря устройства не повод терять состояние Opus-декодеров.
+void AudioEngine::restartPlayback() {
+    if (!m_sink) return;
+    m_pumpTimer->stop();
+    m_sink->stop();
+    m_sink->deleteLater();
+    m_sink = nullptr;
+    m_out = nullptr;
+    startPlayback();
 }
 
 // Порция сэмплов от микрофона: копим и отрезаем ровно по кадру.
@@ -119,10 +149,22 @@ void AudioEngine::onCaptured() {
     if (!m_mic || !m_enc) return;
     m_pcm += m_mic->readAll();
 
+    // Чувствительность из настроек (0..2) — гейн до кодека, чтобы у
+    // собеседников голос стал реально тише/громче (как у веба).
+    const qreal gain = m_settings->sensitivityGain();
+
     unsigned char packet[1500];   // Opus при 32 кбит/с даёт ~80 байт, запас велик
     while (m_pcm.size() >= kFrameBytes) {
-        const opus_int16* samples =
-            reinterpret_cast<const opus_int16*>(m_pcm.constData());
+        opus_int16* samples = reinterpret_cast<opus_int16*>(m_pcm.data());
+        double sumSq = 0;
+        for (int i = 0; i < kFrameSamples; ++i) {
+            const qint32 v = qBound<qint32>(-32768, qint32(samples[i] * gain), 32767);
+            samples[i] = opus_int16(v);
+            sumSq += double(v) * v;
+        }
+        // RMS по нормализованным сэмплам — индикатор уровня в настройках.
+        m_settings->reportMicLevel(qSqrt(sumSq / kFrameSamples) / 32768.0);
+
         const int bytes = opus_encode(m_enc, samples, kFrameSamples,
             packet, int(sizeof(packet)));
         m_pcm.remove(0, kFrameBytes);
@@ -144,7 +186,7 @@ void AudioEngine::updatePlayback() {
 }
 
 void AudioEngine::startPlayback() {
-    const QAudioDevice dev = QMediaDevices::defaultAudioOutput();
+    const QAudioDevice dev = m_settings->audioOutput();
     if (dev.isNull()) { qWarning() << "AudioEngine: устройств вывода нет"; return; }
 
     m_sink = new QAudioSink(dev, confFormat(), this);
@@ -240,9 +282,12 @@ QByteArray AudioEngine::mixOneFrame() {
             acc[i] += s[i];                                // микс = сложение волн
     }
 
+    // Громкость воспроизведения из настроек (0..2) — на итоговый микс.
+    const qreal vol = m_settings->volumeGain();
+
     QByteArray out(kFrameBytes, 0);
     qint16* o = reinterpret_cast<qint16*>(out.data());
     for (int i = 0; i < kFrameSamples; ++i)
-        o[i] = qint16(qBound(-32768, acc[i], 32767));      // кламп в Int16
+        o[i] = qint16(qBound<qint32>(-32768, qint32(acc[i] * vol), 32767));  // кламп в Int16
     return out;
 }

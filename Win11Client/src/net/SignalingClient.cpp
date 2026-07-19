@@ -53,6 +53,12 @@ void SignalingClient::openSocket() {
     connect(m_ws, &QWebSocket::disconnected, this, &SignalingClient::onDisconnected);
     // Бинарные кадры (медиа v2) — наружу как есть: разбирает AudioEngine (M2+).
     connect(m_ws, &QWebSocket::binaryMessageReceived, this, &SignalingClient::binaryFrame);
+    // Учёт неотправленного: sendBinary прибавляет, подтверждения ОС — вычитают.
+    // bytesWritten считает и служебные байты WS-фрейминга, поэтому кламп в ноль.
+    m_bufferedBytes = 0;
+    connect(m_ws, &QWebSocket::bytesWritten, this, [this](qint64 n) {
+        m_bufferedBytes = qMax<qint64>(0, m_bufferedBytes - n);
+        });
     // Диагностика: молча падающий сокет выглядит как вечное «переподключение»,
     // а причина (DNS, TLS, отказ сервера) видна только здесь.
     connect(m_ws, &QWebSocket::errorOccurred, this, [this](QAbstractSocket::SocketError e) {
@@ -94,6 +100,16 @@ void SignalingClient::onTextMessage(const QString& text) {
         QJsonDocument::fromJson(text.toUtf8()).object();
     onJson(msg);
     
+}
+
+// Аватарка участника: id и версия приходят в participant_joined/participants
+// (только у авторизованных). Версия в URL — кэш-ключ, как в Auth::avatarUrl.
+static QString participantAvatarUrl(ApiClient* api, const QJsonObject& o) {
+    const qint64 uid = static_cast<qint64>(o.value("user_id").toDouble());
+    const int ver = o.value("avatar").toInt();
+    if (uid <= 0 || ver <= 0) return {};
+    return api->baseUrl() + "/api/users/" + QString::number(uid)
+        + "/avatar?v=" + QString::number(ver);
 }
 
 void SignalingClient::onJson(const QJsonObject& msg) {
@@ -140,11 +156,14 @@ void SignalingClient::onJson(const QJsonObject& msg) {
         p["cam"] = msg.value("cam").toBool(true);
         p["isSelf"] = false;
         p["speaking"] = false;
+        p["avatarUrl"] = participantAvatarUrl(m_api, msg);
         // не дублируем, если такой id уже есть
         for (const QVariant& v : m_participants)
             if (v.toMap().value("id").toLongLong() == p["id"].toLongLong()) return;
         m_participants.append(p);
         emit participantsChanged();
+        // Вещатели обязаны прислать новичку опорный кадр (§4.2) — не ждать 3 с.
+        emit participantJoined(p["id"].toLongLong());
         return;
     }
 
@@ -203,6 +222,7 @@ void SignalingClient::rebuildParticipants(const QJsonArray& serverList) {
     me["cam"] = m_cam;
     me["isSelf"] = true;
     me["speaking"] = false;
+    me["avatarUrl"] = "";        // своя аватарка берётся из Auth в QML
     m_participants.append(me);
     // 1) остальные — из join_ok.
     for (const QJsonValue& v : serverList) {
@@ -214,6 +234,7 @@ void SignalingClient::rebuildParticipants(const QJsonArray& serverList) {
         p["cam"] = o.value("cam").toBool(true);
         p["isSelf"] = false;
         p["speaking"] = false;
+        p["avatarUrl"] = participantAvatarUrl(m_api, o);
         m_participants.append(p);
     }
     emit participantsChanged();
@@ -333,6 +354,8 @@ QVariantMap SignalingClient::makeMessage(qint64 senderId, const QString& senderN
 }
 
 void SignalingClient::sendBinary(const QByteArray& frame) {
-    if (m_ws && m_ws->state() == QAbstractSocket::ConnectedState)
+    if (m_ws && m_ws->state() == QAbstractSocket::ConnectedState) {
+        m_bufferedBytes += frame.size();
         m_ws->sendBinaryMessage(frame);
+    }
 }

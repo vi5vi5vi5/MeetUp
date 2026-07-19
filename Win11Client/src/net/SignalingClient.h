@@ -40,6 +40,10 @@ public:
     Q_INVOKABLE void sendChat(const QString& text);
     void sendBinary(const QByteArray& frame); // не Q_INVOKABLE - зовёт C++ медиадвижок, не QML
 
+    // Неотправленный остаток в сокете (байты). Backpressure §5.5: выше 1.5 МБ
+    // видеокадры пропускаются (аудио продолжает идти).
+    qint64 bufferedBytes() const { return m_bufferedBytes; }
+
 signals:
     void phaseChanged();
     void errorTextChanged();
@@ -52,6 +56,7 @@ signals:
 
     void binaryFrame(const QByteArray& frame); // сырой кадр v2 от сервера
     void joinOk();                              // каждый join_ok — И РЕКОННЕКТ тоже
+    void participantJoined(qint64 id);          // новичок: вещатели шлют keyframe
     void participantLeft(qint64 id);            // участник ушёл (снести его декодер)
     void localStateChanged(bool mic, bool cam); // локальные микрофон/камера
     void left();    // вышли из комнаты (leave) — медиа немедленно глушится
@@ -85,10 +90,12 @@ private:
     bool    m_manualClose = false, m_fatal = false;
     bool    m_joinedOnce = false;            // защита от записи истории на каждом реконнекте
 
+    qint64  m_bufferedBytes = 0;             // учёт неотправленного (backpressure)
+
     QString m_phase = "connecting";
     QString m_errorText, m_roomTitle;
     bool    m_reconnecting = false;
-    QVariantList m_participants;             // список {id,name,mic,cam,isSelf,speaking}
+    QVariantList m_participants;             // список {id,name,mic,cam,isSelf,speaking,avatarUrl}
 
     QVariantList m_messages;   // список {author, text, time, self}
 };

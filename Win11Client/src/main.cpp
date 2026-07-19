@@ -13,6 +13,7 @@
 #include "net/PersonalRoomController.h"
 #include "SysBridge.h"
 #include "HistoryStore.h"
+#include "MediaSettings.h"
 
 #include "media/AudioEngine.h"
 #include "media/VideoEngine.h"
@@ -42,8 +43,9 @@ int main(int argc, char *argv[])
     PersonalRoomController myRoom(&api);   // тот же api -> та же сессия
     SysBridge sys(&api);                   // буфер обмена + ссылки
     HistoryStore history;                  // локальная история комнат (QSettings)
-    AudioEngine audio(&conf);
-    VideoEngine video(&conf);
+    MediaSettings av;                      // устройства/громкость/качество (QSettings)
+    AudioEngine audio(&conf, &av);
+    VideoEngine video(&conf, &av);
 
     QQmlApplicationEngine engine;
     // Кладём объект в глобальный контекст QML под именем "Auth".
@@ -56,6 +58,7 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("History", &history);
     // Имя "Video" занято QML-типом из QtMultimedia — поэтому Media.
     engine.rootContext()->setContextProperty("Media", &video);
+    engine.rootContext()->setContextProperty("AV", &av);
 
     
 

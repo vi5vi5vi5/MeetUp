@@ -9,17 +9,20 @@ class QTimer;
 struct OpusDecoder;
 
 class SignalingClient;
+class MediaSettings;
 class QAudioSource;
 class QIODevice;
 struct OpusEncoder;   // C-структура из opus.h — вперёд объявляется как struct
 
-// Аудиодвижок конференции. Этап №10 — отправка: микрофон -> Opus -> пакеты.
-// Приёмная половина (декодеры, джиттер-буфер, микшер) появится в №11.
+// Аудиодвижок конференции: микрофон -> Opus -> пакеты и приём (декодеры,
+// джиттер-буфер, микшер). Устройства, чувствительность/громкость и битрейт
+// приходят из MediaSettings (M8) и применяются на лету.
 // Из QML не виден: живёт между SignalingClient и звуковым железом.
 class AudioEngine : public QObject {
     Q_OBJECT
 public:
-    explicit AudioEngine(SignalingClient* conf, QObject* parent = nullptr);
+    explicit AudioEngine(SignalingClient* conf, MediaSettings* settings,
+                         QObject* parent = nullptr);
     ~AudioEngine() override;
 
 private:
@@ -30,6 +33,8 @@ private:
     void updateCapture();               // единственный судья: захватывать или нет
     void startCapture();
     void stopCapture();
+    void restartCapture();              // смена микрофона в настройках
+    void restartPlayback();             // смена динамиков (декодеры живут)
 
     void onJoinOk();                    // (ре)вход в комнату: буферы — мусор
     void onBinaryFrame(const QByteArray& frame);
@@ -42,6 +47,7 @@ private:
     QByteArray mixOneFrame();           // один кадр микса всех участников
 
     SignalingClient* m_conf;            // не владеем
+    MediaSettings* m_settings;          // не владеем
     bool m_live = false;                // phase == "live"
     bool m_micOn = true;                // тумблер микрофона из дока
 

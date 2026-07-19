@@ -5,7 +5,7 @@
     {
       "name": "ffmpeg",
       "default-features": false,
-      "features": [ "avcodec", "swscale" ]
+      "features": [ "avcodec", "swscale", "openh264", "vpx" ]
     }
   ],
   "builtin-baseline": "908da3a305a0a8028d9602ab241b433652b3df69"
