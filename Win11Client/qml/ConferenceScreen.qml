@@ -17,7 +17,31 @@ Item {
     property bool camOn: true
     property bool sharing: false
     property int activeTab: 0   // 0 = chat, 1 = participants
-    readonly property bool showSide: width > 760
+
+    // Боковая панель: на широком окне она часть раскладки, на узком —
+    // выезжает оверлеем по кнопке (иначе чат недоступен совсем).
+    readonly property bool sideDocked: width > 760
+    property bool panelOpen: false
+
+    // Закрепление участника: он крупно на сцене, остальные — плёнкой сверху.
+    property var pinnedId: null
+    function togglePin(id) { pinnedId = (pinnedId === id ? null : id) }
+
+    // Страницы плиток: в сетку больше девяти не пускаем.
+    property int page: 0
+    readonly property int perPage: 9
+    readonly property int pageCount: Math.max(1, Math.ceil(Conf.participants.length / perPage))
+    readonly property int curPage: Math.min(page, pageCount - 1)
+
+    // Что рисуем в сетке (в режиме сцены — ничего, там свои плитки).
+    readonly property var pageItems: pinnedId === null
+        ? Conf.participants.slice(curPage * perPage, curPage * perPage + perPage)
+        : []
+    // Закреплённый (0 или 1 элемент) и все остальные — для плёнки.
+    readonly property var pinnedItems: pinnedId === null ? []
+        : Conf.participants.filter(function (p) { return p.id === root.pinnedId })
+    readonly property var filmItems: pinnedId === null ? []
+        : Conf.participants.filter(function (p) { return p.id !== root.pinnedId })
 
     // Честный бейдж эфира: считаем от момента СВОЕГО входа (начало эфира
     // разовой комнаты серверу неизвестно — вебу, впрочем, тоже).
@@ -43,6 +67,11 @@ Item {
         function onPhaseChanged() {
             if (Conf.phase === "live" && root.joinedAtMs === 0) root.joinedAtMs = Date.now()
         }
+        // Закреплённый участник ушёл — снимаем закрепление, иначе сцена пуста.
+        function onParticipantsChanged() {
+            if (root.pinnedId !== null && root.pinnedItems.length === 0)
+                root.pinnedId = null
+        }
     }
     Timer { id: linkCopyReset; interval: 1400; onTriggered: root.linkCopied = false }
 
@@ -50,11 +79,21 @@ Item {
     Component.onDestruction: Conf.leave()
 
     // ---------------------------------------------------------------- Side panel
+    // Затемнение под выехавшей панелью — только на узком окне.
+    Rectangle {
+        visible: !root.sideDocked && root.panelOpen
+        anchors.fill: parent
+        color: Qt.rgba(0, 0, 0, 0.45)
+        z: 80
+        MouseArea { anchors.fill: parent; onClicked: root.panelOpen = false }
+    }
+
     Rectangle {
         id: side
-        visible: root.showSide
+        visible: root.sideDocked || root.panelOpen
+        z: root.sideDocked ? 0 : 90
         anchors { top: parent.top; bottom: parent.bottom; right: parent.right }
-        width: 340
+        width: root.sideDocked ? 340 : Math.min(root.width - 40, 360)
         color: Theme.surface
 
         Rectangle {
@@ -68,7 +107,8 @@ Item {
             height: 60
             anchors { top: parent.top; left: parent.left; right: parent.right }
             anchors.leftMargin: Theme.padPanel
-            anchors.rightMargin: Theme.padPanel
+            // На узком окне справа сидит крестик — оставляем ему место.
+            anchors.rightMargin: root.sideDocked ? Theme.padPanel : 52
             spacing: 8
 
             Repeater {
@@ -97,6 +137,17 @@ Item {
                 }
             }
         }
+        IconButton {            // закрыть выехавшую панель (узкое окно)
+            visible: !root.sideDocked
+            anchors.right: parent.right
+            anchors.rightMargin: Theme.padPanel
+            anchors.top: parent.top
+            anchors.topMargin: 10
+            size: "sm"
+            icon: "x"
+            onClicked: root.panelOpen = false
+        }
+
         Rectangle {
             anchors.top: tabs.bottom; anchors.left: parent.left; anchors.right: parent.right
             height: 1; color: Theme.border
@@ -213,7 +264,7 @@ Item {
     Item {
         id: stage
         anchors { top: parent.top; bottom: parent.bottom; left: parent.left }
-        anchors.right: root.showSide ? side.left : parent.right
+        anchors.right: root.sideDocked ? side.left : parent.right
 
         // Top bar
         Item {
@@ -268,8 +319,10 @@ Item {
         }
 
         // Tile grid
+        // ---- Обычный режим: сетка плиток, страницами по девять ----
         GridLayout {
             id: grid
+            visible: root.pinnedId === null
             anchors { top: confbar.bottom; left: parent.left; right: parent.right; bottom: parent.bottom }
             anchors.leftMargin: Theme.padStage
             anchors.rightMargin: Theme.padStage
@@ -277,10 +330,10 @@ Item {
             anchors.bottomMargin: 116   // clear the floating dock
             columnSpacing: Theme.gapGrid
             rowSpacing: Theme.gapGrid
-            columns: Math.max(1, Math.ceil(Math.sqrt(Conf.participants.length)))
+            columns: Math.max(1, Math.ceil(Math.sqrt(Math.max(1, root.pageItems.length))))
 
             Repeater {
-                model: Conf.participants // было: MockData.participants
+                model: root.pageItems
                 delegate: VideoTile {
                     required property var modelData
                     Layout.fillWidth: true
@@ -288,12 +341,110 @@ Item {
                     pid: modelData.id
                     name: modelData.name
                     isSelf: modelData.isSelf
-                    speaking: modelData.speaking
+                    speaking: Conf.speakingIds.indexOf(modelData.id) >= 0
                     mic: modelData.isSelf ? root.micOn : modelData.mic
                     cam: modelData.isSelf ? root.camOn : modelData.cam
                     avatar: modelData.isSelf ? Auth.avatarUrl : (modelData.avatarUrl || "")
+                    onClicked: root.togglePin(modelData.id)
                 }
             }
+        }
+
+        // ---- Режим сцены: плёнка остальных сверху, закреплённый — крупно ----
+        ColumnLayout {
+            visible: root.pinnedId !== null
+            anchors { top: confbar.bottom; left: parent.left; right: parent.right; bottom: parent.bottom }
+            anchors.leftMargin: Theme.padStage
+            anchors.rightMargin: Theme.padStage
+            anchors.topMargin: 4
+            anchors.bottomMargin: 116
+            spacing: Theme.gapGrid
+
+            Flickable {                       // плёнка камер — листается вбок
+                Layout.fillWidth: true
+                Layout.preferredHeight: 96
+                visible: root.filmItems.length > 0
+                contentWidth: filmRow.width
+                contentHeight: height
+                clip: true
+                flickableDirection: Flickable.HorizontalFlick
+                boundsBehavior: Flickable.StopAtBounds
+
+                Row {
+                    id: filmRow
+                    height: parent.height
+                    spacing: 10
+                    Repeater {
+                        model: root.filmItems
+                        delegate: VideoTile {
+                            required property var modelData
+                            width: 168
+                            height: 96
+                            pid: modelData.id
+                            name: modelData.name
+                            isSelf: modelData.isSelf
+                            speaking: Conf.speakingIds.indexOf(modelData.id) >= 0
+                            mic: modelData.isSelf ? root.micOn : modelData.mic
+                            cam: modelData.isSelf ? root.camOn : modelData.cam
+                            avatar: modelData.isSelf ? Auth.avatarUrl : (modelData.avatarUrl || "")
+                            onClicked: root.togglePin(modelData.id)
+                        }
+                    }
+                }
+            }
+
+            Repeater {                        // сама сцена: ноль или одна плитка
+                model: root.pinnedItems
+                delegate: VideoTile {
+                    required property var modelData
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    pid: modelData.id
+                    name: modelData.name
+                    isSelf: modelData.isSelf
+                    speaking: Conf.speakingIds.indexOf(modelData.id) >= 0
+                    mic: modelData.isSelf ? root.micOn : modelData.mic
+                    cam: modelData.isSelf ? root.camOn : modelData.cam
+                    avatar: modelData.isSelf ? Auth.avatarUrl : (modelData.avatarUrl || "")
+                    onClicked: root.pinnedId = null
+                }
+            }
+        }
+
+        // ---- Точки страниц: только в сетке и только если страниц больше одной
+        Row {
+            visible: root.pinnedId === null && root.pageCount > 1
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 108
+            spacing: 8
+            z: 30
+            Repeater {
+                model: root.pageCount
+                delegate: Rectangle {
+                    required property int index
+                    width: index === root.curPage ? 22 : 8
+                    height: 8
+                    radius: 4
+                    color: index === root.curPage ? Theme.accent : Theme.borderStrong
+                    Behavior on width { NumberAnimation { duration: Theme.durFast } }
+                    HoverHandler { cursorShape: Qt.PointingHandCursor }
+                    TapHandler { onTapped: root.page = index }
+                }
+            }
+        }
+
+        // ---- Кнопка чата: на узком окне панель скрыта, открыть её больше нечем
+        IconButton {
+            visible: !root.sideDocked && !root.panelOpen
+            anchors.right: parent.right
+            anchors.rightMargin: Theme.padStage
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 104
+            z: 40
+            icon: "chat"
+            variant: "neutral"
+            onClicked: root.panelOpen = true
         }
 
         // Floating dock

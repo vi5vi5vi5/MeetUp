@@ -85,9 +85,10 @@ void VideoEngine::attach(qint64 id, QVideoSink* sink) {
     requestKeyframe();                 // …и мы его просим, а не ждём до 3 с
 }
 
-void VideoEngine::detach(qint64 id) {
+void VideoEngine::detach(qint64 id, QVideoSink* sink) {
     auto it = m_peers.find(quint32(id));
     if (it == m_peers.end()) return;
+    if (sink && it->sink != sink) return;   // привязку уже перехватила новая плитка
     it->sink = nullptr;
     delete it->dec;                    // декодер без плитки бессмыслен:
     it->dec = nullptr;                 // кадры мы всё равно дропаем (см. ниже)

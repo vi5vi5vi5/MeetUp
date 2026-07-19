@@ -19,6 +19,42 @@ SignalingClient::SignalingClient(ApiClient* api, QObject* parent)
     m_waitTimer = new QTimer(this);
     m_waitTimer->setSingleShot(true);
     connect(m_waitTimer, &QTimer::timeout, this, [this]() { sendJoin(); });
+    // Гаснет подсветка «говорит»: тикает только пока кто-то говорит.
+    m_speakTimer = new QTimer(this);
+    m_speakTimer->setInterval(120);
+    connect(m_speakTimer, &QTimer::timeout, this, &SignalingClient::sweepSpeaking);
+}
+
+// ---------- индикатор «говорит» ----------
+
+void SignalingClient::markSpeaking(qint64 id) {
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const bool wasOn = m_speakingUntil.value(id, 0) > now;
+    m_speakingUntil[id] = now + 450;        // окно подсветки — как у веба
+    if (!wasOn) rebuildSpeaking();
+    if (!m_speakTimer->isActive()) m_speakTimer->start();
+}
+
+void SignalingClient::markSelfSpeaking() {
+    if (m_myId) markSpeaking(m_myId);
+}
+
+void SignalingClient::rebuildSpeaking() {
+    m_speakingIds.clear();
+    for (auto it = m_speakingUntil.constBegin(); it != m_speakingUntil.constEnd(); ++it)
+        m_speakingIds.append(it.key());
+    emit speakingChanged();
+}
+
+void SignalingClient::sweepSpeaking() {
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    bool changed = false;
+    for (auto it = m_speakingUntil.begin(); it != m_speakingUntil.end(); ) {
+        if (it.value() <= now) { it = m_speakingUntil.erase(it); changed = true; }
+        else ++it;
+    }
+    if (changed) rebuildSpeaking();
+    if (m_speakingUntil.isEmpty()) m_speakTimer->stop();
 }
 
 SignalingClient::~SignalingClient() { /* m_ws — child, удалится сам */ }
@@ -122,6 +158,9 @@ void SignalingClient::onJson(const QJsonObject& msg) {
         const QString title = msg.value("room_title").toString();
         if (!title.isEmpty()) { m_roomTitle = title; emit roomTitleChanged(); }
 
+        // Реконнект: у анонимов id новые — старая подсветка бессмысленна.
+        m_speakingUntil.clear();
+        rebuildSpeaking();
         rebuildParticipants(msg.value("participants").toArray());
         setError("");
         setPhase("live");
@@ -263,6 +302,9 @@ void SignalingClient::leave() {
     m_manualClose = true;       // подавляем реконнект
     m_reconnectTimer->stop();
     m_waitTimer->stop();
+    m_speakTimer->stop();
+    m_speakingUntil.clear();
+    rebuildSpeaking();
     if (m_ws) { m_ws->close(); m_ws->deleteLater(); m_ws = nullptr; }
     emit left();
 }

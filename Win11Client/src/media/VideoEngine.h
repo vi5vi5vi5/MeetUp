@@ -34,7 +34,11 @@ public:
     ~VideoEngine() override;
 
     Q_INVOKABLE void attach(qint64 id, QVideoSink* sink);  // плитка родилась
-    Q_INVOKABLE void detach(qint64 id);                    // плитка умерла
+    // Плитка умерла. sink передаём, чтобы отцепить ТОЛЬКО свою привязку:
+    // при смене раскладки (сетка <-> сцена, страницы) новая плитка успевает
+    // сделать attach раньше, чем старая — detach, и без этой проверки старая
+    // обнулила бы уже чужой sink, и видео пропадало бы насовсем.
+    Q_INVOKABLE void detach(qint64 id, QVideoSink* sink = nullptr);
     Q_INVOKABLE void attachPreview(QVideoSink* sink);      // self-плитка
     Q_INVOKABLE void detachPreview();
 

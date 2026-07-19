@@ -2,6 +2,7 @@
 #include <QObject>
 #include <QString>
 #include <QVariantList>
+#include <QHash>
 
 class ApiClient;
 class QWebSocket;
@@ -18,6 +19,10 @@ class SignalingClient : public QObject {
         Q_PROPERTY(bool         reconnecting READ reconnecting NOTIFY reconnectingChanged)
         Q_PROPERTY(QVariantList participants READ participants NOTIFY participantsChanged)
         Q_PROPERTY(QVariantList messages     READ messages     NOTIFY messagesChanged)
+        // Кто сейчас говорит. ОТДЕЛЬНОЕ свойство, а не поле в participants:
+        // подсветка меняется каждые пол-секунды, и трогать participants значило
+        // бы пересоздавать плитки Repeater'ом — видео моргало бы.
+        Q_PROPERTY(QVariantList speakingIds  READ speakingIds  NOTIFY speakingChanged)
 public:
     explicit SignalingClient(ApiClient* api, QObject* parent = nullptr);
     ~SignalingClient() override;
@@ -28,6 +33,12 @@ public:
     bool reconnecting() const { return m_reconnecting; }
     QVariantList participants() const { return m_participants; }
     QVariantList messages() const { return m_messages; }
+    QVariantList speakingIds() const { return m_speakingIds; }
+
+    // Подсветить говорящего на ~450 мс (как веб). Зовёт AudioEngine по RMS,
+    // не QML — поэтому не Q_INVOKABLE.
+    void markSpeaking(qint64 id);
+    void markSelfSpeaking();
 
     // Войти в комнату. Вызывается из ConferenceScreen.Component.onCompleted.
     Q_INVOKABLE void open(const QString& roomCode, const QString& name);
@@ -50,6 +61,7 @@ signals:
     void roomTitleChanged();
     void reconnectingChanged();
     void participantsChanged();
+    void speakingChanged();
     // Первый успешный вход в комнату (не реконнект) — для локальной истории.
     void joinedRoom(const QString& code, const QString& title);
     void messagesChanged();
@@ -71,6 +83,8 @@ private:
     void handleError(const QString& reason);
 
     void rebuildParticipants(const QJsonArray& serverList);
+    void rebuildSpeaking();             // m_speakingUntil -> m_speakingIds
+    void sweepSpeaking();               // снять подсветку с отговоривших
     QVariantMap makeMessage(qint64 senderId, const QString& senderName,
         const QString& text, qint64 tsMs);
     void setPhase(const QString& p);
@@ -98,4 +112,8 @@ private:
     QVariantList m_participants;             // список {id,name,mic,cam,isSelf,speaking,avatarUrl}
 
     QVariantList m_messages;   // список {author, text, time, self}
+
+    QHash<qint64, qint64> m_speakingUntil;   // id -> до какого мс подсвечен
+    QVariantList m_speakingIds;              // те же id для QML
+    QTimer* m_speakTimer = nullptr;          // гасит подсветку по истечении
 };

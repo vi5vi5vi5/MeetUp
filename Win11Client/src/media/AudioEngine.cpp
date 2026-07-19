@@ -162,8 +162,11 @@ void AudioEngine::onCaptured() {
             samples[i] = opus_int16(v);
             sumSq += double(v) * v;
         }
-        // RMS по нормализованным сэмплам — индикатор уровня в настройках.
-        m_settings->reportMicLevel(qSqrt(sumSq / kFrameSamples) / 32768.0);
+        // RMS по нормализованным сэмплам — индикатор уровня в настройках
+        // и подсветка своей плитки (порог 0.02, как в методичке §6.4).
+        const qreal level = qSqrt(sumSq / kFrameSamples) / 32768.0;
+        m_settings->reportMicLevel(level);
+        if (level > 0.02) m_conf->markSelfSpeaking();
 
         const int bytes = opus_encode(m_enc, samples, kFrameSamples,
             packet, int(sizeof(packet)));
@@ -248,6 +251,17 @@ void AudioEngine::onBinaryFrame(const QByteArray& d) {
         f.payload.size(),
         reinterpret_cast<opus_int16*>(chunk.data()), kFrameSamples, 0);
     if (samples != kFrameSamples) return;             // битый/нестандартный кадр
+
+    // Подсветка говорящего: RMS по кадру (каждый 16-й сэмпл — достаточно).
+    {
+        const qint16* s = reinterpret_cast<const qint16*>(chunk.constData());
+        double sum = 0; int n = 0;
+        for (int i = 0; i < kFrameSamples; i += 16) {
+            const double v = s[i] / 32768.0;
+            sum += v * v; ++n;
+        }
+        if (n && qSqrt(sum / n) > 0.02) m_conf->markSpeaking(qint64(f.sender));
+    }
 
     p.queue.append(chunk);
     if (p.queue.size() > 12)                          // лаг раздулся — срезаем

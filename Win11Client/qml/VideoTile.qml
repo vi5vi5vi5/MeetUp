@@ -19,6 +19,8 @@ Item {
     property var pid: 0          // id участника — ключ привязки к Media
     property bool live: false    // Media сообщил: картинка реально идёт
 
+    signal clicked()             // клик по плитке — закрепить/отпустить
+
     // Видео рисуем, когда камера включена и кадры реально приходят.
     readonly property bool videoShown: cam && live
 
@@ -189,8 +191,11 @@ Item {
     }
     Component.onDestruction: {
         if (isSelf) Media.detachPreview()
-        else if (pid) Media.detach(pid)
+        else if (pid) Media.detach(pid, out.videoSink)
     }
+
+    HoverHandler { cursorShape: Qt.PointingHandCursor }
+    TapHandler { onTapped: root.clicked() }
 
     Connections {
         target: Media
