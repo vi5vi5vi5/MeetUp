@@ -20,6 +20,10 @@
 static const int kRate = 48000;
 static const int kFrameSamples = 960;                 // 20 мс при 48 кГц
 static const int kFrameBytes = kFrameSamples * 2;   // Int16 = 2 байта/сэмпл
+static const int kFrameMs = 20;                     // длительность кадра
+// Сколько звука держим в QAudioSink. Наливать его «до упора» нельзя: полный
+// буфер — это чистая задержка, разговор уезжает на четверть секунды.
+static const int kSinkTargetFrames = 3;             // ~60 мс
 
 static QAudioFormat confFormat() {
     QAudioFormat f;
@@ -105,6 +109,7 @@ void AudioEngine::startCapture() {
     opus_encoder_ctl(m_enc, OPUS_SET_BITRATE(m_settings->audioBitrate()));
 
     m_pcm.clear();
+    m_audioClockMs = 0;           // часы меток начнутся с первой пачки
     m_source = new QAudioSource(dev, fmt, this);
     m_mic = m_source->start();    // поехали: source пишет, мы читаем
     connect(m_mic, &QIODevice::readyRead, this, &AudioEngine::onCaptured);
@@ -122,7 +127,26 @@ void AudioEngine::stopCapture() {
         m_enc = nullptr;
     }
     m_pcm.clear();                // недособранный хвост кадра — в мусор
+    m_audioClockMs = 0;
     m_settings->reportMicLevel(0);   // индикатор в настройках гаснет
+}
+
+// Сколько миллисекунд звука ещё не проиграно из QAudioSink.
+int AudioEngine::sinkQueuedMs() const {
+    if (!m_sink) return 0;
+    const int queued = m_sink->bufferSize() - m_sink->bytesFree();
+    return queued > 0 ? queued / kFrameBytes * kFrameMs : 0;
+}
+
+qint64 AudioEngine::playheadMs(quint32 id) const {
+    auto it = m_peers.constFind(id);
+    if (it == m_peers.constEnd() || it->lastTs == 0) return 0;
+    const qint64 age = QDateTime::currentMSecsSinceEpoch() - it->lastTsAt;
+    if (age > 700) return 0;      // звук иссяк (мик выключили) — не держим видео
+    // Всё, что лежит в очереди и в синке, ещё НЕ прозвучало — значит слышимый
+    // сейчас звук соответствует более ранней метке отправителя.
+    const qint64 bufMs = qint64(it->queue.size()) * kFrameMs + sinkQueuedMs();
+    return it->lastTs - bufMs + age;
 }
 
 // Смена микрофона в настройках: перезапуск захвата (если он вообще шёл).
@@ -153,6 +177,18 @@ void AudioEngine::onCaptured() {
     // собеседников голос стал реально тише/громче (как у веба).
     const qreal gain = m_settings->sensitivityGain();
 
+    // Метки времени. Устройство отдаёт сэмплы пачками, и если проштамповать
+    // всю пачку одним «сейчас», у приёмника поедут аудио-часы — а по ним он
+    // синхронизирует губы. Поэтому ведём монотонные часы (+20 мс на кадр) и
+    // подтягиваем их к стенным, только если разошлись (пауза, смена устройства).
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    const int pending = int(m_pcm.size() / kFrameBytes);
+    if (pending > 0) {
+        const qint64 batchStart = nowMs - qint64(pending - 1) * kFrameMs;
+        if (m_audioClockMs == 0 || qAbs(batchStart - m_audioClockMs) > 200)
+            m_audioClockMs = batchStart;
+    }
+
     unsigned char packet[1500];   // Opus при 32 кбит/с даёт ~80 байт, запас велик
     while (m_pcm.size() >= kFrameBytes) {
         opus_int16* samples = reinterpret_cast<opus_int16*>(m_pcm.data());
@@ -177,8 +213,9 @@ void AudioEngine::onCaptured() {
         // (общая шкала аудио/видео — §5.3, не выдумывать свою!).
         m_conf->sendBinary(Proto::pack(
             Proto::AUDIO_CODED, 0, Proto::CODEC_OPUS,
-            quint64(QDateTime::currentMSecsSinceEpoch()),
+            quint64(m_audioClockMs),
             QByteArray(reinterpret_cast<const char*>(packet), bytes)));
+        m_audioClockMs += kFrameMs;   // следующий кадр — ровно на 20 мс позже
     }
 }
 
@@ -263,6 +300,10 @@ void AudioEngine::onBinaryFrame(const QByteArray& d) {
         if (n && qSqrt(sum / n) > 0.02) m_conf->markSpeaking(qint64(f.sender));
     }
 
+    // Часы звука этого участника — по ним VideoEngine придержит обогнавшее видео.
+    p.lastTs = qint64(f.ts);
+    p.lastTsAt = QDateTime::currentMSecsSinceEpoch();
+
     p.queue.append(chunk);
     if (p.queue.size() > 12)                          // лаг раздулся — срезаем
         while (p.queue.size() > 6)
@@ -272,7 +313,11 @@ void AudioEngine::onBinaryFrame(const QByteArray& d) {
 // Каждые 10 мс: пока синк готов взять целый кадр — отдаём кадр микса.
 void AudioEngine::pump() {
     if (!m_sink || !m_out) return;
-    while (m_sink->bytesFree() >= kFrameBytes)
+    // Доливаем не «сколько влезет», а до цели ~60 мс: всё, что лежит в синке
+    // сверх этого, — задержка, которую слышно как «собеседник отвечает позже».
+    const int target = kFrameBytes * kSinkTargetFrames;
+    while (m_sink->bytesFree() >= kFrameBytes
+           && (m_sink->bufferSize() - m_sink->bytesFree()) < target)
         m_out->write(mixOneFrame());
 }
 

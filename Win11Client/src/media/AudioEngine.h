@@ -25,6 +25,12 @@ public:
                          QObject* parent = nullptr);
     ~AudioEngine() override;
 
+    // Где сейчас «играющий» звук участника в шкале часов ОТПРАВИТЕЛЯ (мс):
+    // метка последнего чанка минус то, что ещё лежит в очереди и в синке,
+    // плюс прошедшее с тех пор время. 0 — звука нет или он устарел; тогда
+    // видео не придерживают. По этому значению VideoEngine синхронизирует губы.
+    qint64 playheadMs(quint32 id) const;
+
 private:
     void onPhase();                     // фаза сменилась: live <-> остальные
     void onLocalState(bool mic, bool cam);
@@ -55,12 +61,17 @@ private:
     QIODevice* m_mic = nullptr;         // поток сэмплов (принадлежит m_source)
     QByteArray m_pcm;                   // накопитель до полного кадра
     OpusEncoder* m_enc = nullptr;       // кодер (жив вместе с захватом)
+    qint64 m_audioClockMs = 0;          // монотонные часы меток отправки
+
+    int sinkQueuedMs() const;           // сколько звука ещё лежит в QAudioSink
 
     // Приёмная сторона одного участника: декодер + джиттер-буфер.
     struct Peer {
         OpusDecoder* dec = nullptr;
         QList<QByteArray> queue;        // декодированные кадры по 1920 байт
         bool playing = false;           // предбуфер (3 кадра) пройден
+        qint64 lastTs = 0;              // метка последнего принятого чанка
+        qint64 lastTsAt = 0;            // когда он к нам пришёл (локальные мс)
     };
     QHash<quint32, Peer> m_peers;       // ключ — sender из заголовка кадра
 

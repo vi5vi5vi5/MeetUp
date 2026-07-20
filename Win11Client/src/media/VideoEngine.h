@@ -2,9 +2,12 @@
 #include <QObject>
 #include <QByteArray>
 #include <QHash>
+#include <QList>
+#include <QVideoFrame>
 
 class SignalingClient;
 class MediaSettings;
+class AudioEngine;
 class VideoDecoder;
 class VideoSendWorker;
 class QVideoSink;
@@ -30,7 +33,7 @@ class VideoEngine : public QObject {
     Q_PROPERTY(bool previewActive READ previewActive NOTIFY previewActiveChanged)
 public:
     explicit VideoEngine(SignalingClient* conf, MediaSettings* settings,
-                         QObject* parent = nullptr);
+                         AudioEngine* audio, QObject* parent = nullptr);
     ~VideoEngine() override;
 
     Q_INVOKABLE void attach(qint64 id, QVideoSink* sink);  // плитка родилась
@@ -53,6 +56,12 @@ signals:
                        int bitrate, bool forceKey, qint64 tsMs);
 
 private:
+    // Кадр, придержанный до своего звука (синхронизация губ).
+    struct Held {
+        QVideoFrame frame;
+        qint64 ts = 0;                 // метка отправителя, мс
+    };
+
     // Приёмная сторона одного участника.
     struct Peer {
         VideoDecoder* dec = nullptr;   // создаётся под первый кадр
@@ -61,6 +70,7 @@ private:
         QVideoSink* sink = nullptr;    // «дырка» плитки (не владеем)
         qint64 lastFrameAt = 0;        // мс: сторож заглушки
         bool active = false;           // сейчас есть живая картинка
+        QList<Held> holdQ;             // кадры, обогнавшие звук
     };
 
     void onBinaryFrame(const QByteArray& frame);
@@ -69,7 +79,9 @@ private:
     void onLeft();
     void sweepStale();                 // сторож: >5 с без кадров — заглушка
     void requestKeyframe();            // KEYFRAME_REQ, не чаще 1 раза в секунду
-    void deliver(Peer& p, quint32 sender, const AVFrame* f);
+    void deliver(Peer& p, quint32 sender, const AVFrame* f, qint64 tsMs);
+    void paint(Peer& p, quint32 sender, const QVideoFrame& vf);
+    void drainHeld();                  // отдать кадры, чьё время пришло
     void paintJpeg(Peer& p, quint32 sender, const QByteArray& jpeg);
     void resetPeers();                 // мягкий сброс: декодеры в мусор, sink'и живут
 
@@ -86,9 +98,11 @@ private:
 
     SignalingClient* m_conf;           // не владеем
     MediaSettings* m_settings;         // не владеем
+    AudioEngine* m_audio;              // не владеем: спрашиваем часы звука
     QHash<quint32, Peer> m_peers;      // ключ — sender из заголовка кадра
     qint64 m_lastKeyReqAt = 0;
     QTimer* m_staleTimer = nullptr;
+    QTimer* m_holdTimer = nullptr;     // тикает, только пока есть придержанное
 
     // отправка
     QCamera* m_camera = nullptr;

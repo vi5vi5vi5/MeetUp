@@ -45,7 +45,7 @@ int main(int argc, char *argv[])
     HistoryStore history;                  // локальная история комнат (QSettings)
     MediaSettings av;                      // устройства/громкость/качество (QSettings)
     AudioEngine audio(&conf, &av);
-    VideoEngine video(&conf, &av);
+    VideoEngine video(&conf, &av, &audio);   // video спрашивает у audio часы звука
 
     QQmlApplicationEngine engine;
     // Кладём объект в глобальный контекст QML под именем "Auth".

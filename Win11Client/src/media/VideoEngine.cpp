@@ -1,6 +1,7 @@
 #include "VideoEngine.h"
 #include "VideoDecoder.h"
 #include "VideoSendWorker.h"
+#include "AudioEngine.h"
 #include "../MediaSettings.h"
 #include "../net/SignalingClient.h"
 #include "../net/Protocol.h"
@@ -25,8 +26,9 @@ extern "C" {
 // Затор в сокете, после которого видеокадры пропускаются (§5.5).
 static const qint64 kMaxBuffered = 1500000;
 
-VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings, QObject* parent)
-    : QObject(parent), m_conf(conf), m_settings(settings)
+VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
+                         AudioEngine* audio, QObject* parent)
+    : QObject(parent), m_conf(conf), m_settings(settings), m_audio(audio)
 {
     connect(conf, &SignalingClient::binaryFrame,       this, &VideoEngine::onBinaryFrame);
     connect(conf, &SignalingClient::joinOk,            this, &VideoEngine::onJoinOk);
@@ -61,6 +63,12 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings, QObject
     m_staleTimer->setInterval(1000);
     connect(m_staleTimer, &QTimer::timeout, this, &VideoEngine::sweepStale);
     m_staleTimer->start();
+
+    // Насос придержанных кадров (синхронизация губ). Работает только когда
+    // есть что придерживать — в тишине не тикает.
+    m_holdTimer = new QTimer(this);
+    m_holdTimer->setInterval(15);
+    connect(m_holdTimer, &QTimer::timeout, this, &VideoEngine::drainHeld);
 }
 
 VideoEngine::~VideoEngine() {
@@ -95,6 +103,7 @@ void VideoEngine::detach(qint64 id, QVideoSink* sink) {
     if (it->sws) { sws_freeContext(it->sws); it->sws = nullptr; }
     it->awaitKey = true;
     it->active = false;
+    it->holdQ.clear();                 // рисовать больше некуда
 }
 
 void VideoEngine::attachPreview(QVideoSink* sink) { m_preview = sink; }
@@ -114,6 +123,7 @@ void VideoEngine::resetPeers() {
         p.dec = nullptr;
         if (p.sws) { sws_freeContext(p.sws); p.sws = nullptr; }
         p.awaitKey = true;
+        p.holdQ.clear();               // придержанное относится к прошлой сессии
         if (p.active) {
             p.active = false;
             emit videoChanged(qint64(it.key()), false);
@@ -214,14 +224,14 @@ void VideoEngine::onBinaryFrame(const QByteArray& d) {
         return;
     }
 
-    if (frame) deliver(p, f.sender, frame);
+    if (frame) deliver(p, f.sender, frame, qint64(f.ts));
 }
 
 // AVFrame → QVideoFrame → плитка. sws_scale пишет прямо в плоскости
 // QVideoFrame: для YUV420P это быстрое копирование с учётом stride, для
 // экзотики (10-битный VP9 и т.п.) — честная конверсия. YUV→RGB на экране
 // делает GPU при отрисовке — CPU в цвета не лезет.
-void VideoEngine::deliver(Peer& p, quint32 sender, const AVFrame* f) {
+void VideoEngine::deliver(Peer& p, quint32 sender, const AVFrame* f, qint64 tsMs) {
     QVideoFrameFormat fmt(QSize(f->width, f->height),
                           QVideoFrameFormat::Format_YUV420P);
     QVideoFrame vf(fmt);
@@ -239,6 +249,25 @@ void VideoEngine::deliver(Peer& p, quint32 sender, const AVFrame* f) {
     sws_scale(p.sws, f->data, f->linesize, 0, f->height, dst, dstStride);
 
     vf.unmap();
+
+    // Синхронизация губ: звук доходит до ушей позже картинки (джиттер-буфер
+    // плюс буфер звуковой карты), поэтому кадр, обогнавший свой звук,
+    // придерживаем до его метки. Верхняя граница отсекает бессмыслицу
+    // (сбитые часы, чужая шкала) — тогда рисуем сразу, как раньше.
+    const qint64 ph = m_audio ? m_audio->playheadMs(sender) : 0;
+    const qint64 lead = ph ? tsMs - ph : 0;
+    if (lead > 30 && lead < 1200) {
+        p.holdQ.append({ vf, tsMs });
+        if (p.holdQ.size() > 12) p.holdQ.removeFirst();   // очередь не копим
+        if (!m_holdTimer->isActive()) m_holdTimer->start();
+        return;
+    }
+
+    paint(p, sender, vf);
+}
+
+void VideoEngine::paint(Peer& p, quint32 sender, const QVideoFrame& vf) {
+    if (!p.sink) return;
     p.sink->setVideoFrame(vf);
 
     p.lastFrameAt = QDateTime::currentMSecsSinceEpoch();
@@ -246,6 +275,24 @@ void VideoEngine::deliver(Peer& p, quint32 sender, const AVFrame* f) {
         p.active = true;
         emit videoChanged(qint64(sender), true);  // плитка: «показывай видео»
     }
+}
+
+// Отдаём придержанные кадры, как только звук до них дотянулся.
+void VideoEngine::drainHeld() {
+    bool anyLeft = false;
+    for (auto it = m_peers.begin(); it != m_peers.end(); ++it) {
+        Peer& p = it.value();
+        while (!p.holdQ.isEmpty()) {
+            const qint64 ph = m_audio ? m_audio->playheadMs(it.key()) : 0;
+            // Звук пропал (мик выключили) — держать больше не за что.
+            const qint64 lead = ph ? p.holdQ.first().ts - ph : 0;
+            if (lead > 30) break;                  // ещё рано
+            const Held h = p.holdQ.takeFirst();
+            paint(p, it.key(), h.frame);
+        }
+        if (!p.holdQ.isEmpty()) anyLeft = true;
+    }
+    if (!anyLeft) m_holdTimer->stop();
 }
 
 // Legacy-камера: целый JPEG в payload (≤480×360, ~10 к/с). Декодер не нужен —

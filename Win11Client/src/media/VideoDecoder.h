@@ -29,7 +29,8 @@ public:
 
 private:
     AVCodecContext* m_ctx = nullptr;
-    AVFrame*  m_frame = nullptr;
+    AVFrame*  m_frame = nullptr;   // приёмник одного receive_frame
+    AVFrame*  m_ready = nullptr;   // последний готовый кадр (см. decode())
     AVPacket* m_pkt   = nullptr;
     quint8 m_codec  = 0;
     bool   m_failed = false;

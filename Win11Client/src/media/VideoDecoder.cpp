@@ -39,8 +39,9 @@ bool VideoDecoder::open(quint8 protoCodec) {
     if (avcodec_open2(m_ctx, codec, nullptr) < 0) { close(); return false; }
 
     m_frame = av_frame_alloc();
+    m_ready = av_frame_alloc();
     m_pkt   = av_packet_alloc();
-    if (!m_frame || !m_pkt) { close(); return false; }
+    if (!m_frame || !m_ready || !m_pkt) { close(); return false; }
 
     m_codec  = protoCodec;
     m_failed = false;
@@ -49,6 +50,7 @@ bool VideoDecoder::open(quint8 protoCodec) {
 
 void VideoDecoder::close() {
     if (m_pkt)   av_packet_free(&m_pkt);      // сами обнуляют указатель
+    if (m_ready) av_frame_free(&m_ready);
     if (m_frame) av_frame_free(&m_frame);
     if (m_ctx)   avcodec_free_context(&m_ctx);
     m_codec  = 0;
@@ -71,10 +73,23 @@ const AVFrame* VideoDecoder::decode(const QByteArray& payload, quint64 tsMs) {
     m_pkt->size = 0;
     if (sent < 0) { m_failed = true; return nullptr; }
 
-    const int got = avcodec_receive_frame(m_ctx, m_frame);
-    if (got == AVERROR(EAGAIN) || got == AVERROR_EOF)
-        return nullptr;                        // кадр ещё «зреет» — не ошибка
-    if (got < 0) { m_failed = true; return nullptr; }
+    // Дренаж: забираем ВСЕ готовые кадры и отдаём последний. Один кадр,
+    // застрявший внутри декодера, — это постоянные лишние ~40 мс задержки,
+    // и они уже не рассасываются: отставание живёт до конца потока.
+    //
+    // Грабля: avcodec_receive_frame ОЧИЩАЕТ переданный кадр даже когда
+    // возвращает EAGAIN. Поэтому каждый удачный кадр немедленно перекладываем
+    // в отдельный m_ready — иначе наружу уходил бы уже стёртый кадр 0x0.
+    bool haveFrame = false;
+    for (;;) {
+        const int got = avcodec_receive_frame(m_ctx, m_frame);
+        if (got == AVERROR(EAGAIN) || got == AVERROR_EOF)
+            break;                             // кадр ещё «зреет» — не ошибка
+        if (got < 0) { m_failed = true; return nullptr; }
+        av_frame_unref(m_ready);
+        av_frame_move_ref(m_ready, m_frame);
+        haveFrame = true;
+    }
 
-    return m_frame;
+    return haveFrame ? m_ready : nullptr;
 }
