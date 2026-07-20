@@ -181,17 +181,26 @@ Item {
         }
     }
 
+    // Номер привязки и id запоминаем при рождении: Component.onDestruction в
+    // QML срабатывает ОТЛОЖЕННО (плитка уже могла быть заменена новой), и
+    // лезть в этот момент к out.videoSink нельзя — отцеплять надо строго свою
+    // привязку, а её опознаёт номер.
+    property int _tok: 0
+    property var _pid: 0
+
     Component.onCompleted: {
         if (isSelf) {
-            Media.attachPreview(out.videoSink)
+            _tok = Media.attachPreview(out.videoSink)
             live = Qt.binding(function () { return Media.previewActive })
         } else if (pid) {
-            Media.attach(pid, out.videoSink)
+            _pid = pid
+            _tok = Media.attach(pid, out.videoSink)
         }
     }
     Component.onDestruction: {
-        if (isSelf) Media.detachPreview()
-        else if (pid) Media.detach(pid, out.videoSink)
+        if (_tok === 0) return
+        if (isSelf) Media.detachPreview(_tok)
+        else Media.detach(_pid, _tok)
     }
 
     HoverHandler { cursorShape: Qt.PointingHandCursor }

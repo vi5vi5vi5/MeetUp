@@ -1,6 +1,7 @@
 ﻿import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls.Basic
+import QtQuick.Effects
 import MeetUp
 
 // Conference view: stage (top bar · adaptive tile grid · floating dock) plus a
@@ -15,8 +16,17 @@ Item {
 
     property bool micOn: true
     property bool camOn: true
-    property bool sharing: false
     property int activeTab: 0   // 0 = chat, 1 = participants
+
+    // Демонстрация экрана: единственный источник правды — слот на сервере
+    // (§4.3). Кнопка в доке отражает его, а не локальное «я нажал».
+    readonly property bool screenActive: Conf.screenId !== 0
+    readonly property bool sharing: screenActive && Conf.screenId === Conf.myId
+    readonly property string sharerName: {
+        if (sharing) return "вы"
+        var p = Conf.participants.filter(function (x) { return x.id === Conf.screenId })
+        return p.length > 0 ? p[0].name : ""
+    }
 
     // Боковая панель: на широком окне она часть раскладки, на узком —
     // выезжает оверлеем по кнопке (иначе чат недоступен совсем).
@@ -27,6 +37,10 @@ Item {
     property var pinnedId: null
     function togglePin(id) { pinnedId = (pinnedId === id ? null : id) }
 
+    // Режим сцены: демонстрация экрана либо закреплённый участник. Демонстрация
+    // старше — пока она идёт, крупно показываем именно её (как у веба).
+    readonly property bool stageMode: screenActive || pinnedId !== null
+
     // Страницы плиток: в сетку больше девяти не пускаем.
     property int page: 0
     readonly property int perPage: 9
@@ -34,14 +48,15 @@ Item {
     readonly property int curPage: Math.min(page, pageCount - 1)
 
     // Что рисуем в сетке (в режиме сцены — ничего, там свои плитки).
-    readonly property var pageItems: pinnedId === null
-        ? Conf.participants.slice(curPage * perPage, curPage * perPage + perPage)
-        : []
-    // Закреплённый (0 или 1 элемент) и все остальные — для плёнки.
-    readonly property var pinnedItems: pinnedId === null ? []
+    readonly property var pageItems: stageMode ? []
+        : Conf.participants.slice(curPage * perPage, curPage * perPage + perPage)
+    // Закреплённый (0 или 1 элемент) — только когда сцену не занял экран.
+    readonly property var pinnedItems: (screenActive || pinnedId === null) ? []
         : Conf.participants.filter(function (p) { return p.id === root.pinnedId })
-    readonly property var filmItems: pinnedId === null ? []
-        : Conf.participants.filter(function (p) { return p.id !== root.pinnedId })
+    // Плёнка: при демонстрации в ней все, при закреплении — все, кроме него.
+    readonly property var filmItems: !stageMode ? []
+        : (screenActive ? Conf.participants
+                        : Conf.participants.filter(function (p) { return p.id !== root.pinnedId }))
 
     // Честный бейдж эфира: считаем от момента СВОЕГО входа (начало эфира
     // разовой комнаты серверу неизвестно — вебу, впрочем, тоже).
@@ -69,8 +84,11 @@ Item {
         }
         // Закреплённый участник ушёл — снимаем закрепление, иначе сцена пуста.
         function onParticipantsChanged() {
-            if (root.pinnedId !== null && root.pinnedItems.length === 0)
+            if (root.pinnedId !== null && !root.screenActive && root.pinnedItems.length === 0)
                 root.pinnedId = null
+        }
+        function onScreenBusy() {
+            root.notify("Демонстрацию экрана уже ведёт другой участник.")
         }
     }
     Timer { id: linkCopyReset; interval: 1400; onTriggered: root.linkCopied = false }
@@ -322,7 +340,7 @@ Item {
         // ---- Обычный режим: сетка плиток, страницами по девять ----
         GridLayout {
             id: grid
-            visible: root.pinnedId === null
+            visible: !root.stageMode
             anchors { top: confbar.bottom; left: parent.left; right: parent.right; bottom: parent.bottom }
             anchors.leftMargin: Theme.padStage
             anchors.rightMargin: Theme.padStage
@@ -350,9 +368,9 @@ Item {
             }
         }
 
-        // ---- Режим сцены: плёнка остальных сверху, закреплённый — крупно ----
+        // ---- Режим сцены: плёнка сверху, крупно — экран или закреплённый ----
         ColumnLayout {
-            visible: root.pinnedId !== null
+            visible: root.stageMode
             anchors { top: confbar.bottom; left: parent.left; right: parent.right; bottom: parent.bottom }
             anchors.leftMargin: Theme.padStage
             anchors.rightMargin: Theme.padStage
@@ -393,17 +411,33 @@ Item {
                 }
             }
 
+            // Демонстрация экрана занимает сцену целиком. Loader, а не visible:
+            // пока сцены нет, не должно быть и привязки к декодеру.
+            Loader {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                // НЕ убирать: невидимый элемент раскладка пропускает, а вот
+                // просто неактивный Loader остаётся её участником и с
+                // fillHeight честно забирает свою долю высоты — из-за этого
+                // закреплённый участник и оказывался в нижней половине сцены.
+                visible: root.screenActive
+                active: root.screenActive
+                sourceComponent: ScreenStage {
+                    sid: Conf.screenId
+                    isSelf: root.sharing
+                    sharerName: root.sharerName
+                }
+            }
+
             Repeater {                        // сама сцена: ноль или одна плитка
                 model: root.pinnedItems
-                delegate: VideoTile {
+                delegate: PinnedStage {
                     required property var modelData
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     pid: modelData.id
                     name: modelData.name
                     isSelf: modelData.isSelf
-                    speaking: Conf.speakingIds.indexOf(modelData.id) >= 0
-                    mic: modelData.isSelf ? root.micOn : modelData.mic
                     cam: modelData.isSelf ? root.camOn : modelData.cam
                     avatar: modelData.isSelf ? Auth.avatarUrl : (modelData.avatarUrl || "")
                     onClicked: root.pinnedId = null
@@ -413,7 +447,7 @@ Item {
 
         // ---- Точки страниц: только в сетке и только если страниц больше одной
         Row {
-            visible: root.pinnedId === null && root.pageCount > 1
+            visible: !root.stageMode && root.pageCount > 1
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.bottom: parent.bottom
             anchors.bottomMargin: 108
@@ -457,9 +491,55 @@ Item {
             sharing: root.sharing
             onToggleMic: { root.micOn = !root.micOn; Conf.setLocalState(root.micOn, root.camOn); }
             onToggleCam: { root.camOn = !root.camOn; Conf.setLocalState(root.micOn, root.camOn); }
-            onToggleShare: root.sharing = !root.sharing
+            onToggleShare: {
+                if (root.sharing) Conf.setScreenShare(false)
+                else if (root.screenActive)
+                    root.notify("Демонстрацию уже ведёт " + (root.sharerName || "другой участник") + ".")
+                else picker.open = true
+            }
             onOpenSettings: settings.open = true
             onLeave: root.leaveRequested()
+        }
+
+        // Уведомление над доком (.notice у веба): пилюля с тенью, длинный
+        // текст обрезается многоточием, а не растягивает её за края сцены.
+        MultiEffect {
+            visible: notice.visible
+            source: notice
+            anchors.fill: notice
+            z: 44
+            shadowEnabled: true
+            shadowColor: Theme.shadowColor
+            shadowVerticalOffset: 8
+            shadowBlur: 0.8
+            autoPaddingEnabled: true
+        }
+        Rectangle {
+            id: notice
+            visible: root.noticeText !== ""
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 100
+            z: 45
+            width: Math.min(noticeLabel.implicitWidth + 36, parent.width - 32)
+            height: noticeLabel.implicitHeight + 20
+            radius: Theme.radiusPill
+            color: Theme.surface
+            border.width: 1
+            border.color: Theme.border
+
+            Text {
+                id: noticeLabel
+                anchors.centerIn: parent
+                width: parent.width - 36
+                elide: Text.ElideRight
+                horizontalAlignment: Text.AlignHCenter
+                text: root.noticeText
+                color: Theme.text
+                font.family: Theme.uiFont
+                font.pixelSize: Theme.textSm
+                font.weight: Font.Medium
+            }
         }
 
         // Баннер «идёт переподключение»: связь оборвалась, попытки продолжаются
@@ -550,6 +630,28 @@ Item {
     SettingsModal {
         id: settings
         onClosed: settings.open = false
+    }
+
+    // Выбор объекта демонстрации. Подтверждение лишь ЗАПРАШИВАЕТ слот — захват
+    // начнётся, когда сервер пришлёт подтверждение (VideoEngine его и ждёт).
+    ScreenPickerModal {
+        id: picker
+        onClosed: picker.open = false
+        onConfirmed: {
+            picker.open = false
+            Conf.setScreenShare(true)
+        }
+    }
+
+    // Короткое уведомление (занятый слот, сорвавшийся захват). Как .notice у
+    // веба — пилюля над доком, а не бейдж в шапке.
+    property string noticeText: ""
+    function notify(text) { noticeText = text; noticeReset.restart() }
+    Timer { id: noticeReset; interval: 3500; onTriggered: root.noticeText = "" }
+
+    Connections {
+        target: Media
+        function onScreenError(text) { root.notify(text) }
     }
 }
 

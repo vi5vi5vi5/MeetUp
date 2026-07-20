@@ -23,6 +23,10 @@ class SignalingClient : public QObject {
         // подсветка меняется каждые пол-секунды, и трогать participants значило
         // бы пересоздавать плитки Repeater'ом — видео моргало бы.
         Q_PROPERTY(QVariantList speakingIds  READ speakingIds  NOTIFY speakingChanged)
+        // Свой sender_id — QML сравнивает с screenId, чтобы понять, чья демонстрация.
+        Q_PROPERTY(qint64       myId         READ myId         NOTIFY myIdChanged)
+        // Кто ведёт демонстрацию экрана; 0 — никто. Слот в комнате один (§4.3).
+        Q_PROPERTY(qint64       screenId     READ screenId     NOTIFY screenChanged)
 public:
     explicit SignalingClient(ApiClient* api, QObject* parent = nullptr);
     ~SignalingClient() override;
@@ -34,6 +38,8 @@ public:
     QVariantList participants() const { return m_participants; }
     QVariantList messages() const { return m_messages; }
     QVariantList speakingIds() const { return m_speakingIds; }
+    qint64 myId() const { return m_myId; }
+    qint64 screenId() const { return m_screenId; }
 
     // Подсветить говорящего на ~450 мс (как веб). Зовёт AudioEngine по RMS,
     // не QML — поэтому не Q_INVOKABLE.
@@ -47,6 +53,9 @@ public:
     // Локальные микрофон/камера -> разослать участникам (state). Необязательно.
     Q_INVOKABLE void setLocalState(bool mic, bool cam);
     // Выйти из комнаты (закрыть сокет без реконнекта).
+    // Запросить/отпустить слот демонстрации экрана (§4.3). Кадры пойдут только
+    // после подтверждения сервера — VideoEngine слушает screenChanged.
+    Q_INVOKABLE void setScreenShare(bool on);
     Q_INVOKABLE void leave();
     Q_INVOKABLE void sendChat(const QString& text);
     void sendBinary(const QByteArray& frame); // не Q_INVOKABLE - зовёт C++ медиадвижок, не QML
@@ -62,6 +71,9 @@ signals:
     void reconnectingChanged();
     void participantsChanged();
     void speakingChanged();
+    void myIdChanged();
+    void screenChanged();
+    void screenBusy();       // слот занят другим — показать уведомление
     // Первый успешный вход в комнату (не реконнект) — для локальной истории.
     void joinedRoom(const QString& code, const QString& title);
     void messagesChanged();
@@ -83,6 +95,8 @@ private:
     void handleError(const QString& reason);
 
     void rebuildParticipants(const QJsonArray& serverList);
+    void setScreenId(qint64 id);
+    void sendJson(const QJsonObject& msg);
     void rebuildSpeaking();             // m_speakingUntil -> m_speakingIds
     void sweepSpeaking();               // снять подсветку с отговоривших
     QVariantMap makeMessage(qint64 senderId, const QString& senderName,
@@ -103,6 +117,8 @@ private:
     int     m_attempts = 0;
     bool    m_manualClose = false, m_fatal = false;
     bool    m_joinedOnce = false;            // защита от записи истории на каждом реконнекте
+    qint64  m_screenId = 0;                  // ведущий демонстрации (0 — никто)
+    bool    m_wantScreen = false;            // мы хотим слот: повторяем заявку после реконнекта
 
     qint64  m_bufferedBytes = 0;             // учёт неотправленного (backpressure)
 

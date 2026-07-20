@@ -3,6 +3,7 @@
 #include "VideoSendWorker.h"
 #include "AudioEngine.h"
 #include "../MediaSettings.h"
+#include "../ScreenSources.h"
 #include "../net/SignalingClient.h"
 #include "../net/Protocol.h"
 #include <QVideoSink>
@@ -11,6 +12,9 @@
 #include <QCamera>
 #include <QCameraDevice>
 #include <QCameraFormat>
+#include <QScreenCapture>
+#include <QWindowCapture>
+#include <QScreen>
 #include <QMediaCaptureSession>
 #include <QThread>
 #include <QDateTime>
@@ -27,8 +31,9 @@ extern "C" {
 static const qint64 kMaxBuffered = 1500000;
 
 VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
-                         AudioEngine* audio, QObject* parent)
-    : QObject(parent), m_conf(conf), m_settings(settings), m_audio(audio)
+                         ScreenSources* sources, AudioEngine* audio, QObject* parent)
+    : QObject(parent), m_conf(conf), m_settings(settings), m_sources(sources),
+      m_audio(audio)
 {
     connect(conf, &SignalingClient::binaryFrame,       this, &VideoEngine::onBinaryFrame);
     connect(conf, &SignalingClient::joinOk,            this, &VideoEngine::onJoinOk);
@@ -43,17 +48,33 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
     // Смена камеры или пресета качества — перезапуск захвата на лету.
     connect(settings, &MediaSettings::camIdChanged,      this, &VideoEngine::restartCapture);
     connect(settings, &MediaSettings::camQualityChanged, this, &VideoEngine::restartCapture);
+    // Разрешение и частота демонстрации: битрейт зашит в открытый энкодер,
+    // поэтому мало поменять пресет — полосу надо перезапустить.
+    connect(settings, &MediaSettings::screenResChanged,
+            this, &VideoEngine::restartScreenCapture);
+    connect(settings, &MediaSettings::screenFpsChanged,
+            this, &VideoEngine::restartScreenCapture);
+    // Слот демонстрации закрепил сервер (§4.3) — только после этого снимаем.
+    connect(conf, &SignalingClient::screenChanged, this, &VideoEngine::onScreenSlotChanged);
 
     // Кодирующий поток: тяжёлые sws_scale + encode уходят с GUI-потока, чтобы
-    // окно не дёргалось при перетаскивании во время захвата.
+    // окно не дёргалось при перетаскивании во время захвата. Полос две —
+    // камера и экран, — и у каждой свой воркер: энкодер держит состояние
+    // потока, делить его между разными картинками нельзя.
     m_encThread = new QThread(this);
     m_encThread->setObjectName("video-encode");
-    m_worker = new VideoSendWorker;            // без parent — живёт на своём потоке
+    m_worker = new VideoSendWorker(Proto::VIDEO_CODED);   // без parent: свой поток
+    m_scrWorker = new VideoSendWorker(Proto::SCREEN_CODED);
     m_worker->moveToThread(m_encThread);
+    m_scrWorker->moveToThread(m_encThread);
     connect(m_encThread, &QThread::finished, m_worker, &QObject::deleteLater);
+    connect(m_encThread, &QThread::finished, m_scrWorker, &QObject::deleteLater);
     connect(this, &VideoEngine::frameToEncode, m_worker, &VideoSendWorker::encode);
+    connect(this, &VideoEngine::screenFrameToEncode, m_scrWorker, &VideoSendWorker::encode);
     // Готовый пакет возвращается на GUI-поток и уходит в сокет (queued).
     connect(m_worker, &VideoSendWorker::packetReady, this,
+            [this](const QByteArray& frame) { m_conf->sendBinary(frame); });
+    connect(m_scrWorker, &VideoSendWorker::packetReady, this,
             [this](const QByteArray& frame) { m_conf->sendBinary(frame); });
     m_encThread->start();
 
@@ -64,6 +85,11 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
     connect(m_staleTimer, &QTimer::timeout, this, &VideoEngine::sweepStale);
     m_staleTimer->start();
 
+    // Отложенная просьба об опорном кадре (см. requestKeyframe).
+    m_keyReqTimer = new QTimer(this);
+    m_keyReqTimer->setSingleShot(true);
+    connect(m_keyReqTimer, &QTimer::timeout, this, &VideoEngine::requestKeyframe);
+
     // Насос придержанных кадров (синхронизация губ). Работает только когда
     // есть что придерживать — в тишине не тикает.
     m_holdTimer = new QTimer(this);
@@ -73,31 +99,42 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
 
 VideoEngine::~VideoEngine() {
     stopCapture();
+    stopScreenCapture();
     if (m_encThread) {                         // остановить поток кодирования
         m_encThread->quit();
-        m_encThread->wait();                   // finished -> deleteLater воркера
+        m_encThread->wait();                   // finished -> deleteLater воркеров
     }
-    for (Peer& p : m_peers) {
-        delete p.dec;
-        if (p.sws) sws_freeContext(p.sws);
+    for (QHash<quint32, Peer>* h : { &m_peers, &m_screenPeers }) {
+        for (Peer& p : *h) {
+            delete p.dec;
+            if (p.sws) sws_freeContext(p.sws);
+        }
+        h->clear();
     }
-    m_peers.clear();
 }
 
 // ---------- связь с плитками ----------
 
-void VideoEngine::attach(qint64 id, QVideoSink* sink) {
+int VideoEngine::attach(qint64 id, QVideoSink* sink) {
     Peer& p = m_peers[quint32(id)];    // operator[] создаст пустого
     p.sink = sink;
+    p.token = ++m_attachSeq;
     p.awaitKey = true;                 // новой плитке нужен свежий опорный кадр
-    requestKeyframe();                 // …и мы его просим, а не ждём до 3 с
+    // Сбросить «картинка идёт» ОБЯЗАТЕЛЬНО: плитка рождается с live=false и
+    // ждёт сигнала videoChanged(true), а он приходит только на переходе
+    // false->true. Иначе плитка, заменившая другую (сетка <-> сцена), сидела
+    // бы на аватарке при живом потоке кадров.
+    p.active = false;
+    requestKeyframe();                 // …и мы просим кадр, а не ждём до 3 с
+    return p.token;
 }
 
-void VideoEngine::detach(qint64 id, QVideoSink* sink) {
+void VideoEngine::detach(qint64 id, int token) {
     auto it = m_peers.find(quint32(id));
     if (it == m_peers.end()) return;
-    if (sink && it->sink != sink) return;   // привязку уже перехватила новая плитка
+    if (token != it->token) return;    // привязку уже перехватила новая плитка
     it->sink = nullptr;
+    it->token = 0;
     delete it->dec;                    // декодер без плитки бессмыслен:
     it->dec = nullptr;                 // кадры мы всё равно дропаем (см. ниже)
     if (it->sws) { sws_freeContext(it->sws); it->sws = nullptr; }
@@ -106,9 +143,53 @@ void VideoEngine::detach(qint64 id, QVideoSink* sink) {
     it->holdQ.clear();                 // рисовать больше некуда
 }
 
-void VideoEngine::attachPreview(QVideoSink* sink) { m_preview = sink; }
+int VideoEngine::attachPreview(QVideoSink* sink) {
+    m_preview = sink;
+    m_previewToken = ++m_attachSeq;
+    return m_previewToken;
+}
 
-void VideoEngine::detachPreview() { m_preview = nullptr; }
+void VideoEngine::detachPreview(int token) {
+    if (token != m_previewToken) return;   // превью уже перехватила новая плитка
+    m_preview = nullptr;
+    m_previewToken = 0;
+}
+
+// Сцена демонстрации — та же механика, только полоса другая.
+int VideoEngine::attachScreen(qint64 id, QVideoSink* sink) {
+    Peer& p = m_screenPeers[quint32(id)];
+    p.sink = sink;
+    p.token = ++m_attachSeq;
+    p.awaitKey = true;
+    p.active = false;                  // см. attach(): сигнал даёт только переход
+    requestKeyframe();
+    return p.token;
+}
+
+void VideoEngine::detachScreen(qint64 id, int token) {
+    auto it = m_screenPeers.find(quint32(id));
+    if (it == m_screenPeers.end()) return;
+    if (token != it->token) return;
+    it->sink = nullptr;
+    it->token = 0;
+    delete it->dec;
+    it->dec = nullptr;
+    if (it->sws) { sws_freeContext(it->sws); it->sws = nullptr; }
+    it->awaitKey = true;
+    it->active = false;
+}
+
+int VideoEngine::attachScreenPreview(QVideoSink* sink) {
+    m_scrPreview = sink;
+    m_scrPreviewToken = ++m_attachSeq;
+    return m_scrPreviewToken;
+}
+
+void VideoEngine::detachScreenPreview(int token) {
+    if (token != m_scrPreviewToken) return;
+    m_scrPreview = nullptr;
+    m_scrPreviewToken = 0;
+}
 
 // ---------- жизненный цикл ----------
 
@@ -129,6 +210,17 @@ void VideoEngine::resetPeers() {
             emit videoChanged(qint64(it.key()), false);
         }
     }
+    for (auto it = m_screenPeers.begin(); it != m_screenPeers.end(); ++it) {
+        Peer& p = it.value();
+        delete p.dec;
+        p.dec = nullptr;
+        if (p.sws) { sws_freeContext(p.sws); p.sws = nullptr; }
+        p.awaitKey = true;
+        if (p.active) {
+            p.active = false;
+            emit screenVideoChanged(qint64(it.key()), false);
+        }
+    }
 }
 
 // Каждый join_ok — в т.ч. РЕКОННЕКТ: декодеры отстали от потока навсегда,
@@ -137,21 +229,31 @@ void VideoEngine::resetPeers() {
 void VideoEngine::onJoinOk() {
     resetPeers();
     m_keyNext = true;
+    m_scrKeyNext = true;
 }
 
 void VideoEngine::onLeft() {
     resetPeers();
     m_live = false;                    // фаза осталась "live", но комнаты уже нет
     updateCapture();
+    stopScreenCapture();
+}
+
+void VideoEngine::dropPeer(QHash<quint32, Peer>& peers, quint32 id, bool screen) {
+    auto it = peers.find(id);
+    if (it == peers.end()) return;
+    if (it->active) {
+        if (screen) emit screenVideoChanged(qint64(id), false);
+        else        emit videoChanged(qint64(id), false);
+    }
+    delete it->dec;
+    if (it->sws) sws_freeContext(it->sws);
+    peers.erase(it);
 }
 
 void VideoEngine::onParticipantLeft(qint64 id) {
-    auto it = m_peers.find(quint32(id));
-    if (it == m_peers.end()) return;
-    if (it->active) emit videoChanged(id, false);
-    delete it->dec;
-    if (it->sws) sws_freeContext(it->sws);
-    m_peers.erase(it);
+    dropPeer(m_peers, quint32(id), false);
+    dropPeer(m_screenPeers, quint32(id), true);
 }
 
 // Сторож: вещатель умер молча (вкладку убили, ноутбук уснул) — через 5 с
@@ -165,13 +267,28 @@ void VideoEngine::sweepStale() {
         p.awaitKey = true;             // поток вернётся — начнём с опорного
         emit videoChanged(qint64(it.key()), false);
     }
+    // Демонстрация на «Эко» идёт 5 к/с, но и там пауза в 5 с означает обрыв.
+    for (auto it = m_screenPeers.begin(); it != m_screenPeers.end(); ++it) {
+        Peer& p = it.value();
+        if (!p.active || now - p.lastFrameAt <= 5000) continue;
+        p.active = false;
+        p.awaitKey = true;
+        emit screenVideoChanged(qint64(it.key()), false);
+    }
 }
 
 // ---------- приём ----------
 
 void VideoEngine::requestKeyframe() {
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    if (now - m_lastKeyReqAt < 1000) return;   // rate-limit как у веба
+    const qint64 wait = 1000 - (now - m_lastKeyReqAt);
+    if (wait > 0) {
+        // Не чаще раза в секунду (как веб) — но и НЕ терять просьбу: плитка,
+        // родившаяся сразу после чужой просьбы, иначе ждала бы опорный кадр
+        // по общей каденции, то есть до трёх секунд чёрного прямоугольника.
+        if (!m_keyReqTimer->isActive()) m_keyReqTimer->start(int(wait));
+        return;
+    }
     m_lastKeyReqAt = now;
     // Пустой payload, codec 0, ts 0 (§5.3). Сервер разошлёт всем вещающим.
     m_conf->sendBinary(Proto::pack(Proto::KEYFRAME_REQ, 0, 0, 0, QByteArray()));
@@ -185,34 +302,43 @@ void VideoEngine::onBinaryFrame(const QByteArray& d) {
         forceKeyframe();
         return;
     }
-    if (f.type == Proto::VIDEO_JPEG) {             // legacy-браузеры без WebCodecs
-        if (f.flags & Proto::FLAG_ENCRYPTED) return;
-        paintJpeg(m_peers[f.sender], f.sender, f.payload);
+    if (f.type == Proto::VIDEO_JPEG || f.type == Proto::SCREEN_JPEG) {
+        if (f.flags & Proto::FLAG_ENCRYPTED) return;   // legacy без WebCodecs
+        const bool screen = (f.type == Proto::SCREEN_JPEG);
+        paintJpeg((screen ? m_screenPeers : m_peers)[f.sender], f.sender, f.payload, screen);
         return;
     }
-    if (f.type != Proto::VIDEO_CODED) return;      // экран — M7, звук — не наш
-    if (f.flags & Proto::FLAG_ENCRYPTED) return;   // E2E — M5
-    if (f.codec != Proto::CODEC_H264 && f.codec != Proto::CODEC_VP8 &&
-        f.codec != Proto::CODEC_VP9) return;       // незнакомое — молча мимо
+    if (f.type == Proto::VIDEO_CODED)
+        routeCoded(m_peers, f.sender, f.flags, f.codec, f.ts, f.payload, false);
+    else if (f.type == Proto::SCREEN_CODED)
+        routeCoded(m_screenPeers, f.sender, f.flags, f.codec, f.ts, f.payload, true);
+}
 
-    Peer& p = m_peers[f.sender];
+void VideoEngine::routeCoded(QHash<quint32, Peer>& peers, quint32 sender, quint8 flags,
+                             quint8 codec, quint64 ts, const QByteArray& payload,
+                             bool screen) {
+    if (flags & Proto::FLAG_ENCRYPTED) return;     // E2E — M5
+    if (codec != Proto::CODEC_H264 && codec != Proto::CODEC_VP8 &&
+        codec != Proto::CODEC_VP9) return;         // незнакомое — молча мимо
+
+    Peer& p = peers[sender];
     if (!p.sink) return;   // плитки (ещё) нет — не тратим CPU на декод в никуда
 
     // Декодер: создать под первый кадр; пересоздать, если отправитель сменил
     // кодек (правило §5.4 — у веба это смена браузера после реконнекта).
-    if (!p.dec || p.dec->codec() != f.codec) {
+    if (!p.dec || p.dec->codec() != codec) {
         delete p.dec;
         p.dec = new VideoDecoder;
-        if (!p.dec->open(f.codec)) { delete p.dec; p.dec = nullptr; return; }
+        if (!p.dec->open(codec)) { delete p.dec; p.dec = nullptr; return; }
         p.awaitKey = true;
     }
 
     // Дельта-кадры до опорного — мусор: молча дропаем и просим keyframe.
-    const bool isKey = (f.flags & Proto::FLAG_KEYFRAME) != 0;
+    const bool isKey = (flags & Proto::FLAG_KEYFRAME) != 0;
     if (p.awaitKey && !isKey) { requestKeyframe(); return; }
     p.awaitKey = false;
 
-    const AVFrame* frame = p.dec->decode(f.payload, f.ts);
+    const AVFrame* frame = p.dec->decode(payload, ts);
 
     // Декодер сломался (битый поток?) — правило §5.4: пересоздать и ждать
     // keyframe заново. Пересоздание случится само на следующем кадре.
@@ -224,14 +350,15 @@ void VideoEngine::onBinaryFrame(const QByteArray& d) {
         return;
     }
 
-    if (frame) deliver(p, f.sender, frame, qint64(f.ts));
+    if (frame) deliver(p, sender, frame, qint64(ts), screen);
 }
 
 // AVFrame → QVideoFrame → плитка. sws_scale пишет прямо в плоскости
 // QVideoFrame: для YUV420P это быстрое копирование с учётом stride, для
 // экзотики (10-битный VP9 и т.п.) — честная конверсия. YUV→RGB на экране
 // делает GPU при отрисовке — CPU в цвета не лезет.
-void VideoEngine::deliver(Peer& p, quint32 sender, const AVFrame* f, qint64 tsMs) {
+void VideoEngine::deliver(Peer& p, quint32 sender, const AVFrame* f, qint64 tsMs,
+                          bool screen) {
     QVideoFrameFormat fmt(QSize(f->width, f->height),
                           QVideoFrameFormat::Format_YUV420P);
     QVideoFrame vf(fmt);
@@ -254,7 +381,9 @@ void VideoEngine::deliver(Peer& p, quint32 sender, const AVFrame* f, qint64 tsMs
     // плюс буфер звуковой карты), поэтому кадр, обогнавший свой звук,
     // придерживаем до его метки. Верхняя граница отсекает бессмыслицу
     // (сбитые часы, чужая шкала) — тогда рисуем сразу, как раньше.
-    const qint64 ph = m_audio ? m_audio->playheadMs(sender) : 0;
+    // Экран губами не шевелит: придерживать его под звук незачем, а на «Эко»
+    // (5 к/с) это давало бы заметный лаг курсора. Рисуем сразу.
+    const qint64 ph = (m_audio && !screen) ? m_audio->playheadMs(sender) : 0;
     const qint64 lead = ph ? tsMs - ph : 0;
     if (lead > 30 && lead < 1200) {
         p.holdQ.append({ vf, tsMs });
@@ -263,17 +392,18 @@ void VideoEngine::deliver(Peer& p, quint32 sender, const AVFrame* f, qint64 tsMs
         return;
     }
 
-    paint(p, sender, vf);
+    paint(p, sender, vf, screen);
 }
 
-void VideoEngine::paint(Peer& p, quint32 sender, const QVideoFrame& vf) {
+void VideoEngine::paint(Peer& p, quint32 sender, const QVideoFrame& vf, bool screen) {
     if (!p.sink) return;
     p.sink->setVideoFrame(vf);
 
     p.lastFrameAt = QDateTime::currentMSecsSinceEpoch();
     if (!p.active) {
         p.active = true;
-        emit videoChanged(qint64(sender), true);  // плитка: «показывай видео»
+        if (screen) emit screenVideoChanged(qint64(sender), true);
+        else        emit videoChanged(qint64(sender), true);  // «показывай видео»
     }
 }
 
@@ -288,7 +418,7 @@ void VideoEngine::drainHeld() {
             const qint64 lead = ph ? p.holdQ.first().ts - ph : 0;
             if (lead > 30) break;                  // ещё рано
             const Held h = p.holdQ.takeFirst();
-            paint(p, it.key(), h.frame);
+            paint(p, it.key(), h.frame, false);   // придерживаем только камеру
         }
         if (!p.holdQ.isEmpty()) anyLeft = true;
     }
@@ -297,7 +427,7 @@ void VideoEngine::drainHeld() {
 
 // Legacy-камера: целый JPEG в payload (≤480×360, ~10 к/с). Декодер не нужен —
 // JPEG умеет Qt, а QVideoFrame с Qt 6.8 строится прямо из QImage.
-void VideoEngine::paintJpeg(Peer& p, quint32 sender, const QByteArray& jpeg) {
+void VideoEngine::paintJpeg(Peer& p, quint32 sender, const QByteArray& jpeg, bool screen) {
     if (!p.sink) return;
     const QImage img = QImage::fromData(jpeg, "JPEG");
     if (img.isNull()) return;
@@ -305,7 +435,11 @@ void VideoEngine::paintJpeg(Peer& p, quint32 sender, const QByteArray& jpeg) {
     p.sink->setVideoFrame(QVideoFrame(img));
 
     p.lastFrameAt = QDateTime::currentMSecsSinceEpoch();
-    if (!p.active) { p.active = true; emit videoChanged(qint64(sender), true); }
+    if (!p.active) {
+        p.active = true;
+        if (screen) emit screenVideoChanged(qint64(sender), true);
+        else        emit videoChanged(qint64(sender), true);
+    }
 }
 
 // ---------- отправка ----------
@@ -390,11 +524,14 @@ void VideoEngine::setPreviewActive(bool on) {
 // Просьба прислать опорный кадр (KEYFRAME_REQ, новичок, реконнект).
 // Rate-limit 500 мс — как у веба: спам запросов не роняет битрейт.
 void VideoEngine::forceKeyframe() {
-    if (!m_camera) return;
+    if (!m_camera && !m_scrSession) return;
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     if (now - m_lastForceAt < 500) return;
     m_lastForceAt = now;
+    // Просьба одна на обе полосы: сервер рассылает KEYFRAME_REQ всем вещающим,
+    // и новичку одинаково нужны и опорный кадр камеры, и опорный кадр экрана.
     m_keyNext = true;
+    m_scrKeyNext = true;
 }
 
 void VideoEngine::onCamFrame(const QVideoFrame& frame) {
@@ -417,4 +554,112 @@ void VideoEngine::onCamFrame(const QVideoFrame& frame) {
     const bool forceKey = m_keyNext;
     m_keyNext = false;
     emit frameToEncode(frame, q.width, q.height, q.fps, q.bitrate, forceKey, now);
+}
+
+// ---------- отправка: демонстрация экрана (M7) ----------
+
+// Единственный судья — сервер: слот демонстрации в комнате один, и снимать
+// экран мы начинаем только увидев в подтверждении собственный id (§4.3).
+void VideoEngine::onScreenSlotChanged() {
+    const qint64 me = m_conf->myId();
+    if (me != 0 && m_conf->screenId() == me) startScreenCapture();
+    else                                     stopScreenCapture();
+}
+
+void VideoEngine::startScreenCapture() {
+    if (m_scrSession) return;
+    if (!m_sources || !m_sources->hasSelection()) {
+        failScreen(QStringLiteral("Не выбран экран или окно для демонстрации."));
+        return;
+    }
+
+    m_scrSession = new QMediaCaptureSession(this);
+    m_scrSink = new QVideoSink(this);
+    m_scrSession->setVideoSink(m_scrSink);
+    connect(m_scrSink, &QVideoSink::videoFrameChanged, this, &VideoEngine::onScreenCapFrame);
+
+    if (m_sources->isWindow()) {
+        m_scrWindow = new QWindowCapture(this);
+        m_scrWindow->setWindow(m_sources->selectedWindow());
+        m_scrSession->setWindowCapture(m_scrWindow);
+        // Окно закрыли посреди демонстрации — захват падает с ошибкой, и это
+        // единственный сигнал о том, что показывать больше нечего.
+        connect(m_scrWindow, &QWindowCapture::errorOccurred, this,
+                [this](QWindowCapture::Error e, const QString& s) {
+                    if (e != QWindowCapture::NoError)
+                        failScreen(s.isEmpty()
+                            ? QStringLiteral("Окно больше недоступно.") : s);
+                });
+        m_scrWindow->start();
+    } else {
+        QScreen* scr = m_sources->selectedScreen();
+        if (!scr) {                    // монитор отключили между выбором и стартом
+            stopScreenCapture();
+            failScreen(QStringLiteral("Выбранный экран больше недоступен."));
+            return;
+        }
+        m_scrScreen = new QScreenCapture(this);
+        m_scrScreen->setScreen(scr);
+        m_scrSession->setScreenCapture(m_scrScreen);
+        connect(m_scrScreen, &QScreenCapture::errorOccurred, this,
+                [this](QScreenCapture::Error e, const QString& s) {
+                    if (e != QScreenCapture::NoError)
+                        failScreen(s.isEmpty()
+                            ? QStringLiteral("Не удалось захватить экран.") : s);
+                });
+        m_scrScreen->start();
+    }
+
+    m_scrKeyNext = true;
+    m_scrLastEncodeAt = 0;
+}
+
+void VideoEngine::stopScreenCapture() {
+    if (m_scrScreen) { m_scrScreen->stop(); m_scrScreen->deleteLater(); m_scrScreen = nullptr; }
+    if (m_scrWindow) { m_scrWindow->stop(); m_scrWindow->deleteLater(); m_scrWindow = nullptr; }
+    if (m_scrSession) { m_scrSession->deleteLater(); m_scrSession = nullptr; }
+    if (m_scrSink) { m_scrSink->deleteLater(); m_scrSink = nullptr; }
+    if (m_scrWorker) QMetaObject::invokeMethod(m_scrWorker, "reset", Qt::QueuedConnection);
+    m_scrKeyNext = true;
+    if (m_scrPreview) m_scrPreview->setVideoFrame(QVideoFrame());
+    setScreenPreviewActive(false);
+}
+
+// Смена пресета качества на лету: перезапускаем, только если реально снимаем.
+void VideoEngine::restartScreenCapture() {
+    if (!m_scrSession) return;
+    stopScreenCapture();
+    onScreenSlotChanged();
+}
+
+void VideoEngine::failScreen(const QString& text) {
+    stopScreenCapture();
+    m_conf->setScreenShare(false);     // отпустить слот, иначе он повиснет за нами
+    emit screenError(text);
+}
+
+void VideoEngine::setScreenPreviewActive(bool on) {
+    if (m_screenPreviewActive == on) return;
+    m_screenPreviewActive = on;
+    emit screenPreviewActiveChanged();
+}
+
+void VideoEngine::onScreenCapFrame(const QVideoFrame& frame) {
+    if (!frame.isValid()) return;
+
+    // Своя сцена — сразу и без кодека (как превью камеры): видеть, что именно
+    // ты показываешь, нужно немедленно.
+    if (m_scrPreview) m_scrPreview->setVideoFrame(frame);
+    setScreenPreviewActive(true);
+
+    if (!m_live) return;
+    const MediaSettings::CamPreset q = m_settings->screenPreset();
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (now - m_scrLastEncodeAt < 1000 / q.fps) return;
+    if (m_conf->bufferedBytes() > kMaxBuffered) return;   // затор (§5.5)
+    m_scrLastEncodeAt = now;
+
+    const bool forceKey = m_scrKeyNext;
+    m_scrKeyNext = false;
+    emit screenFrameToEncode(frame, q.width, q.height, q.fps, q.bitrate, forceKey, now);
 }

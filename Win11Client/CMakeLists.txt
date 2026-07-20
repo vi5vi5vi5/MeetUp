@@ -10,7 +10,10 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Network WebSockets Multimedia)
+# MultimediaPrivate — отдельный компонент: цель Qt6::MultimediaPrivate сама по
+# себе не появляется от Multimedia, её нужно запросить явно (см. ScreenSources).
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Network WebSockets
+                                         Multimedia MultimediaPrivate)
 
 find_package(Opus CONFIG REQUIRED)
 
@@ -28,6 +31,7 @@ qt_add_executable(Win11Client
     src/SysBridge.cpp
     src/HistoryStore.cpp
     src/MediaSettings.cpp
+    src/ScreenSources.cpp
     src/net/ApiClient.cpp
     src/net/AuthController.cpp
     src/net/RoomController.cpp
@@ -67,6 +71,9 @@ qt_add_qml_module(Win11Client
         qml/ChatMessage.qml
         qml/ControlDock.qml
         qml/SettingsModal.qml
+        qml/ScreenPickerModal.qml
+        qml/ScreenStage.qml
+        qml/PinnedStage.qml
         qml/LoginScreen.qml
         qml/RegisterScreen.qml
         qml/AnonLobbyScreen.qml
@@ -112,8 +119,18 @@ target_link_libraries(Win11Client PRIVATE
     Qt6::Network
     Qt6::WebSockets
     Qt6::Multimedia
+    # Приватный модуль — ради QCapturableWindowPrivate: публичного доступа к
+    # хендлу перечисленного окна нет, а без него нельзя ни отсеять «призраки»
+    # системы из списка, ни снять предпросмотр (см. src/ScreenSources.cpp).
+    Qt6::MultimediaPrivate
     Opus::opus
 )
+
+if(WIN32)
+    # dwmapi — проверка «окно скрыто композитором» (свёрнутые UWP-призраки);
+    # user32/gdi32 — PrintWindow и DIB для миниатюр окон.
+    target_link_libraries(Win11Client PRIVATE dwmapi user32 gdi32)
+endif()
 
 # FFmpeg из vcpkg не даёт CMake-целей — только переменные Find-модуля.
 target_include_directories(Win11Client PRIVATE ${FFMPEG_INCLUDE_DIRS})

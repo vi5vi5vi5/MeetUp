@@ -253,4 +253,56 @@ AppModal {
             }
         }
     }
+
+    // ---- Демонстрация экрана ----
+    // Отдельно от камеры: у экрана свои требования — там читают текст, а не
+    // смотрят на лицо, поэтому разрешение и частоту кадров выбирают порознь.
+    Field {
+        width: parent.width
+        label: "Демонстрация экрана"
+        hint: "«Источник» отдаёт кадр без масштабирования. Больше кадров — плавнее курсор и видео, выше нагрузка."
+        Row {
+            width: parent.width
+            spacing: 8
+            Column {
+                width: (parent.width - 8) / 2
+                spacing: 4
+                Text {
+                    text: "Разрешение"
+                    color: Theme.textFaint
+                    font.family: Theme.uiFont
+                    font.pixelSize: Theme.text2xs
+                }
+                SettingsCombo {
+                    width: parent.width
+                    model: [ { id: "360",  label: "360p" },
+                             { id: "480",  label: "480p" },
+                             { id: "720",  label: "720p" },
+                             { id: "1080", label: "1080p" },
+                             { id: "src",  label: "Источник" } ]
+                    selectedId: AV.screenRes
+                    onPicked: function (id) { AV.screenRes = id }
+                }
+            }
+            Column {
+                width: (parent.width - 8) / 2
+                spacing: 4
+                Text {
+                    text: "Частота кадров"
+                    color: Theme.textFaint
+                    font.family: Theme.uiFont
+                    font.pixelSize: Theme.text2xs
+                }
+                SettingsCombo {
+                    width: parent.width
+                    // valueRole у комбо строковый — число приводим на месте.
+                    model: [ { id: "15", label: "15 к/с" },
+                             { id: "30", label: "30 к/с" },
+                             { id: "60", label: "60 к/с" } ]
+                    selectedId: String(AV.screenFps)
+                    onPicked: function (id) { AV.screenFps = parseInt(id) }
+                }
+            }
+        }
+    }
 }

@@ -14,7 +14,10 @@ struct SwsContext;
 class VideoSendWorker : public QObject {
     Q_OBJECT
 public:
-    explicit VideoSendWorker(QObject* parent = nullptr);
+    // msgType — тип кадра в заголовке v2: VIDEO_CODED (камера) или
+    // SCREEN_CODED (демонстрация экрана). Всё остальное у полос одинаково,
+    // поэтому воркеров просто два — со своими энкодерами и своей каденцией.
+    explicit VideoSendWorker(quint8 msgType, QObject* parent = nullptr);
     ~VideoSendWorker() override;
 
 public slots:
@@ -33,6 +36,7 @@ signals:
     void packetReady(const QByteArray& frame);
 
 private:
+    quint8 m_msgType;
     VideoEncoder* m_enc = nullptr;
     SwsContext* m_sws = nullptr;
     int m_frames = 0;

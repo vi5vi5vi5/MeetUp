@@ -26,7 +26,8 @@ static AVPixelFormat toAvPixFmt(QVideoFrameFormat::PixelFormat f) {
     }
 }
 
-VideoSendWorker::VideoSendWorker(QObject* parent) : QObject(parent) {}
+VideoSendWorker::VideoSendWorker(quint8 msgType, QObject* parent)
+    : QObject(parent), m_msgType(msgType) {}
 
 VideoSendWorker::~VideoSendWorker() {
     delete m_enc;
@@ -117,7 +118,7 @@ void VideoSendWorker::encode(const QVideoFrame& frame, int maxW, int maxH,
     const auto packets = m_enc->encode(key, tsMs - m_sendStartMs);
     for (const VideoEncoder::Packet& p : packets) {
         emit packetReady(Proto::pack(
-            Proto::VIDEO_CODED,
+            m_msgType,
             p.key ? Proto::FLAG_KEYFRAME : 0,
             m_enc->protoCodec(),
             quint64(tsMs),

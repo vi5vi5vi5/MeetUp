@@ -153,6 +153,7 @@ void SignalingClient::onJson(const QJsonObject& msg) {
 
     if (type == "join_ok") {
         m_myId = static_cast<qint64>(msg.value("sender_id").toDouble()); // >2^31 у аккаунта
+        emit myIdChanged();
         m_attempts = 0;
         if (m_waitTimer->isActive()) m_waitTimer->stop();
         const QString title = msg.value("room_title").toString();
@@ -170,7 +171,13 @@ void SignalingClient::onJson(const QJsonObject& msg) {
             m_joinedOnce = true;
             emit joinedRoom(m_roomCode, title);   // title пуст у разовых комнат
         }
+        // Демонстрация экрана (§4.3): сервер сообщает, идёт ли она и от кого.
+        // Свой слот после обрыва не сохраняется — если мы вещали, просим заново.
+        setScreenId(msg.contains("screen_id")
+            ? static_cast<qint64>(msg.value("screen_id").toDouble()) : 0);
         emit joinOk();   // каждый вход, включая реконнект: медиа сбрасывает буферы
+        if (m_wantScreen && m_screenId == 0)
+            sendJson({ {"type","screen"}, {"on", true} });
         // История чата: пересобираем ленту из join_ok (и на реконнекте — тоже,
         // чтобы не задвоить уже показанные сообщения).
         m_messages.clear();
@@ -233,6 +240,20 @@ void SignalingClient::onJson(const QJsonObject& msg) {
         return;
     }
 
+    // Подтверждение слота демонстрации — всем, включая инициатора (§4.3).
+    if (type == "screen") {
+        const qint64 id = static_cast<qint64>(msg.value("id").toDouble());
+        const bool on = msg.value("on").toBool();
+        if (on) {
+            if (id == m_myId) m_wantScreen = true;
+            setScreenId(id);
+        } else if (m_screenId == id) {
+            if (id == m_myId) m_wantScreen = false;
+            setScreenId(0);
+        }
+        return;
+    }
+
     if (type == "chat") {
         m_messages.append(makeMessage(
             static_cast<qint64>(msg.value("sender_id").toDouble()),
@@ -281,14 +302,30 @@ void SignalingClient::rebuildParticipants(const QJsonArray& serverList) {
 // TODO: speaking обрабатывать на стороне клиента и менять тут
 
 // Разослать участникам, что у нас с микрофоном/камерой (веб шлёт state).
+void SignalingClient::sendJson(const QJsonObject& msg) {
+    if (!m_ws || m_ws->state() != QAbstractSocket::ConnectedState) return;
+    m_ws->sendTextMessage(QString::fromUtf8(
+        QJsonDocument(msg).toJson(QJsonDocument::Compact)));
+}
+
 void SignalingClient::setLocalState(bool mic, bool cam) {
     m_mic = mic; m_cam = cam;
     emit localStateChanged(m_mic, m_cam);   // AudioEngine глушит/включает захват
-    if (m_ws && m_ws->state() == QAbstractSocket::ConnectedState) {
-        const QJsonObject st{ {"type","state"}, {"mic",mic}, {"cam",cam} };
-        m_ws->sendTextMessage(QString::fromUtf8(
-            QJsonDocument(st).toJson(QJsonDocument::Compact)));
-    }
+    sendJson({ {"type","state"}, {"mic",mic}, {"cam",cam} });
+}
+
+void SignalingClient::setScreenId(qint64 id) {
+    if (m_screenId == id) return;
+    m_screenId = id;
+    emit screenChanged();
+}
+
+void SignalingClient::setScreenShare(bool on) {
+    m_wantScreen = on;
+    // Свою сцену гасим сразу, не дожидаясь эха сервера (так же делает веб) —
+    // иначе кнопка «залипала» бы на время круга до сервера и обратно.
+    if (!on && m_screenId == m_myId) setScreenId(0);
+    sendJson({ {"type","screen"}, {"on", on} });
 }
 
 void SignalingClient::submitPassword(const QString& password) {
@@ -305,6 +342,8 @@ void SignalingClient::leave() {
     m_speakTimer->stop();
     m_speakingUntil.clear();
     rebuildSpeaking();
+    m_wantScreen = false;
+    setScreenId(0);
     if (m_ws) { m_ws->close(); m_ws->deleteLater(); m_ws = nullptr; }
     emit left();
 }
@@ -366,6 +405,12 @@ void SignalingClient::handleError(const QString& reason) {
         // Личная комната без владельца ещё не существует: ждём и повторяем join.
         setPhase("waiting");
         if (!m_waitTimer->isActive()) m_waitTimer->start(5000);   // повтор через 5 с
+    }
+    else if (reason == "screen_busy") {
+        // Слот демонстрации занят другим: захват мы ещё не начинали (ждём
+        // подтверждения), поэтому достаточно снять заявку и сказать об этом.
+        m_wantScreen = false;
+        emit screenBusy();
     }
     else {
         // Неизвестная причина (список расширяемый) — логируем и живём дальше.

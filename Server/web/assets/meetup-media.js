@@ -387,19 +387,39 @@
       const jpegMaxW = screen ? 1280 : 480, jpegMaxH = screen ? 720 : 360;
       const jpegIntervalMs = screen ? 500 : JPEG_INTERVAL_MS;
 
-      const s = { el: null, token: 0, active: false,
+      const s = { el: null, token: 0, active: false, reader: null, stream: null,
+                  onElement: false,
                   venc: null, w: 0, h: 0, frames: 0, keyNext: false,
                   jpegCanvas: null, lastJpegAt: 0, jpegBusy: false };
 
+      // Кадры берём ПРЯМО С ТРЕКА через MediaStreamTrackProcessor. Скрытый
+      // <video> вне DOM браузер деприоритезирует: он не держится живого края
+      // потока и копит задержку — картинка уезжала от звука на секунды.
+      // Элемент остаётся фолбэком там, где процессора нет (Safari/Firefox),
+      // и для legacy-JPEG, которому нужен именно элемент.
       function start(stream) {
         stop();
         s.active = true;
+        s.stream = stream;
+        const token = ++s.token;
+        // Ждём детект кодеков: без WebCodecs идём только элементом (JPEG).
+        detect.then(() => {
+          if (s.token !== token || !s.active) return;
+          const track = stream.getVideoTracks ? stream.getVideoTracks()[0] : null;
+          if (st.videoChoice && track && typeof MediaStreamTrackProcessor !== "undefined")
+            pumpDirect(track, token);
+          else
+            startElement(stream, token);
+        });
+      }
+
+      function startElement(stream, token) {
+        s.onElement = true;
         const v = s.el || (s.el = document.createElement("video"));
         v.muted = true; v.playsInline = true; v.autoplay = true;
         v.srcObject = stream;
         const p = v.play();
         if (p && p.catch) p.catch(() => {});
-        const token = ++s.token;
         if ("requestVideoFrameCallback" in HTMLVideoElement.prototype) {
           const step = () => {
             if (s.token !== token || !s.active) return;
@@ -415,11 +435,86 @@
         }
       }
 
+      // Насос кадров с трека: каждый элемент потока — готовый VideoFrame.
+      async function pumpDirect(track, token) {
+        let reader;
+        try {
+          reader = new MediaStreamTrackProcessor({ track }).readable.getReader();
+        } catch (e) {
+          startElement(s.stream || new MediaStream([track]), token);
+          return;
+        }
+        s.reader = reader;
+        for (;;) {
+          let res;
+          try { res = await reader.read(); } catch (e) { break; }
+          if (res.done) break;
+          const frame = res.value;
+          if (s.token !== token || !s.active) { frame.close(); break; }
+          directFrame(frame, token);
+        }
+        try { reader.releaseLock(); } catch (e) {}
+        if (s.reader === reader) s.reader = null;
+      }
+
       function stop() {
         s.active = false;
         s.token++;
+        s.stream = null;
+        s.onElement = false;
+        if (s.reader) { try { s.reader.cancel(); } catch (e) {} s.reader = null; }
         if (s.venc) { try { s.venc.close(); } catch (e) {} s.venc = null; }
         if (s.el) s.el.srcObject = null;
+      }
+
+      // Энкодер под текущий размер кадра. false — WebCodecs сломался.
+      function ensureEncoder(w, h) {
+        if (s.venc && s.w === w && s.h === h) return true;
+        if (s.venc) { try { s.venc.close(); } catch (e) {} }
+        const choice = st.videoChoice;
+        try {
+          s.venc = new VideoEncoder({
+            output: (chunk) => {
+              const u8 = new Uint8Array(chunk.byteLength);
+              chunk.copyTo(u8);
+              // Стенные часы (мс) — общая шкала с аудио, см. ensureAudioEncoder.
+              enqueueSend(codedType, chunk.type === "key" ? FLAG_KEYFRAME : 0, choice.id,
+                          BigInt(Date.now()), u8, lane);
+            },
+            error: () => { s.venc = null; },   // пересоздастся следующим кадром
+          });
+          s.venc.configure(videoCfg(choice, w, h, screen));
+          s.w = w; s.h = h; s.frames = 0;
+          return true;
+        } catch (e) {
+          s.venc = null;
+          st.videoChoice = null;                // WebCodecs сломан — legacy до конца сессии
+          st.stats.videoCodec = "jpeg";
+          return false;
+        }
+      }
+
+      function emitFrame(frame) {
+        const key = s.keyNext || s.frames % KEY_EVERY_FRAMES === 0;
+        s.keyNext = false;
+        s.frames++;
+        try { s.venc.encode(frame, { keyFrame: key }); } catch (e) { s.venc = null; }
+      }
+
+      function directFrame(frame, token) {
+        if (!st.videoChoice) {                  // WebCodecs отвалился на ходу
+          frame.close();
+          if (s.active && !s.onElement && s.stream) {
+            if (s.reader) { try { s.reader.cancel(); } catch (e) {} s.reader = null; }
+            startElement(s.stream, token);      // дальше — JPEG через элемент
+          }
+          return;
+        }
+        const w = frame.displayWidth & ~1, h = frame.displayHeight & ~1;
+        if (w >= 2 && h >= 2 && opts.buffered() <= MAX_BUFFERED
+            && ensureEncoder(w, h) && s.venc.encodeQueueSize <= 2)
+          emitFrame(frame);
+        frame.close();
       }
 
       function tick(v) {
@@ -429,29 +524,7 @@
         if (opts.buffered() > MAX_BUFFERED) return;        // сеть не успевает — пропуск кадра
 
         const w = v.videoWidth & ~1, h = v.videoHeight & ~1;
-        if (!s.venc || s.w !== w || s.h !== h) {
-          if (s.venc) { try { s.venc.close(); } catch (e) {} }
-          const choice = st.videoChoice;
-          try {
-            s.venc = new VideoEncoder({
-              output: (chunk) => {
-                const u8 = new Uint8Array(chunk.byteLength);
-                chunk.copyTo(u8);
-                // Стенные часы (мс) — общая шкала с аудио, см. ensureAudioEncoder.
-                enqueueSend(codedType, chunk.type === "key" ? FLAG_KEYFRAME : 0, choice.id,
-                            BigInt(Date.now()), u8, lane);
-              },
-              error: () => { s.venc = null; },   // пересоздастся следующим кадром
-            });
-            s.venc.configure(videoCfg(choice, w, h, screen));
-            s.w = w; s.h = h; s.frames = 0;
-          } catch (e) {
-            s.venc = null;
-            st.videoChoice = null;                // WebCodecs сломан — legacy до конца сессии
-            st.stats.videoCodec = "jpeg";
-            return;
-          }
-        }
+        if (!ensureEncoder(w, h)) return;
         if (s.venc.encodeQueueSize > 2) return;  // энкодер захлебнулся — пропуск
 
         let frame;
@@ -460,10 +533,7 @@
         } catch (e) {
           return;   // кадр ещё не готов
         }
-        const key = s.keyNext || s.frames % KEY_EVERY_FRAMES === 0;
-        s.keyNext = false;
-        s.frames++;
-        try { s.venc.encode(frame, { keyFrame: key }); } catch (e) { s.venc = null; }
+        emitFrame(frame);
         frame.close();
       }
 

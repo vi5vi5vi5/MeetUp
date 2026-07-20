@@ -14,6 +14,7 @@
 #include "SysBridge.h"
 #include "HistoryStore.h"
 #include "MediaSettings.h"
+#include "ScreenSources.h"
 
 #include "media/AudioEngine.h"
 #include "media/VideoEngine.h"
@@ -44,10 +45,14 @@ int main(int argc, char *argv[])
     SysBridge sys(&api);                   // буфер обмена + ссылки
     HistoryStore history;                  // локальная история комнат (QSettings)
     MediaSettings av;                      // устройства/громкость/качество (QSettings)
+    ScreenSources screens;                 // мониторы и окна для демонстрации
     AudioEngine audio(&conf, &av);
-    VideoEngine video(&conf, &av, &audio);   // video спрашивает у audio часы звука
+    VideoEngine video(&conf, &av, &screens, &audio);   // audio даёт часы звука
 
+    // Движок QML объявлен ПОСЛЕ screens: провайдер миниатюр принадлежит
+    // движку и держит указатель на screens, а разрушается движок первым.
     QQmlApplicationEngine engine;
+    engine.addImageProvider("screengrab", new ScreenThumbProvider(&screens));
     // Кладём объект в глобальный контекст QML под именем "Auth".
     // Теперь в любом .qml доступно Auth.login(...), Auth.busy, Auth.errorText.
     engine.rootContext()->setContextProperty("Auth", &auth);
@@ -59,6 +64,7 @@ int main(int argc, char *argv[])
     // Имя "Video" занято QML-типом из QtMultimedia — поэтому Media.
     engine.rootContext()->setContextProperty("Media", &video);
     engine.rootContext()->setContextProperty("AV", &av);
+    engine.rootContext()->setContextProperty("Screens", &screens);
 
     
 

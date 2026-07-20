@@ -22,6 +22,11 @@ MediaSettings::MediaSettings(QObject* parent) : QObject(parent) {
     if (!levels.contains(m_camQuality)) m_camQuality = "med";
     m_audioQuality = s.value("qAudio", "med").toString();
     if (!levels.contains(m_audioQuality)) m_audioQuality = "med";
+    const QStringList resList{"360", "480", "720", "1080", "src"};
+    m_screenRes = s.value("screenRes", "720").toString();
+    if (!resList.contains(m_screenRes)) m_screenRes = "720";
+    m_screenFps = s.value("screenFps", 30).toInt();
+    if (m_screenFps != 15 && m_screenFps != 30 && m_screenFps != 60) m_screenFps = 30;
     s.endGroup();
 
     // Горячее подключение/отключение устройств: списки в модалке живые.
@@ -106,6 +111,20 @@ void MediaSettings::setCamQuality(const QString& q) {
     save("qCam", q);
     emit camQualityChanged();
 }
+void MediaSettings::setScreenRes(const QString& r) {
+    if (m_screenRes == r) return;
+    if (r != "360" && r != "480" && r != "720" && r != "1080" && r != "src") return;
+    m_screenRes = r;
+    save("screenRes", r);
+    emit screenResChanged();
+}
+void MediaSettings::setScreenFps(int fps) {
+    if (m_screenFps == fps) return;
+    if (fps != 15 && fps != 30 && fps != 60) return;
+    m_screenFps = fps;
+    save("screenFps", fps);
+    emit screenFpsChanged();
+}
 void MediaSettings::setAudioQuality(const QString& q) {
     if (m_audioQuality == q || (q != "low" && q != "med" && q != "high")) return;
     m_audioQuality = q;
@@ -137,6 +156,22 @@ MediaSettings::CamPreset MediaSettings::camPreset() const {
     if (m_camQuality == "low")  return { 640, 360, 15, 400000 };
     if (m_camQuality == "high") return { 1920, 1080, 30, 2500000 };
     return { 1280, 720, 24, 1200000 };
+}
+
+// Экран. Ширина взята под 16:9, но она — только потолок: кадр вписывается в
+// рамку по меньшей стороне, поэтому у монитора 16:10 «720p» даст 1152×720.
+// «Источник» = рамка заведомо больше любого экрана, масштабирования нет.
+MediaSettings::CamPreset MediaSettings::screenPreset() const {
+    int w = 1280, h = 720, base = 1800000;
+    if (m_screenRes == "360")       { w = 640;  h = 360;  base = 500000; }
+    else if (m_screenRes == "480")  { w = 854;  h = 480;  base = 900000; }
+    else if (m_screenRes == "1080") { w = 1920; h = 1080; base = 3500000; }
+    else if (m_screenRes == "src")  { w = 7680; h = 4320; base = 6000000; }
+
+    // Битрейт от частоты: вдвое больше кадров — далеко не вдвое больше данных
+    // (на экране меняется малая часть картинки), поэтому коэффициенты пологие.
+    const double k = m_screenFps <= 15 ? 0.7 : (m_screenFps >= 60 ? 1.6 : 1.0);
+    return { w, h, m_screenFps, int(base * k) };
 }
 
 int MediaSettings::audioBitrate() const {

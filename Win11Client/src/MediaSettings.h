@@ -27,6 +27,11 @@ class MediaSettings : public QObject {
     // Пресеты качества отправки: "low" | "med" | "high".
     Q_PROPERTY(QString camQuality READ camQuality WRITE setCamQuality NOTIFY camQualityChanged)
     Q_PROPERTY(QString audioQuality READ audioQuality WRITE setAudioQuality NOTIFY audioQualityChanged)
+    // Демонстрация экрана настраивается двумя независимыми ручками, как в
+    // привычных стримерских программах: высота кадра и частота кадров.
+    // screenRes: "360" | "480" | "720" | "1080" | "src" (без масштабирования).
+    Q_PROPERTY(QString screenRes READ screenRes WRITE setScreenRes NOTIFY screenResChanged)
+    Q_PROPERTY(int screenFps READ screenFps WRITE setScreenFps NOTIFY screenFpsChanged)
     // Уровень микрофона 0..1 (RMS) — индикатор в настройках. Пишет AudioEngine.
     Q_PROPERTY(qreal micLevel READ micLevel NOTIFY micLevelChanged)
 public:
@@ -43,6 +48,8 @@ public:
     int sensitivity() const { return m_sensitivity; }
     QString camQuality() const { return m_camQuality; }
     QString audioQuality() const { return m_audioQuality; }
+    QString screenRes() const { return m_screenRes; }
+    int screenFps() const { return m_screenFps; }
     qreal micLevel() const { return m_micLevel; }
 
     void setMicId(const QString& id);
@@ -52,6 +59,8 @@ public:
     void setSensitivity(int v);
     void setCamQuality(const QString& q);
     void setAudioQuality(const QString& q);
+    void setScreenRes(const QString& r);
+    void setScreenFps(int fps);
 
     // ---- Для движков (не QML) ----
 
@@ -63,6 +72,10 @@ public:
     // Пресет камеры (методичка §5.5): разрешение задаёт захват, битрейт — кодек.
     struct CamPreset { int width; int height; int fps; int bitrate; };
     CamPreset camPreset() const;
+    // Пресет демонстрации экрана: разрешение — потолок (кадр вписывается в
+    // рамку с сохранением пропорций), «Источник» отдаёт кадр как есть.
+    // Битрейт считается от площади и частоты — вручную его никто не крутит.
+    CamPreset screenPreset() const;
     int audioBitrate() const;   // бит/с для Opus
 
     // Гейны как множители (0..2): проценты — интерфейсу, движкам — числа.
@@ -81,6 +94,8 @@ signals:
     void sensitivityChanged();
     void camQualityChanged();
     void audioQualityChanged();
+    void screenResChanged();
+    void screenFpsChanged();
     void micLevelChanged();
 
 private:
@@ -91,6 +106,8 @@ private:
     QString m_micId, m_camId, m_outId;
     int m_volume = 100, m_sensitivity = 100;
     QString m_camQuality = "med", m_audioQuality = "med";
+    QString m_screenRes = "720";
+    int m_screenFps = 30;
 
     qreal m_micLevel = 0;
     qint64 m_micLevelAt = 0;              // прореживание micLevelChanged
