@@ -9,10 +9,12 @@ Item {
 
     property bool micOn: true
     property bool camOn: true
+    property bool soundOn: true    // «общий звук» (слышу участников)
     property bool sharing: false
 
     signal toggleMic()
     signal toggleCam()
+    signal toggleSound()
     signal toggleShare()
     signal openSettings()
     signal leave()
@@ -54,6 +56,11 @@ Item {
             icon: root.camOn ? "video" : "video-off"
             variant: root.camOn ? "neutral" : "off"
             onClicked: root.toggleCam()
+        }
+        IconButton {
+            icon: root.soundOn ? "volume" : "volume-off"
+            variant: root.soundOn ? "neutral" : "off"
+            onClicked: root.toggleSound()
         }
         IconButton {
             icon: "screen"

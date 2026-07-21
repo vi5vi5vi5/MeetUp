@@ -15,6 +15,7 @@
 #include "HistoryStore.h"
 #include "MediaSettings.h"
 #include "ScreenSources.h"
+#include "GlobalHotkeys.h"
 
 #include "media/AudioEngine.h"
 #include "media/VideoEngine.h"
@@ -46,6 +47,7 @@ int main(int argc, char *argv[])
     HistoryStore history;                  // локальная история комнат (QSettings)
     MediaSettings av;                      // устройства/громкость/качество (QSettings)
     ScreenSources screens;                 // мониторы и окна для демонстрации
+    GlobalHotkeys hotkeys(&av);            // системные бинды (работают вне фокуса)
     AudioEngine audio(&conf, &av);
     VideoEngine video(&conf, &av, &screens, &audio);   // audio даёт часы звука
 
@@ -65,6 +67,9 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("Media", &video);
     engine.rootContext()->setContextProperty("AV", &av);
     engine.rootContext()->setContextProperty("Screens", &screens);
+    // Аудиодвижок виден QML только ради «общего звука» (deafen) — Audio.
+    engine.rootContext()->setContextProperty("Audio", &audio);
+    engine.rootContext()->setContextProperty("Hotkeys", &hotkeys);
 
     
 

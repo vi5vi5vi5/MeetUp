@@ -62,6 +62,12 @@ AudioEngine::AudioEngine(SignalingClient* conf, MediaSettings* settings, QObject
 
 AudioEngine::~AudioEngine() { stopCapture(); stopPlayback(); }
 
+void AudioEngine::setOutputMuted(bool muted) {
+    if (m_outputMuted == muted) return;
+    m_outputMuted = muted;
+    emit outputMutedChanged();
+}
+
 void AudioEngine::onPhase() {
     m_live = (m_conf->phase() == "live");
     updateCapture();
@@ -342,7 +348,9 @@ QByteArray AudioEngine::mixOneFrame() {
     }
 
     // Громкость воспроизведения из настроек (0..2) — на итоговый микс.
-    const qreal vol = m_settings->volumeGain();
+    // «Общий звук» выключен — выход в ноль, но очереди выше мы уже вычерпали:
+    // декодеры, часы звука и подсветка «говорит» продолжают жить.
+    const qreal vol = m_outputMuted ? 0.0 : m_settings->volumeGain();
 
     QByteArray out(kFrameBytes, 0);
     qint16* o = reinterpret_cast<qint16*>(out.data());

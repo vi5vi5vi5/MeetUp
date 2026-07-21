@@ -27,6 +27,8 @@ class SignalingClient : public QObject {
         Q_PROPERTY(qint64       myId         READ myId         NOTIFY myIdChanged)
         // Кто ведёт демонстрацию экрана; 0 — никто. Слот в комнате один (§4.3).
         Q_PROPERTY(qint64       screenId     READ screenId     NOTIFY screenChanged)
+        // Время до сервера и обратно, мс. -1 — ещё не мерили (или связи нет).
+        Q_PROPERTY(int          ping         READ ping         NOTIFY pingChanged)
 public:
     explicit SignalingClient(ApiClient* api, QObject* parent = nullptr);
     ~SignalingClient() override;
@@ -40,6 +42,7 @@ public:
     QVariantList speakingIds() const { return m_speakingIds; }
     qint64 myId() const { return m_myId; }
     qint64 screenId() const { return m_screenId; }
+    int ping() const { return m_ping; }
 
     // Подсветить говорящего на ~450 мс (как веб). Зовёт AudioEngine по RMS,
     // не QML — поэтому не Q_INVOKABLE.
@@ -73,6 +76,7 @@ signals:
     void speakingChanged();
     void myIdChanged();
     void screenChanged();
+    void pingChanged();
     void screenBusy();       // слот занят другим — показать уведомление
     // Первый успешный вход в комнату (не реконнект) — для локальной истории.
     void joinedRoom(const QString& code, const QString& title);
@@ -96,6 +100,8 @@ private:
 
     void rebuildParticipants(const QJsonArray& serverList);
     void setScreenId(qint64 id);
+    void setPing(int ms);
+    void sendPing();                    // {"type":"ping"} — сервер вернёт t как есть
     void sendJson(const QJsonObject& msg);
     void rebuildSpeaking();             // m_speakingUntil -> m_speakingIds
     void sweepSpeaking();               // снять подсветку с отговоривших
@@ -110,13 +116,15 @@ private:
     QWebSocket* m_ws = nullptr;
     QTimer* m_reconnectTimer = nullptr;
     QTimer* m_waitTimer = nullptr;      // room_offline: повтор join
+    QTimer* m_pingTimer = nullptr;      // замер RTT раз в 4 с, как у веба
 
     QString m_roomCode, m_name, m_roomPass;
     qint64  m_myId = 0;                      // sender_id (у аккаунта > 2^31 -> qint64!)
-    bool    m_mic = true, m_cam = true;      // локальное состояние для self-плитки
+    bool    m_mic = false, m_cam = false;    // локальное состояние (по умолчанию выкл.)
     int     m_attempts = 0;
     bool    m_manualClose = false, m_fatal = false;
     bool    m_joinedOnce = false;            // защита от записи истории на каждом реконнекте
+    int     m_ping = -1;                     // RTT, мс; -1 — не измерен
     qint64  m_screenId = 0;                  // ведущий демонстрации (0 — никто)
     bool    m_wantScreen = false;            // мы хотим слот: повторяем заявку после реконнекта
 

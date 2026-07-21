@@ -131,6 +131,15 @@ void ConferenceServer::handleJoin(ClientSession *session, const QJsonObject &msg
         return;
     }
 
+    // Начальное состояние микрофона/камеры можно указать прямо в join — тогда
+    // participant_joined уйдёт остальным сразу с верными флагами. Если полей
+    // нет (старые клиенты), остаётся умолчание сессии. Так десктоп входит с
+    // выключенной камерой, и никто не видит ложное «камера включается».
+    if (msg.contains(QStringLiteral("mic")))
+        session->setMicOn(msg.value(QStringLiteral("mic")).toBool(session->micOn()));
+    if (msg.contains(QStringLiteral("cam")))
+        session->setCamOn(msg.value(QStringLiteral("cam")).toBool(session->camOn()));
+
     // Alias-ссылка ведёт в личную комнату, но правила входа у неё свои:
     // кастомный пароль, список допущенных логинов, лимит использований.
     // Выключенный алиас неотличим от несуществующего.

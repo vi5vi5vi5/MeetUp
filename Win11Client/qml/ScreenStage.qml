@@ -14,6 +14,11 @@ Item {
     property bool isSelf: false
     property string sharerName: ""
     property bool live: false    // кадры реально идут
+    property bool expanded: false   // сцена развёрнута на весь экран
+
+    // Развернуть/свернуть показ. Разворачивает не плитку, а весь экран — этим
+    // занимается ConferenceScreen, сцена только просит.
+    signal expandRequested()
 
     Rectangle {
         id: box
@@ -68,6 +73,23 @@ Item {
             color: Theme.textMuted
             font.family: Theme.uiFont
             font.pixelSize: Theme.textSm
+        }
+
+        // Развернуть на весь экран. Кнопка живёт на самой демонстрации, а не в
+        // шапке: разворачивать надо именно её, а окно человек и без нас
+        // развернёт. Двойной щелчок по сцене делает то же — как у плееров.
+        IconButton {
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: 12
+            size: "sm"
+            icon: root.expanded ? "minimize" : "maximize"
+            variant: root.expanded ? "active" : "neutral"
+            onClicked: root.expandRequested()
+        }
+        TapHandler {
+            gesturePolicy: TapHandler.ReleaseWithinBounds
+            onDoubleTapped: root.expandRequested()
         }
 
         // Плашка «кто показывает» — как stage-chip у веба.

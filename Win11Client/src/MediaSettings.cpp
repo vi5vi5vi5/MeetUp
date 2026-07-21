@@ -2,6 +2,7 @@
 #include <QMediaDevices>
 #include <QSettings>
 #include <QDateTime>
+#include <QKeySequence>
 
 // Идентификатор устройства в настройках: id() устройства — бинарный QByteArray,
 // в QSettings и QML он ездит как base64-строка.
@@ -27,6 +28,9 @@ MediaSettings::MediaSettings(QObject* parent) : QObject(parent) {
     if (!resList.contains(m_screenRes)) m_screenRes = "720";
     m_screenFps = s.value("screenFps", 30).toInt();
     if (m_screenFps != 15 && m_screenFps != 30 && m_screenFps != 60) m_screenFps = 30;
+    m_keyMic = s.value("keyMic").toString();
+    m_keySound = s.value("keySound").toString();
+    m_keyCam = s.value("keyCam").toString();
     s.endGroup();
 
     // Горячее подключение/отключение устройств: списки в модалке живые.
@@ -125,6 +129,39 @@ void MediaSettings::setScreenFps(int fps) {
     save("screenFps", fps);
     emit screenFpsChanged();
 }
+void MediaSettings::setKeyMic(const QString& s) {
+    if (m_keyMic == s) return;
+    m_keyMic = s;
+    save("keyMic", s);
+    emit keyMicChanged();
+}
+void MediaSettings::setKeySound(const QString& s) {
+    if (m_keySound == s) return;
+    m_keySound = s;
+    save("keySound", s);
+    emit keySoundChanged();
+}
+void MediaSettings::setKeyCam(const QString& s) {
+    if (m_keyCam == s) return;
+    m_keyCam = s;
+    save("keyCam", s);
+    emit keyCamChanged();
+}
+
+QString MediaSettings::sequenceFromEvent(int key, int modifiers) const {
+    switch (key) {
+    case Qt::Key_Control: case Qt::Key_Shift: case Qt::Key_Alt:
+    case Qt::Key_Meta:    case Qt::Key_AltGr: case Qt::Key_unknown:
+    case Qt::Key_Escape:  case Qt::Key_F11:      // Esc/F11 держат полный экран
+        return QString();                         // одинокий модификатор — не бинд
+    default: break;
+    }
+    // Модификатор не обязателен — можно назначить одну клавишу. Пока окно в
+    // фокусе, бинды глушатся при вводе в чат, а глобально пользователь сам
+    // выбирает свободную клавишу (нумпад, F-клавиша…).
+    return QKeySequence(key | modifiers).toString(QKeySequence::PortableText);
+}
+
 void MediaSettings::setAudioQuality(const QString& q) {
     if (m_audioQuality == q || (q != "low" && q != "med" && q != "high")) return;
     m_audioQuality = q;

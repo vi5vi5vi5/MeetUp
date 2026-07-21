@@ -32,6 +32,7 @@ qt_add_executable(Win11Client
     src/HistoryStore.cpp
     src/MediaSettings.cpp
     src/ScreenSources.cpp
+    src/GlobalHotkeys.cpp
     src/net/ApiClient.cpp
     src/net/AuthController.cpp
     src/net/RoomController.cpp
@@ -41,6 +42,7 @@ qt_add_executable(Win11Client
     src/media/VideoDecoder.cpp
     src/media/VideoEncoder.cpp
     src/media/VideoSendWorker.cpp
+    src/media/ScreenCursor.cpp
     src/media/VideoEngine.cpp
 )
 
@@ -103,6 +105,10 @@ qt_add_qml_module(Win11Client
         resources/icons/image.svg
         resources/icons/paperclip.svg
         resources/icons/more.svg
+        resources/icons/maximize.svg
+        resources/icons/minimize.svg
+        resources/icons/volume.svg
+        resources/icons/volume-off.svg
 )
 
 set_target_properties(Win11Client PROPERTIES

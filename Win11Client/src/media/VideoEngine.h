@@ -154,10 +154,11 @@ private:
     QMediaCaptureSession* m_session = nullptr;
     QVideoSink* m_capSink = nullptr;   // кадры камеры прилетают сюда
     QVideoSink* m_preview = nullptr;   // self-плитка (не владеем)
-    QThread* m_encThread = nullptr;    // поток кодирования
+    QThread* m_encThread = nullptr;    // поток кодирования камеры
     VideoSendWorker* m_worker = nullptr;   // живёт на m_encThread
+    int m_encInFlight = 0;             // кадров, отданных воркеру и не отработанных
     bool m_live = false;               // phase == "live"
-    bool m_camOn = true;               // тумблер камеры из дока
+    bool m_camOn = false;              // тумблер камеры (по умолчанию выкл.)
     bool m_previewActive = false;
     bool m_keyNext = false;            // форсировать опорный на следующем кадре
     qint64 m_lastForceAt = 0;          // rate-limit форс-keyframe (500 мс)
@@ -169,7 +170,12 @@ private:
     QWindowCapture* m_scrWindow = nullptr;          // выбрано окно
     QVideoSink* m_scrSink = nullptr;                // кадры экрана прилетают сюда
     QVideoSink* m_scrPreview = nullptr;             // своя сцена (не владеем)
-    VideoSendWorker* m_scrWorker = nullptr;         // живёт на m_encThread
+    // Отдельный поток, а не общий с камерой: на одном потоке кадр камеры ждал
+    // бы, пока закодируется кадр экрана (а это десятки миллисекунд на 4K), и
+    // приезжал бы получателю уже просроченным — с этого и разъезжались губы.
+    QThread* m_scrThread = nullptr;
+    VideoSendWorker* m_scrWorker = nullptr;         // живёт на m_scrThread
+    int m_scrInFlight = 0;
     bool m_screenPreviewActive = false;
     bool m_scrKeyNext = false;
     qint64 m_scrLastEncodeAt = 0;

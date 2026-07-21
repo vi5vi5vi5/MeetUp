@@ -1,4 +1,5 @@
 ﻿import QtQuick
+import QtQuick.Window
 import QtQuick.Layouts
 import QtQuick.Controls.Basic
 import QtQuick.Effects
@@ -14,9 +15,22 @@ Item {
     property string roomCode: ""
     property string myName: ""
 
-    property bool micOn: true
-    property bool camOn: true
+    // Микрофон и камера по умолчанию ВЫКЛЮЧЕНЫ: входим в комнату тихо и без
+    // картинки, включаем осознанно (совпадает с дефолтами C++ движков).
+    property bool micOn: false
+    property bool camOn: false
     property int activeTab: 0   // 0 = chat, 1 = participants
+
+    // Локальные тумблеры в одном месте — их дёргают и док, и горячие клавиши.
+    function toggleMic()   { micOn = !micOn; Conf.setLocalState(micOn, camOn) }
+    function toggleCam()   { camOn = !camOn; Conf.setLocalState(micOn, camOn) }
+    function toggleSound()  { Audio.outputMuted = !Audio.outputMuted }
+    function toggleShare()  {
+        if (sharing) Conf.setScreenShare(false)
+        else if (screenActive)
+            notify("Демонстрацию уже ведёт " + (sharerName || "другой участник") + ".")
+        else picker.open = true
+    }
 
     // Демонстрация экрана: единственный источник правды — слот на сервере
     // (§4.3). Кнопка в доке отражает его, а не локальное «я нажал».
@@ -28,9 +42,25 @@ Item {
         return p.length > 0 ? p[0].name : ""
     }
 
+    // Полноэкранный показ демонстрации: сцена занимает всё, шапка, плёнка,
+    // док и панель убираются. Само окно разворачивает Main (там же F11 и Esc),
+    // экран лишь просит; выход из полного экрана гасит и режим показа — так
+    // Esc остаётся одной кнопкой на оба состояния, без спорящих сочетаний.
+    readonly property bool fullScreen:
+        Window.window ? Window.window.visibility === Window.FullScreen : false
+    signal fullScreenRequested()
+
+    property bool theater: false
+    onFullScreenChanged: if (!fullScreen) theater = false
+
+    function toggleTheater() {
+        theater = !theater
+        if (theater !== fullScreen) fullScreenRequested()
+    }
+
     // Боковая панель: на широком окне она часть раскладки, на узком —
     // выезжает оверлеем по кнопке (иначе чат недоступен совсем).
-    readonly property bool sideDocked: width > 760
+    readonly property bool sideDocked: width > 760 && !fullScreen && !theater
     property bool panelOpen: false
 
     // Закрепление участника: он крупно на сцене, остальные — плёнкой сверху.
@@ -50,13 +80,15 @@ Item {
     // Что рисуем в сетке (в режиме сцены — ничего, там свои плитки).
     readonly property var pageItems: stageMode ? []
         : Conf.participants.slice(curPage * perPage, curPage * perPage + perPage)
-    // Закреплённый (0 или 1 элемент) — только когда сцену не занял экран.
-    readonly property var pinnedItems: (screenActive || pinnedId === null) ? []
+    // Закреплённый (0 или 1 элемент). Закрепление СТАРШЕ демонстрации: нажал
+    // на лицо — видишь лицо (так же и в вебе), нажал ещё раз — вернулся экран.
+    readonly property var pinnedItems: pinnedId === null ? []
         : Conf.participants.filter(function (p) { return p.id === root.pinnedId })
-    // Плёнка: при демонстрации в ней все, при закреплении — все, кроме него.
+    // Плёнка: при закреплении — все, кроме закреплённого, иначе все.
     readonly property var filmItems: !stageMode ? []
-        : (screenActive ? Conf.participants
-                        : Conf.participants.filter(function (p) { return p.id !== root.pinnedId }))
+        : (pinnedId !== null
+            ? Conf.participants.filter(function (p) { return p.id !== root.pinnedId })
+            : Conf.participants)
 
     // Честный бейдж эфира: считаем от момента СВОЕГО входа (начало эфира
     // разовой комнаты серверу неизвестно — вебу, впрочем, тоже).
@@ -84,8 +116,15 @@ Item {
         }
         // Закреплённый участник ушёл — снимаем закрепление, иначе сцена пуста.
         function onParticipantsChanged() {
-            if (root.pinnedId !== null && !root.screenActive && root.pinnedItems.length === 0)
+            if (root.pinnedId !== null && root.pinnedItems.length === 0)
                 root.pinnedId = null
+        }
+        // Началась демонстрация — показываем её, а не чьё-то закреплённое лицо
+        // (закрепить обратно всегда можно кликом по плёнке). Конец
+        // демонстрации закрывает и полноэкранный показ.
+        function onScreenChanged() {
+            if (Conf.screenId !== 0) root.pinnedId = null
+            else if (root.theater) root.toggleTheater()
         }
         function onScreenBusy() {
             root.notify("Демонстрацию экрана уже ведёт другой участник.")
@@ -93,13 +132,38 @@ Item {
     }
     Timer { id: linkCopyReset; interval: 1400; onTriggered: root.linkCopied = false }
 
-    Component.onCompleted: Conf.open(root.roomCode, root.myName)
-    Component.onDestruction: Conf.leave()
+    // ---- Горячие клавиши (глобальные, работают и вне фокуса окна) ----
+    // Их регистрирует система (Hotkeys). Отключаем, когда: открыта модалка
+    // настроек (там эти же клавиши назначают — бинд перехватывал бы сам себя)
+    // или пользователь пишет в чат (иначе одиночная клавиша-бинд съедалась бы
+    // как символ). В другом приложении заглушить нечем — там глобальная
+    // клавиша и должна срабатывать, ради этого всё и делалось.
+    readonly property bool hotkeysActive: !settings.open && !chatInput.activeFocus
+    onHotkeysActiveChanged: Hotkeys.setActive(hotkeysActive)
+
+    Component.onCompleted: {
+        Conf.open(root.roomCode, root.myName)
+        Hotkeys.setActive(hotkeysActive)
+    }
+    Component.onDestruction: {
+        Hotkeys.setActive(false)     // вне конференции клавиши не занимаем
+        Conf.leave()
+    }
+
+    Connections {
+        target: Hotkeys
+        function onMicHotkey()   { root.toggleMic() }
+        function onSoundHotkey() { root.toggleSound() }
+        function onCamHotkey()   { root.toggleCam() }
+        function onConflict(seq) {
+            root.notify("Сочетание " + seq + " занято другим приложением.")
+        }
+    }
 
     // ---------------------------------------------------------------- Side panel
     // Затемнение под выехавшей панелью — только на узком окне.
     Rectangle {
-        visible: !root.sideDocked && root.panelOpen
+        visible: !root.sideDocked && root.panelOpen && !root.theater
         anchors.fill: parent
         color: Qt.rgba(0, 0, 0, 0.45)
         z: 80
@@ -108,7 +172,7 @@ Item {
 
     Rectangle {
         id: side
-        visible: root.sideDocked || root.panelOpen
+        visible: (root.sideDocked || root.panelOpen) && !root.theater
         z: root.sideDocked ? 0 : 90
         anchors { top: parent.top; bottom: parent.bottom; right: parent.right }
         width: root.sideDocked ? 340 : Math.min(root.width - 40, 360)
@@ -239,7 +303,12 @@ Item {
             model: Conf.participants
             boundsBehavior: Flickable.StopAtBounds
             delegate: Item {
+                id: partRow
                 required property var modelData
+                // Своё состояние микрофона сервер нам не эхонит (participant_state
+                // уходит только другим), поэтому у себя берём живой тумблер —
+                // ровно как плитки. Иначе свой значок не менялся при мьюте.
+                readonly property bool micLive: modelData.isSelf ? root.micOn : modelData.mic
                 width: ListView.view.width
                 height: 52
                 Rectangle {
@@ -268,9 +337,9 @@ Item {
                         font.weight: Font.Medium
                     }
                     AppIcon {
-                        name: modelData.mic ? "mic" : "mic-off"
+                        name: partRow.micLive ? "mic" : "mic-off"
                         size: 16
-                        color: modelData.mic ? Theme.textMuted : Theme.danger
+                        color: partRow.micLive ? Theme.textMuted : Theme.danger
                     }
                 }
                 HoverHandler { id: hov }
@@ -287,7 +356,8 @@ Item {
         // Top bar
         Item {
             id: confbar
-            height: 68
+            visible: !root.theater          // показ демонстрации — без шапки
+            height: visible ? 68 : 0
             anchors { top: parent.top; left: parent.left; right: parent.right }
             anchors.leftMargin: Theme.padStage
             anchors.rightMargin: Theme.padStage
@@ -317,7 +387,12 @@ Item {
                     tone: "live"; dot: true
                     text: "в эфире · " + root.fmtDuration(root.nowMs - root.joinedAtMs)
                 }
-                Badge { visible: false; tone: "muted"; text: "38 ms" }    // вернём в M8 (ping/RTT)
+                Badge {                     // задержка до сервера (туда-обратно)
+                    visible: Conf.phase === "live" && Conf.ping >= 0
+                    // до 80 мс — отлично, до 200 — терпимо, дальше беда (как у веба)
+                    tone: Conf.ping < 80 ? "accent" : Conf.ping < 200 ? "muted" : "danger"
+                    text: Conf.ping + " мс"
+                }
                 Badge { visible: false; tone: "accent"; text: "🔒 E2E" }  // вернём в M5 (шифрование)
 
                 Item { Layout.fillWidth: true }
@@ -369,19 +444,20 @@ Item {
         }
 
         // ---- Режим сцены: плёнка сверху, крупно — экран или закреплённый ----
+        // В полноэкранном показе поля обнуляются: демонстрация занимает всё.
         ColumnLayout {
             visible: root.stageMode
             anchors { top: confbar.bottom; left: parent.left; right: parent.right; bottom: parent.bottom }
-            anchors.leftMargin: Theme.padStage
-            anchors.rightMargin: Theme.padStage
-            anchors.topMargin: 4
-            anchors.bottomMargin: 116
+            anchors.leftMargin: root.theater ? 0 : Theme.padStage
+            anchors.rightMargin: root.theater ? 0 : Theme.padStage
+            anchors.topMargin: root.theater ? 0 : 4
+            anchors.bottomMargin: root.theater ? 0 : 116
             spacing: Theme.gapGrid
 
             Flickable {                       // плёнка камер — листается вбок
                 Layout.fillWidth: true
                 Layout.preferredHeight: 96
-                visible: root.filmItems.length > 0
+                visible: root.filmItems.length > 0 && !root.theater
                 contentWidth: filmRow.width
                 contentHeight: height
                 clip: true
@@ -420,12 +496,14 @@ Item {
                 // просто неактивный Loader остаётся её участником и с
                 // fillHeight честно забирает свою долю высоты — из-за этого
                 // закреплённый участник и оказывался в нижней половине сцены.
-                visible: root.screenActive
-                active: root.screenActive
+                visible: root.screenActive && root.pinnedId === null
+                active: root.screenActive && root.pinnedId === null
                 sourceComponent: ScreenStage {
                     sid: Conf.screenId
                     isSelf: root.sharing
                     sharerName: root.sharerName
+                    expanded: root.theater
+                    onExpandRequested: root.toggleTheater()
                 }
             }
 
@@ -470,7 +548,7 @@ Item {
 
         // ---- Кнопка чата: на узком окне панель скрыта, открыть её больше нечем
         IconButton {
-            visible: !root.sideDocked && !root.panelOpen
+            visible: !root.sideDocked && !root.panelOpen && !root.theater
             anchors.right: parent.right
             anchors.rightMargin: Theme.padStage
             anchors.bottom: parent.bottom
@@ -483,20 +561,18 @@ Item {
 
         // Floating dock
         ControlDock {
+            visible: !root.theater
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.bottom: parent.bottom
             anchors.bottomMargin: 26
             micOn: root.micOn
             camOn: root.camOn
+            soundOn: !Audio.outputMuted
             sharing: root.sharing
-            onToggleMic: { root.micOn = !root.micOn; Conf.setLocalState(root.micOn, root.camOn); }
-            onToggleCam: { root.camOn = !root.camOn; Conf.setLocalState(root.micOn, root.camOn); }
-            onToggleShare: {
-                if (root.sharing) Conf.setScreenShare(false)
-                else if (root.screenActive)
-                    root.notify("Демонстрацию уже ведёт " + (root.sharerName || "другой участник") + ".")
-                else picker.open = true
-            }
+            onToggleMic: root.toggleMic()
+            onToggleCam: root.toggleCam()
+            onToggleSound: root.toggleSound()
+            onToggleShare: root.toggleShare()
             onOpenSettings: settings.open = true
             onLeave: root.leaveRequested()
         }

@@ -1,6 +1,7 @@
 #include "VideoEngine.h"
 #include "VideoDecoder.h"
 #include "VideoSendWorker.h"
+#include "ScreenCursor.h"
 #include "AudioEngine.h"
 #include "../MediaSettings.h"
 #include "../ScreenSources.h"
@@ -29,6 +30,10 @@ extern "C" {
 
 // Затор в сокете, после которого видеокадры пропускаются (§5.5).
 static const qint64 kMaxBuffered = 1500000;
+// Для экрана порог НАМНОГО ниже: лицо к пропаже кадра чувствительнее, чем
+// слайд, а кадры экрана — самые тяжёлые в сокете. Роняя их первыми, мы
+// освобождаем очередь для голоса и камеры, и губы не разъезжаются.
+static const qint64 kMaxBufferedScreen = 350000;
 
 VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
                          ScreenSources* sources, AudioEngine* audio, QObject* parent)
@@ -57,18 +62,21 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
     // Слот демонстрации закрепил сервер (§4.3) — только после этого снимаем.
     connect(conf, &SignalingClient::screenChanged, this, &VideoEngine::onScreenSlotChanged);
 
-    // Кодирующий поток: тяжёлые sws_scale + encode уходят с GUI-потока, чтобы
-    // окно не дёргалось при перетаскивании во время захвата. Полос две —
-    // камера и экран, — и у каждой свой воркер: энкодер держит состояние
-    // потока, делить его между разными картинками нельзя.
+    // Кодирование живёт вне GUI-потока: тяжёлые sws_scale + encode на нём
+    // запинали бы отрисовку (при перетаскивании окна — особенно заметно).
+    // Потоков ДВА, по одному на полосу: у каждой свой энкодер (он держит
+    // состояние потока кадров), и, главное, кадр камеры не должен стоять в
+    // очереди за кадром экрана — иначе он приезжает получателю просроченным.
     m_encThread = new QThread(this);
     m_encThread->setObjectName("video-encode");
+    m_scrThread = new QThread(this);
+    m_scrThread->setObjectName("screen-encode");
     m_worker = new VideoSendWorker(Proto::VIDEO_CODED);   // без parent: свой поток
     m_scrWorker = new VideoSendWorker(Proto::SCREEN_CODED);
     m_worker->moveToThread(m_encThread);
-    m_scrWorker->moveToThread(m_encThread);
+    m_scrWorker->moveToThread(m_scrThread);
     connect(m_encThread, &QThread::finished, m_worker, &QObject::deleteLater);
-    connect(m_encThread, &QThread::finished, m_scrWorker, &QObject::deleteLater);
+    connect(m_scrThread, &QThread::finished, m_scrWorker, &QObject::deleteLater);
     connect(this, &VideoEngine::frameToEncode, m_worker, &VideoSendWorker::encode);
     connect(this, &VideoEngine::screenFrameToEncode, m_scrWorker, &VideoSendWorker::encode);
     // Готовый пакет возвращается на GUI-поток и уходит в сокет (queued).
@@ -76,7 +84,13 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
             [this](const QByteArray& frame) { m_conf->sendBinary(frame); });
     connect(m_scrWorker, &VideoSendWorker::packetReady, this,
             [this](const QByteArray& frame) { m_conf->sendBinary(frame); });
+    // Учёт занятости воркеров: пока кадр не отработан, следующий не шлём.
+    connect(m_worker, &VideoSendWorker::frameDone, this,
+            [this] { if (m_encInFlight > 0) --m_encInFlight; });
+    connect(m_scrWorker, &VideoSendWorker::frameDone, this,
+            [this] { if (m_scrInFlight > 0) --m_scrInFlight; });
     m_encThread->start();
+    m_scrThread->start();
 
     // Сторож замёрзших плиток: раз в секунду проверяем, у кого кадры иссякли.
     // Работает всегда — вне конференции m_peers пуст, обход бесплатен.
@@ -100,9 +114,13 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
 VideoEngine::~VideoEngine() {
     stopCapture();
     stopScreenCapture();
-    if (m_encThread) {                         // остановить поток кодирования
+    if (m_encThread) {                         // остановить потоки кодирования
         m_encThread->quit();
-        m_encThread->wait();                   // finished -> deleteLater воркеров
+        m_encThread->wait();                   // finished -> deleteLater воркера
+    }
+    if (m_scrThread) {
+        m_scrThread->quit();
+        m_scrThread->wait();
     }
     for (QHash<quint32, Peer>* h : { &m_peers, &m_screenPeers }) {
         for (Peer& p : *h) {
@@ -547,12 +565,17 @@ void VideoEngine::onCamFrame(const QVideoFrame& frame) {
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     if (now - m_lastEncodeAt < 1000 / q.fps) return;         // троттлинг к fps пресета
     if (m_conf->bufferedBytes() > kMaxBuffered) return;      // затор — кадр в мусор (§5.5)
+    // Воркер ещё не отработал прошлый кадр: очередь копить нельзя — кадры в
+    // ней стареют, а метка времени у них с момента съёмки, и получатель
+    // увидит картинку позже звука. Лучше пропустить кадр, чем отстать.
+    if (m_encInFlight > 0) return;
     m_lastEncodeAt = now;
 
     // Тяжёлый sws+encode — на кодирующем потоке. QVideoFrame неявно расшарен:
     // копия дешёвая, буфер общий; воркер маппит его read-only у себя.
     const bool forceKey = m_keyNext;
     m_keyNext = false;
+    ++m_encInFlight;
     emit frameToEncode(frame, q.width, q.height, q.fps, q.bitrate, forceKey, now);
 }
 
@@ -598,6 +621,17 @@ void VideoEngine::startScreenCapture() {
             failScreen(QStringLiteral("Выбранный экран больше недоступен."));
             return;
         }
+        // Курсор: захват монитора идёт через Desktop Duplication, а он отдаёт
+        // кадр без курсора (у захвата ОКНА он есть — там другой механизм).
+        // Значит для монитора рисуем сами; воркеру нужен физический
+        // прямоугольник монитора, чтобы перевести координаты курсора в кадр.
+        QRect physical = ScreenCursor::monitorRect(scr);
+        if (physical.isEmpty())            // имя не совпало — считаем по Qt
+            physical = QRect(scr->geometry().topLeft() * scr->devicePixelRatio(),
+                             scr->geometry().size() * scr->devicePixelRatio());
+        QMetaObject::invokeMethod(m_scrWorker, "setCursorSource",
+                                  Qt::QueuedConnection, Q_ARG(QRect, physical));
+
         m_scrScreen = new QScreenCapture(this);
         m_scrScreen->setScreen(scr);
         m_scrSession->setScreenCapture(m_scrScreen);
@@ -619,7 +653,11 @@ void VideoEngine::stopScreenCapture() {
     if (m_scrWindow) { m_scrWindow->stop(); m_scrWindow->deleteLater(); m_scrWindow = nullptr; }
     if (m_scrSession) { m_scrSession->deleteLater(); m_scrSession = nullptr; }
     if (m_scrSink) { m_scrSink->deleteLater(); m_scrSink = nullptr; }
-    if (m_scrWorker) QMetaObject::invokeMethod(m_scrWorker, "reset", Qt::QueuedConnection);
+    if (m_scrWorker) {
+        QMetaObject::invokeMethod(m_scrWorker, "reset", Qt::QueuedConnection);
+        QMetaObject::invokeMethod(m_scrWorker, "setCursorSource", Qt::QueuedConnection,
+                                  Q_ARG(QRect, QRect()));   // курсор больше не наш
+    }
     m_scrKeyNext = true;
     if (m_scrPreview) m_scrPreview->setVideoFrame(QVideoFrame());
     setScreenPreviewActive(false);
@@ -656,10 +694,12 @@ void VideoEngine::onScreenCapFrame(const QVideoFrame& frame) {
     const MediaSettings::CamPreset q = m_settings->screenPreset();
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     if (now - m_scrLastEncodeAt < 1000 / q.fps) return;
-    if (m_conf->bufferedBytes() > kMaxBuffered) return;   // затор (§5.5)
+    if (m_conf->bufferedBytes() > kMaxBufferedScreen) return;   // экран уступает дорогу
+    if (m_scrInFlight > 0) return;                              // см. onCamFrame
     m_scrLastEncodeAt = now;
 
     const bool forceKey = m_scrKeyNext;
     m_scrKeyNext = false;
+    ++m_scrInFlight;
     emit screenFrameToEncode(frame, q.width, q.height, q.fps, q.bitrate, forceKey, now);
 }

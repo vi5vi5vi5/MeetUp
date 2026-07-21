@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Window
 import QtQuick.Controls.Basic
 import MeetUp
 
@@ -14,6 +15,27 @@ ApplicationWindow {
     color: Theme.bg
 
     Behavior on color { ColorAnimation { duration: Theme.durMed } }
+
+    // Полноэкранный режим. Прежнее состояние запоминаем: окно могло быть
+    // развёрнутым, и возвращать его «в окно» было бы обидно.
+    readonly property bool fullScreen: visibility === Window.FullScreen
+    property int _prevVisibility: Window.Windowed
+
+    function toggleFullScreen() {
+        if (window.fullScreen) {
+            window.visibility = window._prevVisibility
+        } else {
+            window._prevVisibility = window.visibility
+            window.visibility = Window.FullScreen
+        }
+    }
+
+    Shortcut { sequences: ["F11"]; onActivated: window.toggleFullScreen() }
+    Shortcut {
+        sequences: ["Esc"]
+        enabled: window.fullScreen      // вне полного экрана Esc не наш
+        onActivated: window.toggleFullScreen()
+    }
 
     // Account flow: login <-> register / anon-lobby -> home -> conference.
     // Peer screens use replace(); the conference is push()ed so leaving pops back.
@@ -90,6 +112,7 @@ ApplicationWindow {
         id: confPage
         ConferenceScreen {
             onLeaveRequested: stack.pop()
+            onFullScreenRequested: window.toggleFullScreen()
         }
     }
 }

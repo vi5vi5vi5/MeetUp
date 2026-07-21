@@ -32,6 +32,11 @@ class MediaSettings : public QObject {
     // screenRes: "360" | "480" | "720" | "1080" | "src" (без масштабирования).
     Q_PROPERTY(QString screenRes READ screenRes WRITE setScreenRes NOTIFY screenResChanged)
     Q_PROPERTY(int screenFps READ screenFps WRITE setScreenFps NOTIFY screenFpsChanged)
+    // Горячие клавиши (M8): переносимый текст QKeySequence ("Ctrl+D", "M", …);
+    // пустая строка — клавиша не назначена. Слушает ConferenceScreen.
+    Q_PROPERTY(QString keyMic   READ keyMic   WRITE setKeyMic   NOTIFY keyMicChanged)
+    Q_PROPERTY(QString keySound READ keySound WRITE setKeySound NOTIFY keySoundChanged)
+    Q_PROPERTY(QString keyCam   READ keyCam   WRITE setKeyCam   NOTIFY keyCamChanged)
     // Уровень микрофона 0..1 (RMS) — индикатор в настройках. Пишет AudioEngine.
     Q_PROPERTY(qreal micLevel READ micLevel NOTIFY micLevelChanged)
 public:
@@ -50,6 +55,9 @@ public:
     QString audioQuality() const { return m_audioQuality; }
     QString screenRes() const { return m_screenRes; }
     int screenFps() const { return m_screenFps; }
+    QString keyMic() const { return m_keyMic; }
+    QString keySound() const { return m_keySound; }
+    QString keyCam() const { return m_keyCam; }
     qreal micLevel() const { return m_micLevel; }
 
     void setMicId(const QString& id);
@@ -61,6 +69,14 @@ public:
     void setAudioQuality(const QString& q);
     void setScreenRes(const QString& r);
     void setScreenFps(int fps);
+    void setKeyMic(const QString& s);
+    void setKeySound(const QString& s);
+    void setKeyCam(const QString& s);
+
+    // Собрать переносимый текст из клавиши и модификаторов, пришедших из
+    // QML-события (Qt::Key | Qt::KeyboardModifiers). Пусто — если это одинокий
+    // модификатор или зарезервированная клавиша (Esc/F11 держат полный экран).
+    Q_INVOKABLE QString sequenceFromEvent(int key, int modifiers) const;
 
     // ---- Для движков (не QML) ----
 
@@ -96,6 +112,9 @@ signals:
     void audioQualityChanged();
     void screenResChanged();
     void screenFpsChanged();
+    void keyMicChanged();
+    void keySoundChanged();
+    void keyCamChanged();
     void micLevelChanged();
 
 private:
@@ -108,6 +127,7 @@ private:
     QString m_camQuality = "med", m_audioQuality = "med";
     QString m_screenRes = "720";
     int m_screenFps = 30;
+    QString m_keyMic, m_keySound, m_keyCam;
 
     qreal m_micLevel = 0;
     qint64 m_micLevelAt = 0;              // прореживание micLevelChanged

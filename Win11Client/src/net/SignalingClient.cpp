@@ -23,6 +23,10 @@ SignalingClient::SignalingClient(ApiClient* api, QObject* parent)
     m_speakTimer = new QTimer(this);
     m_speakTimer->setInterval(120);
     connect(m_speakTimer, &QTimer::timeout, this, &SignalingClient::sweepSpeaking);
+    // Замер задержки до сервера: метка времени туда — эхо обратно (§4.1).
+    m_pingTimer = new QTimer(this);
+    m_pingTimer->setInterval(4000);              // как у веба
+    connect(m_pingTimer, &QTimer::timeout, this, &SignalingClient::sendPing);
 }
 
 // ---------- индикатор «говорит» ----------
@@ -127,6 +131,12 @@ void SignalingClient::sendJoin() {
         {"room", m_roomCode},
         {"name", m_name},           // у аккаунта сервер проигнорирует, возьмёт из профиля
         {"password", m_roomPass},   // нужен только гостю личной комнаты с паролем
+        // Своё состояние — сразу в join: иначе сервер заведёт нас со своим
+        // умолчанием (mic/cam = on) и разошлёт остальным participant_joined с
+        // включённой камерой, а наш state{off} догонит лишь через круг —
+        // собеседники успевают увидеть «камера подключается».
+        {"mic", m_mic},
+        {"cam", m_cam},
     };
     m_ws->sendTextMessage(QString::fromUtf8(
         QJsonDocument(join).toJson(QJsonDocument::Compact)));
@@ -178,6 +188,8 @@ void SignalingClient::onJson(const QJsonObject& msg) {
         emit joinOk();   // каждый вход, включая реконнект: медиа сбрасывает буферы
         if (m_wantScreen && m_screenId == 0)
             sendJson({ {"type","screen"}, {"on", true} });
+        sendPing();                  // первый замер сразу, дальше по таймеру
+        m_pingTimer->start();
         // История чата: пересобираем ленту из join_ok (и на реконнекте — тоже,
         // чтобы не задвоить уже показанные сообщения).
         m_messages.clear();
@@ -237,6 +249,13 @@ void SignalingClient::onJson(const QJsonObject& msg) {
                 break;
             }
         }
+        return;
+    }
+
+    if (type == "pong") {
+        // Сервер вернул нашу же метку — разница и есть время туда-обратно.
+        const qint64 sent = static_cast<qint64>(msg.value("t").toDouble());
+        setPing(int(qMax(qint64(0), QDateTime::currentMSecsSinceEpoch() - sent)));
         return;
     }
 
@@ -314,6 +333,16 @@ void SignalingClient::setLocalState(bool mic, bool cam) {
     sendJson({ {"type","state"}, {"mic",mic}, {"cam",cam} });
 }
 
+void SignalingClient::setPing(int ms) {
+    if (m_ping == ms) return;
+    m_ping = ms;
+    emit pingChanged();
+}
+
+void SignalingClient::sendPing() {
+    sendJson({ {"type","ping"}, {"t", double(QDateTime::currentMSecsSinceEpoch())} });
+}
+
 void SignalingClient::setScreenId(qint64 id) {
     if (m_screenId == id) return;
     m_screenId = id;
@@ -340,10 +369,22 @@ void SignalingClient::leave() {
     m_reconnectTimer->stop();
     m_waitTimer->stop();
     m_speakTimer->stop();
+    m_pingTimer->stop();
+    setPing(-1);
     m_speakingUntil.clear();
     rebuildSpeaking();
     m_wantScreen = false;
     setScreenId(0);
+    // Выход = чистый следующий вход. Экран конференции в QML пересоздаётся с
+    // микрофоном/камерой «выкл», а SignalingClient и движки живут всё
+    // приложение — если не сбросить, включённая в прошлый раз камера осталась
+    // бы в m_cam/m_camOn и на новом входе тихо включилась бы (sendJoin шлёт
+    // m_cam, а phase→live поднимает захват), пока интерфейс показывает «выкл».
+    if (m_mic || m_cam) {
+        m_mic = false;
+        m_cam = false;
+        emit localStateChanged(false, false);   // движки гасят захват и свои тумблеры
+    }
     if (m_ws) { m_ws->close(); m_ws->deleteLater(); m_ws = nullptr; }
     emit left();
 }
@@ -363,6 +404,8 @@ void SignalingClient::fatal(const QString& t) {
 }
 
 void SignalingClient::onDisconnected() {
+    m_pingTimer->stop();          // мерить нечего, и старое число врало бы
+    setPing(-1);
     if (m_manualClose || m_fatal) return;   // мы сами закрыли / фатальная ошибка
     m_attempts += 1;
     if (m_attempts > 8) {
