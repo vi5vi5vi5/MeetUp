@@ -30,12 +30,42 @@
   const CHAT_AAD_TYPE = 250;              // «тип» для шифрования текста чата
   const IMAGE_AAD_TYPE = 251;             // …и картинок чата
 
-  const CODEC_BY_ID = { 1: "vp8", 2: "avc1.42E01F", 3: "vp09.00.10.08", 4: "opus" };
+  // Декодер объявляем уровнем 5.2 (…34), чтобы принимать H.264 любого
+  // разрешения вплоть до 4K — иначе демонстрация экрана крупнее 720p не
+  // декодировалась бы у приёмника. См. avcCodec ниже про уровни.
+  const CODEC_BY_ID = { 1: "vp8", 2: "avc1.42E034", 3: "vp09.00.10.08", 4: "opus" };
   const VIDEO_TRY = [
     { id: 2, codec: "avc1.42E01F", extra: { avc: { format: "annexb" } } },  // аппаратный почти везде
     { id: 1, codec: "vp8", extra: {} },
     { id: 3, codec: "vp09.00.10.08", extra: {} },
   ];
+
+  // H.264 задаёт «уровень» (level_idc) — потолок разрешения и битрейта потока.
+  // Аппаратный (и программный openh264) энкодер соблюдает его строго: кадр
+  // крупнее потолка он не берёт и асинхронно падает через error-колбэк.
+  // avc1.42E01F из VIDEO_TRY — это уровень 3.1 (максимум 720p): камеру (≤720p)
+  // тянет, а демонстрацию экрана в родном разрешении (1080p/1440p/4K) — нет.
+  // Поэтому уровень в строке кодека подбираем под конкретный размер кадра.
+  // VP8/VP9 (libvpx) уровень не проверяют — оттого экран в Firefox (там VP8)
+  // работал, а в Chrome (там H.264) молча не отправлялся.
+  const AVC_LEVELS = [           // [level_idc, MaxFS (МБ 16×16), MaxMBPS]
+    [0x1f, 3600,  108000],       // 3.1 — 720p30
+    [0x20, 5120,  216000],       // 3.2
+    [0x28, 8192,  245760],       // 4.0 — 1080p30
+    [0x2a, 8704,  522240],       // 4.2 — 1080p60
+    [0x32, 22080, 589824],       // 5.0 — 1440p30
+    [0x33, 36864, 983040],       // 5.1 — 2160p30
+    [0x34, 36864, 2073600],      // 5.2 — 2160p60
+  ];
+  function avcCodec(w, h, fps) {
+    const mbs = Math.ceil(w / 16) * Math.ceil(h / 16);
+    const mbps = mbs * (fps || 30);
+    let id = 0x34;               // выше 5.2 не поднимаемся (потолок ~4K)
+    for (const lvl of AVC_LEVELS) {
+      if (mbs <= lvl[1] && mbps <= lvl[2]) { id = lvl[0]; break; }
+    }
+    return "avc1.42E0" + id.toString(16).padStart(2, "0").toUpperCase();
+  }
   const OPUS_ID = 4;
 
   const AUDIO_RATE = 48000;               // AudioContext форсируется на 48к (родной рейт Opus)
@@ -258,8 +288,10 @@
     function videoCfg(choice, w, h, screen) {
       const kind = screen ? "screen" : "cam";
       const q = QUALITY[kind][st.quality[kind]];
+      // H.264 — уровень под размер кадра (иначе экран >720p не кодируется).
+      const codec = choice.codec.startsWith("avc1.") ? avcCodec(w, h, q.framerate) : choice.codec;
       return Object.assign({
-        codec: choice.codec, width: w, height: h,
+        codec, width: w, height: h,
         bitrate: q.bitrate,
         framerate: q.framerate,
         latencyMode: "realtime",
