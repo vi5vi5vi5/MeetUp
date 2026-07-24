@@ -76,8 +76,13 @@ Item {
             IconButton {
                 Layout.alignment: Qt.AlignVCenter
                 size: "sm"
+                round: true                 // вписывается в скругление пилюли
                 icon: "arrow-right"
                 variant: field.text.trim() !== "" ? "accent" : "neutral"
+                // Смена сервера — это запрос к нему; на недоступном адресе ответ
+                // приходит через несколько секунд, и без блокировки кнопка
+                // выглядела бы просто не сработавшей.
+                enabled: !Link.switching
                 onClicked: root.go()
             }
         }
@@ -94,9 +99,10 @@ Item {
         z: 10
         horizontalAlignment: Text.AlignHCenter
         elide: Text.ElideRight
-        text: root._error !== "" ? root._error : _ownText
+        text: Link.switching ? "Переключаем сервер…"
+            : root._error !== "" ? root._error : _ownText
         visible: text !== ""
-        color: root._error !== "" ? Theme.danger : Theme.textFaint
+        color: root._error !== "" && !Link.switching ? Theme.danger : Theme.textFaint
         font.family: Theme.uiFont
         font.pixelSize: Theme.text2xs
 

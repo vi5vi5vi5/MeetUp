@@ -11,6 +11,9 @@ Item {
     property string variant: "neutral"
     property string size: "md"
     property bool wide: false
+    // Круглая вместо скруглённого квадрата: нужна там, где кнопка сидит внутри
+    // пилюли (строка ссылки) — квадратные углы выпирали за её скругление.
+    property bool round: false
     signal clicked()
 
     readonly property int _s: size === "sm" ? 40 : size === "lg" ? 60 : 52
@@ -49,7 +52,7 @@ Item {
     Rectangle {
         id: bg
         anchors.fill: parent
-        radius: Theme.radiusMd
+        radius: root.round ? Math.min(width, height) / 2 : Theme.radiusMd
         color: ma.pressed ? Qt.darker(root._bg, 1.12)
              : ma.containsMouse ? Qt.lighter(root._bg, root.variant === "neutral" || root.variant === "off" ? 1.35 : 1.06)
              : root._bg

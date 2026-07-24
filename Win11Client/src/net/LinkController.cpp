@@ -25,11 +25,13 @@ LinkController::LinkController(ApiClient* api, AuthController* auth,
 
         const QString code = m_wantCode;
         m_wantCode.clear();
-        if (ok && !m_auth->displayName().isEmpty()) {
-            m_rooms->joinByCode(code, m_auth->displayName());   // аккаунт есть и здесь
-            return;
+        // Аккаунта на этом сервере нет — имя спросит гейт конференции, а мы
+        // подскажем ему то, под которым человек был на прежнем сервере.
+        if (!ok || m_auth->displayName().isEmpty()) {
+            setSuggestedName(m_homeName);
+            setNotice(switchNotice());
         }
-        emit anonEntryRequested(code, m_homeName, switchNotice());
+        enterRoom(code);
         });
 }
 
@@ -44,6 +46,20 @@ void LinkController::setSwitching(bool v) {
 }
 void LinkController::setHomeServer(const QString& base) {
     if (m_homeServer == base) return; m_homeServer = base; emit homeServerChanged();
+}
+void LinkController::setSuggestedName(const QString& name) {
+    if (m_suggestedName == name) return; m_suggestedName = name; emit suggestedNameChanged();
+}
+void LinkController::setNotice(const QString& text) {
+    if (m_notice == text) return; m_notice = text; emit noticeChanged();
+}
+
+// Вход по ссылке устроен как в вебе: экран конференции открывается сразу, а
+// имя (и пароль, если комната закрыта) спрашивает гейт уже на нём. Поэтому
+// enter(), а не joinByCode(): проверять комнату отдельным запросом незачем —
+// обо всех отказах расскажет сам сокет, и ровно теми же словами, что вебу.
+void LinkController::enterRoom(const QString& code) {
+    m_rooms->enter(code, m_auth->displayName());
 }
 
 // Схема + хост + порт в сравнимом виде. Хост обязательно в ACE: с пустым
@@ -131,9 +147,9 @@ void LinkController::open(const QString& text) {
     const QString code = r.value("code").toString();
 
     if (r.value("sameServer").toBool()) {
-        const QString name = m_auth->displayName();
-        if (!name.isEmpty()) m_rooms->joinByCode(code, name);
-        else                 emit anonEntryRequested(code, QString(), QString());
+        setSuggestedName("");        // подсказывать нечего: либо аккаунт, либо гейт
+        setNotice("");
+        enterRoom(code);
         return;
     }
 
@@ -153,6 +169,8 @@ void LinkController::open(const QString& text) {
 
 void LinkController::roomLeft() {
     setPendingKey("");               // предупреждение про E2E — только на ту комнату
+    setSuggestedName("");
+    setNotice("");
     if (m_homeServer.isEmpty()) return;
 
     const QString back = m_homeServer;

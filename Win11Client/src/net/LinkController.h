@@ -30,6 +30,11 @@ class LinkController : public QObject {
     Q_PROPERTY(bool switching READ switching NOTIFY switchingChanged)
     // Адрес, на который надо вернуться после чужой конференции («» — некуда).
     Q_PROPERTY(QString homeServer READ homeServer NOTIFY homeServerChanged)
+    // Имя для гейта в конференции: аккаунта на чужом сервере нет, но имя из
+    // прежнего подставить можно — человеку останется нажать «Подключиться».
+    Q_PROPERTY(QString suggestedName READ suggestedName NOTIFY suggestedNameChanged)
+    // Почему мы вдруг на другом сервере («» — никуда не уходили).
+    Q_PROPERTY(QString notice READ notice NOTIFY noticeChanged)
 public:
     LinkController(ApiClient* api, AuthController* auth, RoomController* rooms,
                    SysBridge* sys, QObject* parent = nullptr);
@@ -38,6 +43,8 @@ public:
     QString pendingKey() const { return m_pendingKey; }
     bool switching() const { return m_switching; }
     QString homeServer() const { return m_homeServer; }
+    QString suggestedName() const { return m_suggestedName; }
+    QString notice() const { return m_notice; }
 
     // Разбор без побочных эффектов — им же пользуется open().
     // Ключи: ok(bool), code, key, base, sameServer(bool), error.
@@ -53,16 +60,19 @@ signals:
     void pendingKeyChanged();
     void switchingChanged();
     void homeServerChanged();
-    // Войти в комнату нечем, кроме имени: Main.qml открывает анонимное лобби
-    // с уже подставленными кодом и именем. notice — почему мы вдруг здесь.
-    void anonEntryRequested(const QString& code, const QString& name,
-                            const QString& notice);
+    void suggestedNameChanged();
+    void noticeChanged();
 
 private:
     void setError(const QString& text);
     void setPendingKey(const QString& key);
     void setSwitching(bool v);
     void setHomeServer(const QString& base);
+    void setSuggestedName(const QString& name);
+    void setNotice(const QString& text);
+    // Открыть комнату: имя знаем — входим молча, не знаем — гейт в конференции
+    // спросит его сам (как гейт веба на conference.html).
+    void enterRoom(const QString& code);
     // Схема+хост+порт в сравнимом виде: хост в ACE и нижнем регистре, порт по
     // умолчанию отброшен. Без этого мит-ап.рф и xn--… считались бы разными.
     static QString normalizeBase(const QString& base);
@@ -75,6 +85,8 @@ private:
 
     QString m_errorText;
     QString m_pendingKey;
+    QString m_suggestedName;
+    QString m_notice;
     bool m_switching = false;
     QString m_homeServer;      // куда возвращаться после чужой конференции
     QString m_homeName;        // имя из аккаунта, который был открыт до ухода

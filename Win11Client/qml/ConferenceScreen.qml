@@ -15,6 +15,25 @@ Item {
     property string roomCode: ""
     property string myName: ""
 
+    // Вход по ссылке устроен как в вебе: экран конференции открывается сразу,
+    // а представиться человек успевает уже здесь. Пока имени нет, к серверу не
+    // ходим вовсе — висит карточка «Присоединиться» (гейт conference.html).
+    property bool started: false
+    property string joinName: myName
+    readonly property bool gateOpen: !started || Conf.phase === "gate"
+
+    function joinSubmit() {
+        if (!root.started) {
+            const n = gateName.text.trim()
+            if (n === "") { gateName.forceActiveFocus(); return }
+            root.joinName = n
+            root.started = true
+            Conf.open(root.roomCode, n)
+            return
+        }
+        Conf.submitPassword(gatePass.text)   // фаза gate: комната с паролем
+    }
+
     // Микрофон и камера по умолчанию ВЫКЛЮЧЕНЫ: входим в комнату тихо и без
     // картинки, включаем осознанно (совпадает с дефолтами C++ движков).
     property bool micOn: false
@@ -63,7 +82,10 @@ Item {
     // Порог тот же, что у остальных экранов (AuthScaffold/HomeScreen): при 760
     // он совпадал с minimumWidth окна, и оверлейный режим панели включался
     // ровно на одном значении ширины — то есть не включался никогда.
-    readonly property bool sideDocked: width > 900 && !fullScreen && !theater
+    // …и её нет вовсе, пока мы не в эфире: карточка входа (или отказа) должна
+    // накрывать окно целиком, как оверлей веба, а не делить его с пустым чатом.
+    readonly property bool inRoom: started && Conf.phase === "live"
+    readonly property bool sideDocked: inRoom && width > 900 && !fullScreen && !theater
     property bool panelOpen: false
 
     // Закрепление участника: он крупно на сцене, остальные — плёнкой сверху.
@@ -145,15 +167,20 @@ Item {
     onHotkeysActiveChanged: Hotkeys.setActive(hotkeysActive)
 
     Component.onCompleted: {
-        Conf.open(root.roomCode, root.myName)
+        // Имя знаем (аккаунт) — подключаемся молча; не знаем — ждём гейта.
+        if (root.myName.trim() !== "") {
+            root.started = true
+            Conf.open(root.roomCode, root.myName)
+        }
         Hotkeys.setActive(hotkeysActive)
-        // Пришли по ссылке с ключом шифрования — сказать об этом один раз, а не
-        // оставлять человека гадать, почему чат превратился в кашу.
-        if (Link.pendingKey !== "")
-            notify("Ссылка с ключом E2E: десктоп-клиент пока не умеет шифрование — "
-                   + "чужие сообщения и видео будут нечитаемы. "
-                   + "Для расшифрованного эфира откройте ссылку в браузере.")
     }
+
+    // Пришли по ссылке с ключом шифрования — сказать об этом один раз, когда
+    // гейт уже позади: под ним уведомление всё равно не видно.
+    onStartedChanged: if (started && Link.pendingKey !== "")
+        notify("Ссылка с ключом E2E: десктоп-клиент пока не умеет шифрование — "
+               + "чужие сообщения и видео будут нечитаемы. "
+               + "Для расшифрованного эфира откройте ссылку в браузере.")
     Component.onDestruction: {
         Hotkeys.setActive(false)     // вне конференции клавиши не занимаем
         Conf.leave()
@@ -172,7 +199,7 @@ Item {
     // ---------------------------------------------------------------- Side panel
     // Затемнение под выехавшей панелью — только на узком окне.
     Rectangle {
-        visible: !root.sideDocked && root.panelOpen && !root.theater
+        visible: root.inRoom && !root.sideDocked && root.panelOpen && !root.theater
         anchors.fill: parent
         color: Qt.rgba(0, 0, 0, 0.45)
         z: 80
@@ -181,7 +208,7 @@ Item {
 
     Rectangle {
         id: side
-        visible: (root.sideDocked || root.panelOpen) && !root.theater
+        visible: root.inRoom && (root.sideDocked || root.panelOpen) && !root.theater
         z: root.sideDocked ? 0 : 90
         anchors { top: parent.top; bottom: parent.bottom; right: parent.right }
         width: root.sideDocked ? 340 : Math.min(root.width - 40, 360)
@@ -562,7 +589,7 @@ Item {
 
         // ---- Кнопка чата: на узком окне панель скрыта, открыть её больше нечем
         IconButton {
-            visible: !root.sideDocked && !root.panelOpen && !root.theater
+            visible: root.inRoom && !root.sideDocked && !root.panelOpen && !root.theater
             anchors.right: parent.right
             anchors.rightMargin: Theme.padStage
             anchors.bottom: parent.bottom
@@ -645,34 +672,105 @@ Item {
             text: "переподключение…"
         }
 
+        // Оверлей входа. Повторяет гейт веба (conference.html): пока мы не в
+        // эфире, поверх сцены висит карточка — представиться, ввести пароль,
+        // подождать владельца или узнать, что не сложилось.
         Rectangle {
             anchors.fill: parent
-            visible: Conf.phase !== "live"
+            visible: !root.started || Conf.phase !== "live"
             color: Theme.bg
             z: 50
 
-            Column {
+            Card {
                 anchors.centerIn: parent
-                width: Math.min(360, parent.width - 48)
-                spacing: 16
+                width: Math.min(400, parent.width - 48)
+                elevated: true
+                spacing: 14
 
                 Text {
                     width: parent.width
-                    horizontalAlignment: Text.AlignHCenter
                     wrapMode: Text.WordWrap
                     color: Theme.text
                     font.family: Theme.displayFont
                     font.pixelSize: 22
                     font.weight: Font.Bold
-                    text: Conf.phase === "connecting" ? "Подключение…"
-                        : Conf.phase === "waiting"    ? (Conf.roomTitle || "Комната") + " ещё не в эфире"
-                        : Conf.phase === "gate"       ? "Комната защищена паролем"
-                        : /* error */                   "Не удалось войти"
+                    font.letterSpacing: -0.5
+                    text: root.gateOpen                ? "Присоединиться"
+                        : Conf.phase === "connecting"  ? "Подключение…"
+                        : Conf.phase === "waiting"     ? (Conf.roomTitle || "Комната") + " ещё не в эфире"
+                        : /* error */                    "Не удалось войти"
+                }
+
+                Text {   // какая это комната и что от нас требуется
+                    visible: root.gateOpen
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    color: Theme.textMuted
+                    font.family: Theme.uiFont
+                    font.pixelSize: Theme.textSm
+                    text: (Conf.roomTitle !== "" ? "Комната «" + Conf.roomTitle + "»"
+                                                 : "Комната #" + root.roomCode)
+                          + (Conf.phase === "gate"
+                             ? ". Вход по паролю — спросите его у владельца."
+                             : ". Представьтесь — и вы в эфире.")
+                }
+
+                Text {   // сервер сменился по ссылке — объясняем, куда попали
+                    visible: root.gateOpen && Link.notice !== ""
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    text: Link.notice
+                    color: Theme.textFaint
+                    font.family: Theme.uiFont
+                    font.pixelSize: Theme.textXs
+                }
+
+                Text {   // заглушка E2E: ключ в ссылке есть, шифровать нечем
+                    visible: root.gateOpen && Link.pendingKey !== ""
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    text: "В ссылке есть ключ шифрования, но десктоп-клиент пока не умеет E2E — "
+                          + "чужие сообщения и видео будут нечитаемы. "
+                          + "Для расшифрованного эфира откройте ссылку в браузере."
+                    color: Theme.danger
+                    font.family: Theme.uiFont
+                    font.pixelSize: Theme.textXs
+                }
+
+                Field {   // имя — только пока его не знаем (у аккаунта оно есть)
+                    visible: !root.started
+                    width: parent.width
+                    label: "Ваше имя"
+                    AppInput {
+                        id: gateName
+                        width: parent.width
+                        maximumLength: 40
+                        placeholderText: "Анна"
+                        // Подстановка, а не биндинг: первый же символ, набранный
+                        // руками, всё равно порвал бы его (см. поле сервера).
+                        Component.onCompleted: {
+                            text = Link.suggestedName     // имя с прежнего сервера
+                            forceActiveFocus()
+                        }
+                        onAccepted: root.joinSubmit()
+                    }
+                }
+
+                Field {   // пароль — когда сервер сказал, что комната закрыта
+                    visible: Conf.phase === "gate"
+                    width: parent.width
+                    label: "Пароль комнаты"
+                    AppInput {
+                        id: gatePass
+                        width: parent.width
+                        isPassword: true
+                        placeholderText: "••••••"
+                        onAccepted: root.joinSubmit()
+                    }
                 }
 
                 Text {
                     width: parent.width
-                    horizontalAlignment: Text.AlignHCenter
                     wrapMode: Text.WordWrap
                     color: Conf.errorText !== "" ? Theme.danger : Theme.textMuted
                     font.family: Theme.uiFont
@@ -683,33 +781,20 @@ Item {
                         : ""
                 }
 
-                // Гейт пароля
-                Field {
-                    visible: Conf.phase === "gate"
-                    width: parent.width
-                    label: "Пароль комнаты"
-                    AppInput {
-                        id: gatePass
-                        width: parent.width
-                        isPassword: true
-                        placeholderText: "••••••"
-                        onAccepted: Conf.submitPassword(gatePass.text)
-                    }
-                }
                 AppButton {
-                    visible: Conf.phase === "gate"
+                    visible: root.gateOpen
                     width: parent.width
-                    text: "Войти"
+                    text: "Подключиться"
                     variant: "primary"
-                    onClicked: Conf.submitPassword(gatePass.text)
+                    iconRight: "arrow-right"
+                    enabled: root.started || gateName.text.trim() !== ""
+                    onClicked: root.joinSubmit()
                 }
 
-                // Фатальная ошибка — только выйти
-                AppButton {
-                    visible: Conf.phase === "error"
+                AppButton {   // выйти можно на любой стадии, как в вебе
                     width: parent.width
                     text: "Назад"
-                    variant: "secondary"
+                    variant: "ghost"
                     onClicked: root.leaveRequested()
                 }
             }

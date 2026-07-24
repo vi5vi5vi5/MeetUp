@@ -66,15 +66,6 @@ ApplicationWindow {
         }
     }
 
-    // Ссылка-приглашение привела туда, где аккаунта нет: анонимное лобби с
-    // подставленными кодом и именем.
-    Connections {
-        target: Link
-        function onAnonEntryRequested(code, name, notice) {
-            stack.replace(anonPage, { prefillCode: code, prefillName: name,
-                                      noticeText: notice });
-        }
-    }
 
     // Авто-вход при старте: спрашиваем /api/me один раз.
     Component.onCompleted: Auth.checkSession()
