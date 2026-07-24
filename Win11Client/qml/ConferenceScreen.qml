@@ -60,7 +60,10 @@ Item {
 
     // Боковая панель: на широком окне она часть раскладки, на узком —
     // выезжает оверлеем по кнопке (иначе чат недоступен совсем).
-    readonly property bool sideDocked: width > 760 && !fullScreen && !theater
+    // Порог тот же, что у остальных экранов (AuthScaffold/HomeScreen): при 760
+    // он совпадал с minimumWidth окна, и оверлейный режим панели включался
+    // ровно на одном значении ширины — то есть не включался никогда.
+    readonly property bool sideDocked: width > 900 && !fullScreen && !theater
     property bool panelOpen: false
 
     // Закрепление участника: он крупно на сцене, остальные — плёнкой сверху.

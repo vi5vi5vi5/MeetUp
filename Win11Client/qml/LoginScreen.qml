@@ -80,8 +80,17 @@ AuthScaffold {
         AppInput {
             id: serverInput
             width: parent.width
-            text: Sys.serverAddress
             placeholderText: "meetup.linkpc.net"
+            // Не биндинг: первый же символ, набранный руками, рвёт его насовсем,
+            // и поле переставало отражать реальный адрес. Подставляем сами —
+            // при рождении и когда адрес сменился (но не из-под курсора).
+            Component.onCompleted: text = Sys.serverAddress
+            Connections {
+                target: Sys
+                function onServerChanged() {
+                    if (!serverInput.activeFocus) serverInput.text = Sys.serverAddress
+                }
+            }
             // Enter или уход фокуса — применяем и показываем нормализованный вид.
             onEditingFinished: {
                 if (text !== Sys.serverAddress) {

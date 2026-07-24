@@ -25,9 +25,15 @@ Item {
     }
 
     // Личная комната: загрузка при входе + опрос раз в 10 с + сразу при возврате в окно.
+    // Опрос только пока главная на виду: под открытой конференцией StackView
+    // держит её живой, и таймер иначе продолжал бы дёргать сервер весь звонок.
     Component.onCompleted: MyRoom.refresh()
-    Timer { interval: 10000; repeat: true; running: true; onTriggered: MyRoom.refresh() }
-    Window.onActiveChanged: if (Window.active) MyRoom.refresh()
+    Timer {
+        interval: 10000; repeat: true
+        running: root.visible
+        onTriggered: MyRoom.refresh()
+    }
+    Window.onActiveChanged: if (Window.active && root.visible) MyRoom.refresh()
 
     // Reusable dropdown row for the account menu.
     component MenuItem: Rectangle {

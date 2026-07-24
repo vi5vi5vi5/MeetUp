@@ -75,6 +75,9 @@ void SignalingClient::open(const QString& roomCode, const QString& name) {
     m_joinedOnce = false;
     m_participants.clear();
     emit participantsChanged();
+    // Лента прошлой комнаты: join_ok пересоберёт её заново, но до его прихода
+    // в новой комнате висела бы чужая переписка.
+    if (!m_messages.isEmpty()) { m_messages.clear(); emit messagesChanged(); }
     // Остатки прошлой конференции: заголовок личной комнаты и флаг реконнекта.
     if (!m_roomTitle.isEmpty()) { m_roomTitle.clear(); emit roomTitleChanged(); }
     if (m_reconnecting) { m_reconnecting = false; emit reconnectingChanged(); }
@@ -385,7 +388,18 @@ void SignalingClient::leave() {
         m_cam = false;
         emit localStateChanged(false, false);   // движки гасят захват и свои тумблеры
     }
-    if (m_ws) { m_ws->close(); m_ws->deleteLater(); m_ws = nullptr; }
+    if (m_ws) {
+        // Удаление сразу после close() рвёт соединение, не дав уйти close-фрейму:
+        // сервер видит не «участник вышел», а «пропал», и выносит нас из комнаты
+        // только по таймауту. Отпускаем сокет по disconnected, со страховкой на
+        // случай, если ответ не придёт вовсе.
+        QWebSocket* ws = m_ws;
+        m_ws = nullptr;
+        disconnect(ws, nullptr, this, nullptr);   // дохлый сокет нас больше не касается
+        connect(ws, &QWebSocket::disconnected, ws, &QObject::deleteLater);
+        QTimer::singleShot(3000, ws, [ws]() { ws->deleteLater(); });
+        ws->close();
+    }
     emit left();
 }
 

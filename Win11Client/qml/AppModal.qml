@@ -46,8 +46,10 @@ Item {
         // Заголовок фиксирован, тело прокручивается: панель не выше окна,
         // а содержимое, что не влезло, доступно скроллом (как .settings-card
         // { max-height; overflow:auto } у веба).
-        height: Math.min(header.implicitHeight + bodyFlick.height
-                         + col.spacing + root.padding * 2, root.height - 40)
+        // Math.max: на очень низком окне вычитание уходит в минус, а элемент с
+        // отрицательным размером рисуется мусором (и не восстанавливается).
+        height: Math.max(0, Math.min(header.implicitHeight + bodyFlick.height
+                                     + col.spacing + root.padding * 2, root.height - 40))
         radius: Theme.radiusCard
         color: Theme.surface
         border.width: 1
@@ -104,9 +106,9 @@ Item {
             Flickable {
                 id: bodyFlick
                 width: parent.width
-                height: Math.min(body.implicitHeight,
-                                 root.height - 40 - root.padding * 2
-                                 - header.implicitHeight - col.spacing)
+                height: Math.max(0, Math.min(body.implicitHeight,
+                                             root.height - 40 - root.padding * 2
+                                             - header.implicitHeight - col.spacing))
                 contentWidth: width
                 contentHeight: body.implicitHeight
                 clip: true

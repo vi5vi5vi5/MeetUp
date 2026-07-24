@@ -13,7 +13,19 @@ Item {
     property int spacing: 14
     default property alias content: holder.data
 
-    implicitWidth: holder.implicitWidth + padding * 2
+    // Естественная ширина — по самому широкому ребёнку, а НЕ по holder: дети
+    // растянуты по нему (width: parent.width), holder растянут по карточке, и
+    // implicitWidth: holder.implicitWidth сводился к тождеству
+    // implicitWidth == width. Раскладка из такой «подсказки» ничего не узнаёт,
+    // а замкнутая на собственный размер величина — готовый binding loop.
+    implicitWidth: {
+        var w = 0
+        for (var i = 0; i < holder.children.length; ++i) {
+            var c = holder.children[i]
+            if (c.visible) w = Math.max(w, c.implicitWidth)
+        }
+        return w + padding * 2
+    }
     implicitHeight: holder.implicitHeight + padding * 2
 
     MultiEffect {

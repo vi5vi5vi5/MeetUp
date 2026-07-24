@@ -61,6 +61,13 @@ public:
     Q_INVOKABLE int attachScreenPreview(QVideoSink* sink);
     Q_INVOKABLE void detachScreenPreview(int token);
 
+    // Текущее состояние потока — плитке при рождении. Сигнал videoChanged даёт
+    // только ПЕРЕХОД, а плитку пересоздают на ровном месте (список участников в
+    // QML меняется целиком, стоит кому-нибудь щёлкнуть микрофоном), и без этого
+    // вопроса новая плитка сидела бы на аватарке при живом потоке кадров.
+    Q_INVOKABLE bool isLive(qint64 id) const;
+    Q_INVOKABLE bool isScreenLive(qint64 id) const;
+
     bool previewActive() const { return m_previewActive; }
     bool screenPreviewActive() const { return m_screenPreviewActive; }
 

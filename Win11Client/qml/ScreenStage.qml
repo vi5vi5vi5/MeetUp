@@ -141,7 +141,7 @@ Item {
         } else if (root.sid) {
             root._tok = Media.attachScreen(root.sid, out.videoSink)
             root._boundId = root.sid
-            root.live = false
+            root.live = Media.isScreenLive(root.sid)   // см. VideoTile
         }
     }
     function unbind() {

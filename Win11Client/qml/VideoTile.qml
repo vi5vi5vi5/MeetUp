@@ -195,6 +195,10 @@ Item {
         } else if (pid) {
             _pid = pid
             _tok = Media.attach(pid, out.videoSink)
+            // Плитку могло пересоздать при живом потоке (список участников в
+            // QML пересобирается целиком на каждый чужой mute) — спрашиваем
+            // состояние, а не ждём сигнала о переходе, которого не будет.
+            live = Media.isLive(pid)
         }
     }
     Component.onDestruction: {

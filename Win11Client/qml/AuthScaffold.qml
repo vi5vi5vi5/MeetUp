@@ -91,8 +91,15 @@ Item {
                 id: hero
                 width: root.wide ? band.width - card.width - 56 : band.width
                 anchors.left: parent.left
-                anchors.top: root.wide ? undefined : parent.top
-                anchors.verticalCenter: root.wide ? parent.verticalCenter : undefined
+                // Вертикаль считаем вручную, а не парой якорей через тернарник:
+                // присвоение undefined в биндинге НЕ снимает уже поставленный
+                // якорь, и после первого перехода wide<->narrow item оказывался
+                // прибит и к top, и к verticalCenter разом. Qt в таком случае
+                // выводит высоту как 2*(vCenter - top) — hero растягивался вдвое,
+                // карточка получала отрицательную высоту, и вёрстка не
+                // восстанавливалась до перезапуска.
+                y: root.wide ? Math.round((band.height - implicitHeight) / 2) : 0
+                height: implicitHeight
                 spacing: 0
 
                 Text {
@@ -138,9 +145,10 @@ Item {
                 id: card
                 width: root.wide ? 380 : band.width
                 anchors.right: parent.right
-                anchors.top: root.wide ? undefined : hero.bottom
-                anchors.topMargin: root.wide ? 0 : 32
-                anchors.verticalCenter: root.wide ? parent.verticalCenter : undefined
+                // См. комментарий у hero: якоря по вертикали здесь тоже ручные.
+                y: root.wide ? Math.round((band.height - implicitHeight) / 2)
+                             : hero.implicitHeight + 32
+                height: implicitHeight
                 elevated: true
                 spacing: 16
             }

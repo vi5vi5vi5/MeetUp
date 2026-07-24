@@ -131,6 +131,7 @@ Item {
         } else if (pid) {
             _pid = pid
             _tok = Media.attach(pid, out.videoSink)
+            live = Media.isLive(pid)   // см. VideoTile: сигнал даёт только переход
         }
     }
     Component.onDestruction: {

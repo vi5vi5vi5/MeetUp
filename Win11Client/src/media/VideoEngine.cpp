@@ -133,32 +133,44 @@ VideoEngine::~VideoEngine() {
 
 // ---------- связь с плитками ----------
 
+// Плитка родилась. Если декодер жив и поток за время пересадки не рвался —
+// просто переставляем приёмник: ни чёрного кадра, ни лишнего KEYFRAME_REQ.
+// Состояние «картинка идёт» новая плитка спрашивает сама (isLive), потому что
+// videoChanged сообщает только переход.
 int VideoEngine::attach(qint64 id, QVideoSink* sink) {
     Peer& p = m_peers[quint32(id)];    // operator[] создаст пустого
     p.sink = sink;
     p.token = ++m_attachSeq;
-    p.awaitKey = true;                 // новой плитке нужен свежий опорный кадр
-    // Сбросить «картинка идёт» ОБЯЗАТЕЛЬНО: плитка рождается с live=false и
-    // ждёт сигнала videoChanged(true), а он приходит только на переходе
-    // false->true. Иначе плитка, заменившая другую (сетка <-> сцена), сидела
-    // бы на аватарке при живом потоке кадров.
-    p.active = false;
-    requestKeyframe();                 // …и мы просим кадр, а не ждём до 3 с
+    if (!p.dec || p.awaitKey) {        // декодера нет или он отстал от потока
+        p.awaitKey = true;
+        p.active = false;
+        requestKeyframe();             // …и мы просим кадр, а не ждём до 3 с
+    }
     return p.token;
 }
 
+// Декодер и sws НЕ трогаем: плитку могло пересоздать на ровном месте (любое
+// изменение списка участников в QML пересобирает делегаты), и выбрасывать
+// состояние потока ради этого — значит гарантированно моргнуть картинкой.
+// Кадры без плитки дропает routeCoded, он же поднимет awaitKey, а декодер
+// осиротевшего пира добьёт sweepStale.
 void VideoEngine::detach(qint64 id, int token) {
     auto it = m_peers.find(quint32(id));
     if (it == m_peers.end()) return;
     if (token != it->token) return;    // привязку уже перехватила новая плитка
     it->sink = nullptr;
     it->token = 0;
-    delete it->dec;                    // декодер без плитки бессмыслен:
-    it->dec = nullptr;                 // кадры мы всё равно дропаем (см. ниже)
-    if (it->sws) { sws_freeContext(it->sws); it->sws = nullptr; }
-    it->awaitKey = true;
-    it->active = false;
     it->holdQ.clear();                 // рисовать больше некуда
+}
+
+bool VideoEngine::isLive(qint64 id) const {
+    const auto it = m_peers.constFind(quint32(id));
+    return it != m_peers.constEnd() && it->active;
+}
+
+bool VideoEngine::isScreenLive(qint64 id) const {
+    const auto it = m_screenPeers.constFind(quint32(id));
+    return it != m_screenPeers.constEnd() && it->active;
 }
 
 int VideoEngine::attachPreview(QVideoSink* sink) {
@@ -178,9 +190,11 @@ int VideoEngine::attachScreen(qint64 id, QVideoSink* sink) {
     Peer& p = m_screenPeers[quint32(id)];
     p.sink = sink;
     p.token = ++m_attachSeq;
-    p.awaitKey = true;
-    p.active = false;                  // см. attach(): сигнал даёт только переход
-    requestKeyframe();
+    if (!p.dec || p.awaitKey) {        // см. attach()
+        p.awaitKey = true;
+        p.active = false;
+        requestKeyframe();
+    }
     return p.token;
 }
 
@@ -190,11 +204,6 @@ void VideoEngine::detachScreen(qint64 id, int token) {
     if (token != it->token) return;
     it->sink = nullptr;
     it->token = 0;
-    delete it->dec;
-    it->dec = nullptr;
-    if (it->sws) { sws_freeContext(it->sws); it->sws = nullptr; }
-    it->awaitKey = true;
-    it->active = false;
 }
 
 int VideoEngine::attachScreenPreview(QVideoSink* sink) {
@@ -280,6 +289,15 @@ void VideoEngine::sweepStale() {
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     for (auto it = m_peers.begin(); it != m_peers.end(); ++it) {
         Peer& p = it.value();
+        // Плитки нет уже давно (участник ушёл со страницы сетки, свернули
+        // сцену): декодер держим ровно столько, чтобы пережить пересоздание
+        // плитки, а не всю конференцию.
+        if (!p.sink && p.dec && now - p.lastFrameAt > 5000) {
+            delete p.dec;
+            p.dec = nullptr;
+            if (p.sws) { sws_freeContext(p.sws); p.sws = nullptr; }
+            p.awaitKey = true;
+        }
         if (!p.active || now - p.lastFrameAt <= 5000) continue;
         p.active = false;
         p.awaitKey = true;             // поток вернётся — начнём с опорного
@@ -288,6 +306,12 @@ void VideoEngine::sweepStale() {
     // Демонстрация на «Эко» идёт 5 к/с, но и там пауза в 5 с означает обрыв.
     for (auto it = m_screenPeers.begin(); it != m_screenPeers.end(); ++it) {
         Peer& p = it.value();
+        if (!p.sink && p.dec && now - p.lastFrameAt > 5000) {   // см. выше
+            delete p.dec;
+            p.dec = nullptr;
+            if (p.sws) { sws_freeContext(p.sws); p.sws = nullptr; }
+            p.awaitKey = true;
+        }
         if (!p.active || now - p.lastFrameAt <= 5000) continue;
         p.active = false;
         p.awaitKey = true;
@@ -340,7 +364,13 @@ void VideoEngine::routeCoded(QHash<quint32, Peer>& peers, quint32 sender, quint8
         codec != Proto::CODEC_VP9) return;         // незнакомое — молча мимо
 
     Peer& p = peers[sender];
-    if (!p.sink) return;   // плитки (ещё) нет — не тратим CPU на декод в никуда
+    if (!p.sink) {
+        // Плитки (ещё) нет — не тратим CPU на декод в никуда. Но пропущенные
+        // кадры выбивают декодер из потока, поэтому следующей плитке нужен
+        // опорный кадр: без этой пометки attach() принял бы декодер за годный.
+        p.awaitKey = true;
+        return;
+    }
 
     // Декодер: создать под первый кадр; пересоздать, если отправитель сменил
     // кодек (правило §5.4 — у веба это смена браузера после реконнекта).

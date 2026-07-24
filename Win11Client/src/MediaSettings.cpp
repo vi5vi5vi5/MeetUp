@@ -220,9 +220,12 @@ int MediaSettings::audioBitrate() const {
 // ---------- индикатор микрофона ----------
 
 void MediaSettings::reportMicLevel(qreal level) {
-    m_micLevel = level;
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     if (now - m_micLevelAt < 100 && level > 0) return;   // ~10 Гц достаточно
+    // Значение меняем только вместе с уведомлением: присвоение до проверки
+    // оставляло QML с новым числом, о котором ему никто не сказал, — полоска
+    // замирала на старом делении до следующего разрешённого тика.
     m_micLevelAt = now;
+    m_micLevel = level;
     emit micLevelChanged();
 }
