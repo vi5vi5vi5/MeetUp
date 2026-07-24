@@ -38,6 +38,7 @@ qt_add_executable(Win11Client
     src/net/RoomController.cpp
     src/net/SignalingClient.cpp
     src/net/PersonalRoomController.cpp
+    src/net/LinkController.cpp
     src/media/AudioEngine.cpp
     src/media/VideoDecoder.cpp
     src/media/VideoEncoder.cpp
@@ -68,6 +69,7 @@ qt_add_qml_module(Win11Client
         qml/Avatar.qml
         qml/LinkRow.qml
         qml/AppModal.qml
+        qml/LinkBar.qml
         qml/AuthScaffold.qml
         qml/VideoTile.qml
         qml/ChatMessage.qml
@@ -102,6 +104,7 @@ qt_add_qml_module(Win11Client
         resources/icons/sun.svg
         resources/icons/moon.svg
         resources/icons/copy.svg
+        resources/icons/link.svg
         resources/icons/image.svg
         resources/icons/paperclip.svg
         resources/icons/more.svg

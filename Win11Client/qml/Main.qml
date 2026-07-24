@@ -59,7 +59,20 @@ ApplicationWindow {
         }
         function onLoggedOut() {
             MyRoom.reset();               // чужая комната не должна мигнуть следующему
+            // Смена сервера по ссылке тоже гасит профиль, но экран там выбирает
+            // Link (анонимное лобби или главная) — не мигаем формой входа.
+            if (Link.switching) return;
             stack.replace(loginPage);     // выход всегда ведёт на форму входа
+        }
+    }
+
+    // Ссылка-приглашение привела туда, где аккаунта нет: анонимное лобби с
+    // подставленными кодом и именем.
+    Connections {
+        target: Link
+        function onAnonEntryRequested(code, name, notice) {
+            stack.replace(anonPage, { prefillCode: code, prefillName: name,
+                                      noticeText: notice });
         }
     }
 
@@ -111,7 +124,8 @@ ApplicationWindow {
     Component {
         id: confPage
         ConferenceScreen {
-            onLeaveRequested: stack.pop()
+            // roomLeft вернёт прежний сервер, если ссылка уводила на чужой.
+            onLeaveRequested: { stack.pop(); Link.roomLeft() }
             onFullScreenRequested: window.toggleFullScreen()
         }
     }

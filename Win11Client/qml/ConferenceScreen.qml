@@ -147,6 +147,12 @@ Item {
     Component.onCompleted: {
         Conf.open(root.roomCode, root.myName)
         Hotkeys.setActive(hotkeysActive)
+        // Пришли по ссылке с ключом шифрования — сказать об этом один раз, а не
+        // оставлять человека гадать, почему чат превратился в кашу.
+        if (Link.pendingKey !== "")
+            notify("Ссылка с ключом E2E: десктоп-клиент пока не умеет шифрование — "
+                   + "чужие сообщения и видео будут нечитаемы. "
+                   + "Для расшифрованного эфира откройте ссылку в браузере.")
     }
     Component.onDestruction: {
         Hotkeys.setActive(false)     // вне конференции клавиши не занимаем
@@ -396,7 +402,12 @@ Item {
                     tone: Conf.ping < 80 ? "accent" : Conf.ping < 200 ? "muted" : "danger"
                     text: Conf.ping + " мс"
                 }
-                Badge { visible: false; tone: "accent"; text: "🔒 E2E" }  // вернём в M5 (шифрование)
+                // Заглушка E2E: ключ из ссылки разобран, но шифровать нечем (M5).
+                Badge {
+                    visible: Link.pendingKey !== ""
+                    tone: "danger"; dot: true
+                    text: "E2E не поддерживается"
+                }
 
                 Item { Layout.fillWidth: true }
 

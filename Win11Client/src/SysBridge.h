@@ -15,7 +15,11 @@ public:
 
     QString host() const;                                    // "meetup.linkpc.net"
     QString serverAddress() const;                           // как показывать в поле ввода
+    // Хост любого адреса «для глаз» (без схемы и пути) — для текстов про
+    // смену сервера: hostOf("https://мит-ап.рф") -> "мит-ап.рф".
+    Q_INVOKABLE QString hostOf(const QString& base) const;
     Q_INVOKABLE void copyText(const QString& text);          // в буфер обмена
+    Q_INVOKABLE QString pasteText() const;                   // …и обратно
     Q_INVOKABLE QString roomLink(const QString& code) const; // полная ссылка на комнату
     // Сменить сервер: "meetup.linkpc.net" -> https://…; "http://host" — как есть;
     // пусто — вернуть прод по умолчанию. Сохраняется между запусками.

@@ -11,6 +11,7 @@
 #include "net/RoomController.h"
 #include "net/SignalingClient.h"
 #include "net/PersonalRoomController.h"
+#include "net/LinkController.h"
 #include "SysBridge.h"
 #include "HistoryStore.h"
 #include "MediaSettings.h"
@@ -44,6 +45,9 @@ int main(int argc, char *argv[])
     SignalingClient conf(&api);
     PersonalRoomController myRoom(&api);   // тот же api -> та же сессия
     SysBridge sys(&api);                   // буфер обмена + ссылки
+    // Ссылка-приглашение целиком: код комнаты, ключ E2E и смена сервера.
+    // Создаётся после sys/auth/rooms — держит их указатели.
+    LinkController link(&api, &auth, &rooms, &sys);
     HistoryStore history;                  // локальная история комнат (QSettings)
     MediaSettings av;                      // устройства/громкость/качество (QSettings)
     ScreenSources screens;                 // мониторы и окна для демонстрации
@@ -62,6 +66,7 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("Conf", &conf);
     engine.rootContext()->setContextProperty("MyRoom", &myRoom);
     engine.rootContext()->setContextProperty("Sys", &sys);
+    engine.rootContext()->setContextProperty("Link", &link);
     engine.rootContext()->setContextProperty("History", &history);
     // Имя "Video" занято QML-типом из QtMultimedia — поэтому Media.
     engine.rootContext()->setContextProperty("Media", &video);

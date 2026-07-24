@@ -33,6 +33,10 @@ public:
 	                                 const QString& password, const QString& password2);
 	// Завершить сессию на сервере и почистить локальное состояние.
 	Q_INVOKABLE void logout();
+	// Забыть профиль ЛОКАЛЬНО, не трогая сессию на сервере. Нужно при смене
+	// адреса по ссылке-приглашению: кука прежнего сервера обязана уцелеть,
+	// иначе возврат потребовал бы пароль (см. LinkController).
+	Q_INVOKABLE void forgetSession();
 	// Смена отображаемого имени (PATCH /api/me).
 	Q_INVOKABLE void updateDisplayName(const QString& name);
 	// Аватарка: файл из FileDialog -> центр-кроп 256x256 JPEG -> POST /api/me/avatar.
@@ -49,10 +53,14 @@ signals:
 	void profileSaved();      // имя сохранено — модалка выходит из режима правки
 	void loggedIn();          // успех: QML переходит на HomeScreen
 	void loggedOut();         // вышли: QML возвращается на LoginScreen
+	// Ответ на checkSession() — в ОБОИХ исходах. loggedIn() говорит только об
+	// успехе, а вызывающему (смена сервера по ссылке) нужен и отказ.
+	void sessionChecked(bool ok);
 
 private:
 	// Применить объект user из любого ответа сервера — одна точка правды о профиле.
 	void applyUser(const QJsonObject& user);
+	void clearProfile();      // обнулить профиль локально (logout/forgetSession)
 	void setBusy(bool v);
 	void setError(const QString& text);
 

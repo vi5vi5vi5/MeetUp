@@ -30,6 +30,7 @@ Item {
         anchors.rightMargin: Theme.padStage
 
         Text {
+            id: logo
             anchors.verticalCenter: parent.verticalCenter
             text: "MEETUP"
             color: Theme.text
@@ -38,7 +39,19 @@ Item {
             font.letterSpacing: 3
             font.weight: Font.Bold
         }
+
+        // Адресная строка конференции. Ширину даём такую, чтобы она осталась
+        // по центру и не наехала ни на логотип, ни на кнопки: считаем от более
+        // широкого из этих двух блоков. Не влезла — прячем совсем.
+        LinkBar {
+            anchors.centerIn: parent
+            width: Math.min(420, parent.width
+                                 - 2 * Math.max(logo.implicitWidth, actions.width) - 32)
+            visible: width > 240
+        }
+
         Row {
+            id: actions
             anchors.verticalCenter: parent.verticalCenter
             anchors.right: parent.right
             spacing: 16

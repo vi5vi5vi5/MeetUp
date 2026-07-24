@@ -24,6 +24,8 @@ QString SysBridge::host() const {
     return prettyHost(m_api->baseUrl());    // https://мит-ап.рф -> мит-ап.рф
 }
 
+QString SysBridge::hostOf(const QString& base) const { return prettyHost(base); }
+
 // В поле показываем коротко: для https — только хост; для http (локальная
 // разработка) — полный адрес, чтобы схема не потерялась при следующей правке.
 QString SysBridge::serverAddress() const {
@@ -33,6 +35,11 @@ QString SysBridge::serverAddress() const {
 
 void SysBridge::copyText(const QString& text) {
     QGuiApplication::clipboard()->setText(text);   // системный буфер обмена
+}
+
+// Для строки ссылки: пустое поле + клик по стрелке = «вставить и перейти».
+QString SysBridge::pasteText() const {
+    return QGuiApplication::clipboard()->text().trimmed();
 }
 
 // Ссылка, по которой гость попадёт в комнату из браузера, — как roomLinkFull()

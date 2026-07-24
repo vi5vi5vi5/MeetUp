@@ -73,6 +73,7 @@ Item {
         anchors.rightMargin: Theme.padStage
 
         Text {
+            id: logo
             anchors.verticalCenter: parent.verticalCenter
             text: "MEETUP"
             color: Theme.text
@@ -82,7 +83,17 @@ Item {
             font.weight: Font.Bold
         }
 
+        // Адресная строка конференции — см. AuthScaffold: ширина считается от
+        // более широкого края шапки, чтобы строка осталась ровно по центру.
+        LinkBar {
+            anchors.centerIn: parent
+            width: Math.min(420, parent.width
+                                 - 2 * Math.max(logo.implicitWidth, actions.width) - 32)
+            visible: width > 240
+        }
+
         Row {
+            id: actions
             anchors.verticalCenter: parent.verticalCenter
             anchors.right: parent.right
             spacing: 12

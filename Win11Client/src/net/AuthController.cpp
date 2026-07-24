@@ -89,11 +89,13 @@ void AuthController::checkSession() {
         reply->deleteLater();
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const QJsonObject obj = QJsonDocument::fromJson(reply->readAll()).object();
-        if (status == 200 && obj.contains("user")) {
+        const bool ok = (status == 200 && obj.contains("user"));
+        if (ok) {
             applyUser(obj["user"].toObject());
             emit loggedIn();      // сразу на главную, пароль не спрашиваем
         }
         // Иначе (401 no_session) — молчим: пусть пользователь вводит логин.
+        emit sessionChecked(ok);  // …но тому, кто спрашивал, ответить обязаны
         });
 }
 
@@ -159,6 +161,21 @@ void AuthController::registerAccount(const QString& login, const QString& displa
         });
 }
 
+// Локальная часть выхода: профиль в ноль, QML — на экран входа. Сессию на
+// сервере НЕ трогает; кто хочет её погасить, зовёт logout().
+void AuthController::clearProfile() {
+    m_userId = 0;
+    m_login.clear();
+    m_avatarVer = 0;
+    m_displayName.clear();
+    emit displayNameChanged();
+    emit profileChanged();
+    setError("");
+    emit loggedOut();              // Main.qml вернёт на LoginScreen
+}
+
+void AuthController::forgetSession() { clearProfile(); }
+
 void AuthController::logout() {
     QNetworkReply* reply = m_api->post("/api/auth/logout");   // тело пустое
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
@@ -166,14 +183,7 @@ void AuthController::logout() {
         // Ответ сервера почти не важен: 200 — сессия погашена и кука стёрта
         // (Set-Cookie Max-Age=0 обработает cookie jar сам). Даже если сервер
         // не ответил — локально мы всё равно выходим (как веб: await и уход).
-        m_userId = 0;
-        m_login.clear();
-        m_avatarVer = 0;
-        m_displayName.clear();
-        emit displayNameChanged();
-        emit profileChanged();
-        setError("");
-        emit loggedOut();          // Main.qml вернёт на LoginScreen
+        clearProfile();
         });
 }
 
