@@ -1,407 +1,337 @@
 import QtQuick
 import QtQuick.Controls.Basic
+import QtQuick.Effects
 import MeetUp
 
-// Настройки конференции (модалка поверх сцены): выбор устройств ввода-вывода,
-// громкость воспроизведения, чувствительность микрофона, качество отправки.
-// Всё пишется в AV (MediaSettings) и применяется движками на лету; значения
-// переживают перезапуск. Повторяет модалку настроек web-клиента.
-AppModal {
+// Настройки конференции. Раньше это был один вертикальный свиток на 440 px:
+// он не помещался в окно и мешал «выбери микрофон» с «назначь горячую клавишу».
+// Теперь — рельс разделов слева и панель справа: прокрутка живёт внутри одного
+// раздела, а у будущих настроек (шифрование, звук демонстрации, кодеки,
+// диагностика) заранее есть свои места, и их появление не двигает вёрстку.
+//
+// Все значения по-прежнему пишутся в AV (MediaSettings) и применяются движками
+// на лету; сами разделы лежат в отдельных файлах SettingsXxx.qml.
+Item {
     id: root
-    title: "Настройки"
-    modalWidth: 440
 
-    // ---- Тематизированный выпадающий список ----
-    component SettingsCombo: ComboBox {
-        id: combo
+    property bool open: false
+    signal closed()
 
-        property string selectedId: ""
-        signal picked(string id)
+    anchors.fill: parent
+    visible: open
+    z: 200
 
-        textRole: "label"
-        valueRole: "id"
+    // Рельс и страницы строятся из одного списка: добавить раздел — дописать
+    // сюда строку и положить рядом файл.
+    readonly property var sections: [
+        { icon: "mic",      title: "Звук",         sub: "Микрофон, динамики и качество передачи голоса", page: "SettingsAudio.qml" },
+        { icon: "video",    title: "Видео",        sub: "Камера, предпросмотр и параметры трансляции",   page: "SettingsVideo.qml" },
+        { icon: "screen",   title: "Демонстрация", sub: "Что видят собеседники, когда вы показываете экран", page: "SettingsShare.qml" },
+        { icon: "lock",     title: "Шифрование",   sub: "Сквозное шифрование медиа и переписки",         page: "SettingsCrypto.qml" },
+        { icon: "keyboard", title: "Управление",   sub: "Глобальные клавиши — работают и вне окна",      page: "SettingsKeys.qml" },
+        { icon: "layout",   title: "Интерфейс",    sub: "Тема, сетка участников и уведомления",          page: "SettingsInterface.qml" },
+        { icon: "activity", title: "Диагностика",  sub: "Живые показатели соединения и кодеков",         page: "SettingsStats.qml" },
+        { icon: "info",     title: "О программе",  sub: "Версия, сервер и журналы",                      page: "SettingsAbout.qml" }
+    ]
+    property int current: 0
+    // Минимальная ширина окна — 760, так что узкий случай не гипотетический:
+    // рельс схлопывается в иконки, подписи уходят в подсказки.
+    readonly property bool compact: width < 900
+
+    // ---- Пункт рельса (нужен и в общем списке, и отдельно внизу) ----
+    component RailItem: Item {
+        id: item
+        required property var info
+        required property int idx
+        readonly property bool active: root.current === idx
+
+        width: parent ? parent.width : 0
         height: 40
 
-        onActivated: picked(currentValue)
-
-        // Индекс следует за выбранным id — и при живом обновлении списка
-        // устройств (подключили гарнитуру), и при первом открытии.
-        function sync() {
-            var i = indexOfValue(selectedId)
-            currentIndex = i >= 0 ? i : 0
+        Rectangle {
+            anchors.fill: parent
+            radius: Theme.radiusSm
+            color: item.active ? Theme.accentSoft
+                 : hh.hovered ? Theme.surface3 : "transparent"
+            border.width: item.active ? 1 : 0
+            border.color: Theme.accentLine
+            Behavior on color { ColorAnimation { duration: Theme.durFast } }
         }
-        onSelectedIdChanged: sync()
-        onModelChanged: sync()
-        Component.onCompleted: sync()
 
-        contentItem: Text {
-            leftPadding: 12
-            rightPadding: 30
-            verticalAlignment: Text.AlignVCenter
-            text: combo.displayText
+        AppIcon {
+            id: ic
+            x: root.compact ? (item.width - width) / 2 : 10
+            anchors.verticalCenter: parent.verticalCenter
+            name: item.info.icon
+            size: 18
+            color: item.active ? Theme.accentInk : (hh.hovered ? Theme.text : Theme.textMuted)
+        }
+
+        Text {
+            visible: !root.compact
+            anchors.left: ic.right
+            anchors.leftMargin: 11
+            anchors.right: parent.right
+            anchors.rightMargin: 10
+            anchors.verticalCenter: parent.verticalCenter
             elide: Text.ElideRight
-            color: Theme.text
+            text: item.info.title
+            color: item.active ? Theme.accentInk : (hh.hovered ? Theme.text : Theme.textMuted)
             font.family: Theme.uiFont
             font.pixelSize: Theme.textSm
+            font.weight: Font.DemiBold
         }
-        indicator: Text {
-            x: combo.width - width - 12
-            anchors.verticalCenter: parent.verticalCenter
-            text: "▾"
-            color: Theme.textMuted
-            font.pixelSize: Theme.textSm
-        }
-        background: Rectangle {
-            radius: Theme.radiusSm
-            color: Theme.surface2
-            border.width: 1
-            border.color: combo.popup.visible ? Theme.accent : Theme.border
-        }
-        delegate: ItemDelegate {
-            id: row
-            required property var modelData
-            required property int index
-            width: combo.width - 12
-            height: 34
+
+        HoverHandler { id: hh; cursorShape: Qt.PointingHandCursor }
+        TapHandler { onTapped: root.current = item.idx }
+
+        // В узком окне подписей нет — название показывает подсказка.
+        ToolTip {
+            visible: root.compact && hh.hovered
+            delay: 250
+            x: item.width + 10
+            y: (item.height - height) / 2
             contentItem: Text {
-                verticalAlignment: Text.AlignVCenter
-                text: row.modelData.label
-                elide: Text.ElideRight
+                text: item.info.title
                 color: Theme.text
                 font.family: Theme.uiFont
-                font.pixelSize: Theme.textSm
+                font.pixelSize: Theme.textXs
             }
             background: Rectangle {
                 radius: Theme.radiusXs
-                color: row.highlighted ? Theme.surface3 : "transparent"
-            }
-            highlighted: combo.highlightedIndex === index
-        }
-        popup: Popup {
-            y: combo.height + 4
-            width: combo.width
-            padding: 6
-            background: Rectangle {
-                radius: Theme.radiusSm
-                color: Theme.surface
+                color: Theme.surface3
                 border.width: 1
                 border.color: Theme.borderStrong
             }
-            contentItem: ListView {
-                clip: true
-                implicitHeight: Math.min(contentHeight, 240)
-                model: combo.popup.visible ? combo.delegateModel : null
-                currentIndex: combo.highlightedIndex
-            }
         }
     }
 
-    // ---- Слайдер процентов (0..200, как у веба) ----
-    component PercentSlider: Slider {
-        id: slider
-        from: 0
-        to: 200
-        stepSize: 5
-        height: 26
-
-        background: Rectangle {
-            x: 0
-            anchors.verticalCenter: parent.verticalCenter
-            width: slider.width
-            height: 6
-            radius: 3
-            color: Theme.surface3
-            Rectangle {
-                width: slider.visualPosition * parent.width
-                height: parent.height
-                radius: 3
-                color: Theme.accent
-            }
-        }
-        handle: Rectangle {
-            x: slider.visualPosition * (slider.width - width)
-            anchors.verticalCenter: parent.verticalCenter
-            width: 16
-            height: 16
-            radius: 8
-            color: Theme.text
-            border.width: 1
-            border.color: Theme.border
-        }
+    // Затемнение: клик мимо панели закрывает.
+    Rectangle {
+        anchors.fill: parent
+        color: Qt.rgba(6 / 255, 6 / 255, 8 / 255, 0.55)
+        MouseArea { anchors.fill: parent; onClicked: root.closed() }
     }
 
-    // ---- Захват горячей клавиши ----
-    // Клик по полю переводит его в «слушаю»: следующая нажатая комбинация
-    // становится биндом. Backspace/Delete очищают, Esc отменяет. Пока слушаем,
-    // onShortcutOverride перехватывает даже клавиши, которые иначе сработали бы
-    // как глобальные сочетания (например F11), чтобы записать именно их.
-    component KeyBind: Item {
-        id: kb
-        property string label: ""
-        property string value: ""
-        signal picked(string seq)
+    MultiEffect {
+        source: panel
+        anchors.fill: panel
+        shadowEnabled: true
+        shadowColor: Theme.shadowColor
+        shadowVerticalOffset: 12
+        shadowBlur: 0.9
+        autoPaddingEnabled: true
+    }
 
-        width: parent.width
-        height: 38
-        property bool listening: false
+    Rectangle {
+        id: panel
+        anchors.centerIn: parent
+        width: Math.min(780, root.width - 40)
+        height: Math.min(560, root.height - 40)
+        radius: Theme.radiusCard
+        color: Theme.surface
+        border.width: 1
+        border.color: Theme.border
 
-        Text {
-            anchors.left: parent.left
-            anchors.verticalCenter: parent.verticalCenter
-            width: parent.width - box.width - 12
-            elide: Text.ElideRight
-            text: kb.label
-            color: Theme.text
-            font.family: Theme.uiFont
-            font.pixelSize: Theme.textSm
-            font.weight: Font.Medium
-        }
+        // Клики по панели не должны доходить до затемнения позади.
+        MouseArea { anchors.fill: parent }
 
+        // ---- Рельс разделов ----
         Rectangle {
-            id: box
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            width: 168
-            height: 34
-            radius: Theme.radiusSm
+            id: rail
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            anchors.margins: 1
+            width: root.compact ? 60 : 212
             color: Theme.surface2
-            border.width: kb.listening ? 2 : 1
-            border.color: kb.listening ? Theme.accent : Theme.border
+            radius: Theme.radiusCard
+            Behavior on width { NumberAnimation { duration: Theme.durFast } }
+
+            // Скругление нужно только внешним углам: правая сторона примыкает
+            // к панели встык, поэтому закрываем её прямоугольной заплаткой.
+            Rectangle {
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                width: parent.radius
+                color: parent.color
+            }
+            Rectangle {
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                width: 1
+                color: Theme.border
+            }
 
             Text {
-                anchors.centerIn: parent
-                width: parent.width - 20
-                horizontalAlignment: Text.AlignHCenter
-                elide: Text.ElideRight
-                text: kb.listening ? "Нажмите клавишу…"
-                    : (kb.value !== "" ? kb.value : "Не задано")
-                color: kb.listening ? Theme.accentInk
-                    : (kb.value !== "" ? Theme.text : Theme.textFaint)
-                font.family: Theme.uiFont
-                font.pixelSize: Theme.textSm
-                font.weight: Font.Medium
+                id: railTitle
+                visible: !root.compact
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.leftMargin: 20
+                anchors.topMargin: 18
+                text: "Настройки"
+                color: Theme.text
+                font.family: Theme.displayFont
+                font.pixelSize: Theme.textLg
+                font.weight: Font.Bold
+                font.letterSpacing: -0.4
             }
 
-            Keys.onShortcutOverride: function (event) { event.accepted = kb.listening }
-            Keys.onPressed: function (event) {
-                if (!kb.listening) return
-                event.accepted = true
-                if (event.key === Qt.Key_Escape) { kb.listening = false; return }
-                if (event.key === Qt.Key_Backspace || event.key === Qt.Key_Delete) {
-                    kb.picked(""); kb.listening = false; return
+            Column {
+                id: railTop
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.leftMargin: root.compact ? 8 : 12
+                anchors.rightMargin: root.compact ? 9 : 13
+                anchors.topMargin: root.compact ? 16 : 52
+                spacing: 3
+
+                Repeater {
+                    model: root.sections.slice(0, root.sections.length - 1)
+                    delegate: RailItem {
+                        required property var modelData
+                        required property int index
+                        info: modelData
+                        idx: index
+                    }
                 }
-                var seq = AV.sequenceFromEvent(event.key, event.modifiers)
-                if (seq !== "") { kb.picked(seq); kb.listening = false }
-                // одинокий модификатор/зарезервированная клавиша — ждём дальше
             }
-            // Потерял фокус, не дослушав, — выходим из режима захвата.
-            onActiveFocusChanged: if (!activeFocus) kb.listening = false
 
-            TapHandler {
-                onTapped: { kb.listening = true; box.forceActiveFocus() }
-            }
-            HoverHandler { cursorShape: Qt.PointingHandCursor }
-        }
-    }
+            // «О программе» стоит внизу и отбит чертой — это не настройка.
+            Column {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.leftMargin: root.compact ? 8 : 12
+                anchors.rightMargin: root.compact ? 9 : 13
+                anchors.bottomMargin: 14
+                spacing: 8
 
-    // ---- Микрофон ----
-    Field {
-        width: parent.width
-        label: "Микрофон"
-        Column {
-            width: parent.width
-            spacing: 8
-            SettingsCombo {
-                width: parent.width
-                model: AV.micDevices
-                selectedId: AV.micId
-                onPicked: function (id) { AV.micId = id }
-            }
-            // Живой уровень: говорите — полоска дышит (значит, устройство то).
-            Rectangle {
-                width: parent.width
-                height: 6
-                radius: 3
-                color: Theme.surface3
                 Rectangle {
-                    width: parent.width * Math.min(1, AV.micLevel * 3)
-                    height: parent.height
-                    radius: 3
-                    color: Theme.accent
-                    Behavior on width { NumberAnimation { duration: 80 } }
-                }
-            }
-        }
-    }
-
-    // ---- Камера ----
-    Field {
-        width: parent.width
-        label: "Камера"
-        SettingsCombo {
-            width: parent.width
-            model: AV.camDevices
-            selectedId: AV.camId
-            onPicked: function (id) { AV.camId = id }
-        }
-    }
-
-    // ---- Динамики ----
-    Field {
-        width: parent.width
-        label: "Динамики"
-        SettingsCombo {
-            width: parent.width
-            model: AV.outDevices
-            selectedId: AV.outId
-            onPicked: function (id) { AV.outId = id }
-        }
-    }
-
-    // ---- Громкость ----
-    Field {
-        width: parent.width
-        label: "Громкость воспроизведения · " + AV.volume + "%"
-        PercentSlider {
-            width: parent.width
-            value: AV.volume
-            onMoved: AV.volume = Math.round(value)
-        }
-    }
-
-    // ---- Чувствительность ----
-    Field {
-        width: parent.width
-        label: "Чувствительность микрофона · " + AV.sensitivity + "%"
-        hint: "Влияет на громкость вашего голоса у собеседников."
-        PercentSlider {
-            width: parent.width
-            value: AV.sensitivity
-            onMoved: AV.sensitivity = Math.round(value)
-        }
-    }
-
-    // ---- Качество отправки ----
-    Field {
-        width: parent.width
-        label: "Качество отправки"
-        hint: "Выше качество — больше нагрузка на сеть. Применяется сразу."
-        Row {
-            width: parent.width
-            spacing: 8
-            Column {
-                width: (parent.width - 8) / 2
-                spacing: 4
-                Text {
-                    text: "Камера"
-                    color: Theme.textFaint
-                    font.family: Theme.uiFont
-                    font.pixelSize: Theme.text2xs
-                }
-                SettingsCombo {
                     width: parent.width
-                    model: [ { id: "low", label: "360p · эко" },
-                             { id: "med", label: "720p" },
-                             { id: "high", label: "1080p" } ]
-                    selectedId: AV.camQuality
-                    onPicked: function (id) { AV.camQuality = id }
+                    height: 1
+                    color: Theme.borderStrong
                 }
-            }
-            Column {
-                width: (parent.width - 8) / 2
-                spacing: 4
-                Text {
-                    text: "Звук"
-                    color: Theme.textFaint
-                    font.family: Theme.uiFont
-                    font.pixelSize: Theme.text2xs
-                }
-                SettingsCombo {
-                    width: parent.width
-                    model: [ { id: "low", label: "16 кбит/с" },
-                             { id: "med", label: "32 кбит/с" },
-                             { id: "high", label: "64 кбит/с" } ]
-                    selectedId: AV.audioQuality
-                    onPicked: function (id) { AV.audioQuality = id }
+                RailItem {
+                    info: root.sections[root.sections.length - 1]
+                    idx: root.sections.length - 1
                 }
             }
         }
-    }
 
-    // ---- Демонстрация экрана ----
-    // Отдельно от камеры: у экрана свои требования — там читают текст, а не
-    // смотрят на лицо, поэтому разрешение и частоту кадров выбирают порознь.
-    Field {
-        width: parent.width
-        label: "Демонстрация экрана"
-        hint: "«Источник» отдаёт кадр без масштабирования. Больше кадров — плавнее курсор и видео, выше нагрузка."
-        Row {
-            width: parent.width
-            spacing: 8
-            Column {
-                width: (parent.width - 8) / 2
-                spacing: 4
-                Text {
-                    text: "Разрешение"
-                    color: Theme.textFaint
-                    font.family: Theme.uiFont
-                    font.pixelSize: Theme.text2xs
-                }
-                SettingsCombo {
-                    width: parent.width
-                    model: [ { id: "360",  label: "360p" },
-                             { id: "480",  label: "480p" },
-                             { id: "720",  label: "720p" },
-                             { id: "1080", label: "1080p" },
-                             { id: "src",  label: "Источник" } ]
-                    selectedId: AV.screenRes
-                    onPicked: function (id) { AV.screenRes = id }
-                }
-            }
-            Column {
-                width: (parent.width - 8) / 2
-                spacing: 4
-                Text {
-                    text: "Частота кадров"
-                    color: Theme.textFaint
-                    font.family: Theme.uiFont
-                    font.pixelSize: Theme.text2xs
-                }
-                SettingsCombo {
-                    width: parent.width
-                    // valueRole у комбо строковый — число приводим на месте.
-                    model: [ { id: "15", label: "15 к/с" },
-                             { id: "30", label: "30 к/с" },
-                             { id: "60", label: "60 к/с" } ]
-                    selectedId: String(AV.screenFps)
-                    onPicked: function (id) { AV.screenFps = parseInt(id) }
-                }
-            }
-        }
-    }
+        // ---- Панель раздела ----
+        Item {
+            anchors.left: rail.right
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            anchors.rightMargin: 1
+            anchors.topMargin: 1
+            anchors.bottomMargin: 1
 
-    // ---- Горячие клавиши ----
-    Field {
-        width: parent.width
-        label: "Горячие клавиши"
-        hint: "Работают всегда, даже когда окно не в фокусе (удобно при демонстрации). Можно и одну клавишу — выбирайте ту, что не используете. Backspace — очистить, Esc — отмена."
-        Column {
-            width: parent.width
-            spacing: 8
-            KeyBind {
-                label: "Микрофон"
-                value: AV.keyMic
-                onPicked: function (seq) { AV.keyMic = seq }
+            Item {
+                id: head
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                height: 66
+
+                Column {
+                    anchors.left: parent.left
+                    anchors.leftMargin: 22
+                    anchors.right: closeBtn.left
+                    anchors.rightMargin: 12
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 3
+
+                    Text {
+                        width: parent.width
+                        elide: Text.ElideRight
+                        text: root.sections[root.current].title
+                        color: Theme.text
+                        font.family: Theme.displayFont
+                        font.pixelSize: Theme.textLg
+                        font.weight: Font.Bold
+                        font.letterSpacing: -0.3
+                    }
+                    Text {
+                        width: parent.width
+                        elide: Text.ElideRight
+                        text: root.sections[root.current].sub
+                        color: Theme.textMuted
+                        font.family: Theme.uiFont
+                        font.pixelSize: Theme.textXs
+                    }
+                }
+
+                IconButton {
+                    id: closeBtn
+                    anchors.right: parent.right
+                    anchors.rightMargin: 14
+                    anchors.verticalCenter: parent.verticalCenter
+                    size: "sm"
+                    icon: "x"
+                    onClicked: root.closed()
+                }
+
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    height: 1
+                    color: Theme.border
+                }
             }
-            KeyBind {
-                label: "Общий звук"
-                value: AV.keySound
-                onPicked: function (seq) { AV.keySound = seq }
+
+            Flickable {
+                id: bodyFlick
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: head.bottom
+                anchors.bottom: parent.bottom
+                contentWidth: width
+                contentHeight: page.height + 40
+                clip: true
+                interactive: contentHeight > height
+                boundsBehavior: Flickable.StopAtBounds
+                // Полоса видна всё время, пока раздел не помещается: раньше она
+                // появлялась только в движении, и обрезанный снизу текст читался
+                // как баг вёрстки, а не как «здесь есть продолжение».
+                ScrollBar.vertical: ScrollBar {
+                    id: bodyBar
+                    policy: bodyFlick.interactive ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
+                    width: 10
+                    contentItem: Rectangle {
+                        implicitWidth: 4
+                        radius: 2
+                        color: bodyBar.pressed ? Theme.textFaint : Theme.borderStrong
+                        opacity: bodyFlick.interactive ? 1 : 0
+                        Behavior on color { ColorAnimation { duration: Theme.durFast } }
+                    }
+                    background: Item {}
+                }
+
+                Loader {
+                    id: page
+                    x: 22
+                    y: 20
+                    width: bodyFlick.width - 44
+                    // Закрытая модалка не держит раздел живым: у видео там
+                    // появится предпросмотр камеры, и лишний захват ни к чему.
+                    active: root.open
+                    source: Qt.resolvedUrl(root.sections[root.current].page)
+                }
             }
-            KeyBind {
-                label: "Камера"
-                value: AV.keyCam
-                onPicked: function (seq) { AV.keyCam = seq }
+
+            // Смена раздела прокручивает панель к началу — иначе новый раздел
+            // открывается «с середины» после длинного предыдущего.
+            Connections {
+                target: root
+                function onCurrentChanged() { bodyFlick.contentY = 0 }
             }
         }
     }

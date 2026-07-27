@@ -67,6 +67,13 @@ void VideoSendWorker::setCursorSource(const QRect& physicalRect) {
     m_cursorSrc = physicalRect;
 }
 
+void VideoSendWorker::setCodecPreference(int protoCodec) {
+    const quint8 pref = quint8(protoCodec);
+    if (m_codecPref == pref) return;
+    m_codecPref = pref;
+    reset();                       // энкодер переоткроется на следующем кадре
+}
+
 // Курсор поверх готового кадра YUV420P. Рисуем ПОСЛЕ масштабирования: так
 // стрелка остаётся резкой и не мельчает вместе с картинкой — на 360p её
 // «настоящий» размер был бы пять пикселей, поэтому есть нижняя граница.
@@ -161,11 +168,15 @@ void VideoSendWorker::encodeFrame(const QVideoFrame& frame, int maxW, int maxH,
     if (!m_enc || m_enc->width() != tw || m_enc->height() != th) {
         delete m_enc;
         m_enc = new VideoEncoder;
-        if (!m_enc->open(tw, th, fps, bitrate)) {
+        if (!m_enc->open(tw, th, fps, bitrate, m_codecPref)) {
             delete m_enc;                  // энкодеров нет — молча не вещаем
             m_enc = nullptr;
             return;
         }
+        // Выбранного кодека в сборке не оказалось — вещаем запасным, но так,
+        // чтобы человек об этом узнал, а не гадал, почему настройка «не работает».
+        if (m_codecPref && m_enc->protoCodec() != m_codecPref)
+            emit codecFallback(m_codecPref, m_enc->protoCodec());
         m_frames = 0;
         m_keyNext = true;
     }

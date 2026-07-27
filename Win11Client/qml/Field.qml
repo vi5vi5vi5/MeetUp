@@ -8,18 +8,29 @@ Column {
 
     property string label: ""
     property string hint: ""
+    // Настройка запланирована, но ещё не работает: к ярлыку добавляется пилюля
+    // «скоро». Само поле при этом гасит и выключает вызывающая сторона —
+    // Field не решает за неё (у «темы» половина вариантов рабочая).
+    property bool soon: false
     default property alias content: holder.data
 
     spacing: 6
 
-    Text {
+    Row {
         visible: root.label !== ""
-        text: root.label.toUpperCase()
-        color: Theme.textMuted
-        font.family: Theme.labelFont
-        font.pixelSize: Theme.text2xs
-        font.letterSpacing: 2
-        font.weight: Font.Medium
+        spacing: 8
+        Text {
+            text: root.label.toUpperCase()
+            color: Theme.textMuted
+            font.family: Theme.labelFont
+            font.pixelSize: Theme.text2xs
+            font.letterSpacing: 2
+            font.weight: Font.Medium
+        }
+        SoonChip {
+            visible: root.soon
+            anchors.verticalCenter: parent.verticalCenter
+        }
     }
 
     Item {

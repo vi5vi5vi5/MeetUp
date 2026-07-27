@@ -26,6 +26,11 @@ QtObject {
     readonly property color accent:    "#c6ff3d"
     readonly property color accentInk: dark ? "#c6ff3d" : "#5b8c00"
     readonly property color accentFg:  dark ? "#10120a" : "#16161a"
+    // Акцент «на просвет»: заливка и рамка включённого состояния. Те же числа
+    // IconButton держал у себя как variant "active" — теперь это общий язык
+    // для тумблеров, сегментов и активного раздела настроек.
+    readonly property color accentSoft: Qt.rgba(accent.r, accent.g, accent.b, dark ? 0.16 : 0.20)
+    readonly property color accentLine: Qt.rgba(accent.r, accent.g, accent.b, dark ? 0.40 : 0.48)
 
     // ---- Semantic ----
     readonly property color danger:   dark ? "#ff5470" : "#e0225b"

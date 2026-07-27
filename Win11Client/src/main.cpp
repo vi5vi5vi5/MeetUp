@@ -28,6 +28,9 @@ int main(int argc, char *argv[])
     app.setOrganizationName("MeetUp");
     app.setApplicationName("MeetUp");
     app.setApplicationDisplayName("MeetUp");
+    // Номер приходит из CMake (project VERSION) — QML читает его как
+    // Qt.application.version в разделе настроек «О программе».
+    app.setApplicationVersion(QStringLiteral(APP_VERSION));
     QQuickStyle::setStyle("Basic");
 
     // QUrl «красиво» декодирует punycode-домены (мит-ап.рф) обратно в юникод,

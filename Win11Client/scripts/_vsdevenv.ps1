@@ -1,10 +1,19 @@
-<#
+﻿<#
   Shared helper: make sure the MSVC (cl.exe) toolchain is on PATH.
   The Ninja generator does not run vcvars itself, so when these scripts are
   launched from a plain PowerShell we enter the Visual Studio dev environment.
   Idempotent — a no-op if cl.exe is already available (e.g. Dev PowerShell).
 #>
 function Enter-MsvcEnv {
+    # Просим у компилятора английские диагностики. Это не косметика: Ninja
+    # определяет зависимости от заголовков, вылавливая из вывода cl /showIncludes
+    # строки с префиксом «Note: including file:», а сам префикс CMake запоминает
+    # при конфигурировании (msvc_deps_prefix в CMakeFiles/rules.ninja).
+    # Локализованный префикс приносит вопрос кодировок — а он уже один раз стоил
+    # нам вечера (см. проверку в configure.ps1). ASCII такого вопроса не имеет.
+    # Работает только если установлен английский языковой пакет MSVC; если нет —
+    # префикс останется русским, и правильность проверит configure.ps1.
+    $env:VSLANG = "1033"
     if (Get-Command cl.exe -ErrorAction SilentlyContinue) { return }
 
     $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"

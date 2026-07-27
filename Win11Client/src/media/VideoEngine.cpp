@@ -59,6 +59,9 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
             this, &VideoEngine::restartScreenCapture);
     connect(settings, &MediaSettings::screenFpsChanged,
             this, &VideoEngine::restartScreenCapture);
+    // А вот курсор — просто флаг для воркера: перезапускать поток незачем.
+    connect(settings, &MediaSettings::screenCursorChanged,
+            this, &VideoEngine::applyCursorSetting);
     // Слот демонстрации закрепил сервер (§4.3) — только после этого снимаем.
     connect(conf, &SignalingClient::screenChanged, this, &VideoEngine::onScreenSlotChanged);
 
@@ -89,8 +92,19 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
             [this] { if (m_encInFlight > 0) --m_encInFlight; });
     connect(m_scrWorker, &VideoSendWorker::frameDone, this,
             [this] { if (m_scrInFlight > 0) --m_scrInFlight; });
+    // Выбранного кодека в сборке не оказалось — сказать человеку, а не менять
+    // молча. Полосу называем: у камеры и экрана настройки разные.
+    connect(m_worker, &VideoSendWorker::codecFallback, this,
+            [this](int req, int act) { noteCodecFallback(false, req, act); });
+    connect(m_scrWorker, &VideoSendWorker::codecFallback, this,
+            [this](int req, int act) { noteCodecFallback(true, req, act); });
     m_encThread->start();
     m_scrThread->start();
+
+    // Выбор кодека: воркеру он нужен до первого кадра, дальше — по изменению.
+    connect(settings, &MediaSettings::camCodecChanged, this, &VideoEngine::applyCodecPrefs);
+    connect(settings, &MediaSettings::screenCodecChanged, this, &VideoEngine::applyCodecPrefs);
+    applyCodecPrefs();
 
     // Сторож замёрзших плиток: раз в секунду проверяем, у кого кадры иссякли.
     // Работает всегда — вне конференции m_peers пуст, обход бесплатен.
@@ -183,6 +197,23 @@ void VideoEngine::detachPreview(int token) {
     if (token != m_previewToken) return;   // превью уже перехватила новая плитка
     m_preview = nullptr;
     m_previewToken = 0;
+}
+
+// Предпросмотр в настройках. Сам факт привязки — и есть просьба «снимай»:
+// отдельного выключателя нет намеренно, иначе QML мог бы забыть его погасить
+// и оставить камеру включённой (с горящим светодиодом) после закрытия окна.
+int VideoEngine::attachPreviewExtra(QVideoSink* sink) {
+    m_previewExtra = sink;
+    m_previewExtraToken = ++m_attachSeq;
+    updateCapture();
+    return m_previewExtraToken;
+}
+
+void VideoEngine::detachPreviewExtra(int token) {
+    if (token != m_previewExtraToken) return;
+    m_previewExtra.clear();
+    m_previewExtraToken = 0;
+    updateCapture();               // камера гаснет, если тумблер выключен
 }
 
 // Сцена демонстрации — та же механика, только полоса другая.
@@ -502,9 +533,11 @@ void VideoEngine::onLocalState(bool /*mic*/, bool cam) {
     updateCapture();
 }
 
-// Захват идёт <=> мы в эфире И камера включена. Все дороги ведут сюда.
+// Захват идёт <=> мы в эфире И камера включена — ИЛИ открыт предпросмотр в
+// настройках. Все дороги ведут сюда. Разница между этими двумя случаями одна,
+// но важная: предпросмотр никуда не отправляет (см. onCamFrame).
 void VideoEngine::updateCapture() {
-    const bool want = m_live && m_camOn;
+    const bool want = (m_live && m_camOn) || m_previewExtra != nullptr;
     if (want && !m_camera)       startCapture();
     else if (!want && m_camera)  stopCapture();
 }
@@ -560,6 +593,7 @@ void VideoEngine::stopCapture() {
     if (m_worker) QMetaObject::invokeMethod(m_worker, "reset", Qt::QueuedConnection);
     m_keyNext = true;
     if (m_preview) m_preview->setVideoFrame(QVideoFrame());   // стереть стоп-кадр
+    if (m_previewExtra) m_previewExtra->setVideoFrame(QVideoFrame());
     setPreviewActive(false);
 }
 
@@ -588,9 +622,12 @@ void VideoEngine::onCamFrame(const QVideoFrame& frame) {
     // Превью в self-плитку — всегда и прямо здесь (на GUI/рендер-потоке): своё
     // лицо живёт без задержек и не зависит от заторов; это дёшево.
     if (m_preview) m_preview->setVideoFrame(frame);
+    if (m_previewExtra) m_previewExtra->setVideoFrame(frame);
     setPreviewActive(true);
 
-    if (!m_live) return;
+    // Тумблер камеры выключен, а захват идёт — значит открыт предпросмотр в
+    // настройках. Кадр остаётся на этом компьютере: ни кодирования, ни сети.
+    if (!m_live || !m_camOn) return;
     const MediaSettings::CamPreset q = m_settings->camPreset();
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     if (now - m_lastEncodeAt < 1000 / q.fps) return;         // троттлинг к fps пресета
@@ -659,8 +696,8 @@ void VideoEngine::startScreenCapture() {
         if (physical.isEmpty())            // имя не совпало — считаем по Qt
             physical = QRect(scr->geometry().topLeft() * scr->devicePixelRatio(),
                              scr->geometry().size() * scr->devicePixelRatio());
-        QMetaObject::invokeMethod(m_scrWorker, "setCursorSource",
-                                  Qt::QueuedConnection, Q_ARG(QRect, physical));
+        m_scrCursorRect = physical;
+        applyCursorSetting();              // …если пользователь курсор не выключил
 
         m_scrScreen = new QScreenCapture(this);
         m_scrScreen->setScreen(scr);
@@ -683,6 +720,7 @@ void VideoEngine::stopScreenCapture() {
     if (m_scrWindow) { m_scrWindow->stop(); m_scrWindow->deleteLater(); m_scrWindow = nullptr; }
     if (m_scrSession) { m_scrSession->deleteLater(); m_scrSession = nullptr; }
     if (m_scrSink) { m_scrSink->deleteLater(); m_scrSink = nullptr; }
+    m_scrCursorRect = QRect();
     if (m_scrWorker) {
         QMetaObject::invokeMethod(m_scrWorker, "reset", Qt::QueuedConnection);
         QMetaObject::invokeMethod(m_scrWorker, "setCursorSource", Qt::QueuedConnection,
@@ -704,6 +742,55 @@ void VideoEngine::failScreen(const QString& text) {
     stopScreenCapture();
     m_conf->setScreenShare(false);     // отпустить слот, иначе он повиснет за нами
     emit screenError(text);
+}
+
+// ---------- выбор кодека ----------
+
+// Идентификатор из настроек -> байт кодека протокола. Незнакомое и "auto" -> 0
+// (порядок по умолчанию: H.264, при неудаче VP8).
+static quint8 protoOfCodec(const QString& id) {
+    if (id == "h264") return Proto::CODEC_H264;
+    if (id == "vp8")  return Proto::CODEC_VP8;
+    if (id == "vp9")  return Proto::CODEC_VP9;
+    return 0;
+}
+
+static QString codecName(int proto) {
+    switch (proto) {
+    case Proto::CODEC_H264: return QStringLiteral("H.264");
+    case Proto::CODEC_VP8:  return QStringLiteral("VP8");
+    case Proto::CODEC_VP9:  return QStringLiteral("VP9");
+    default:                return QStringLiteral("другой кодек");
+    }
+}
+
+// Кодек живёт в воркере (энкодер держит состояние потока кадров), поэтому
+// настройка едет туда queued-вызовом. Смена кодека переоткрывает энкодер, а
+// приёмники пересоздают декодеры сами — они сверяют кодек каждого кадра.
+void VideoEngine::applyCodecPrefs() {
+    if (m_worker)
+        QMetaObject::invokeMethod(m_worker, "setCodecPreference", Qt::QueuedConnection,
+                                  Q_ARG(int, protoOfCodec(m_settings->camCodec())));
+    if (m_scrWorker)
+        QMetaObject::invokeMethod(m_scrWorker, "setCodecPreference", Qt::QueuedConnection,
+                                  Q_ARG(int, protoOfCodec(m_settings->screenCodec())));
+}
+
+void VideoEngine::noteCodecFallback(bool screen, int requested, int actual) {
+    emit codecNotice(QStringLiteral("%1: %2 недоступен, идёт %3")
+                         .arg(screen ? QStringLiteral("Демонстрация")
+                                     : QStringLiteral("Камера"),
+                              codecName(requested), codecName(actual)));
+}
+
+// Курсор дорисовывается только при показе МОНИТОРА (у захвата окна он свой) и
+// только если пользователь этого хочет. Пустой прямоугольник = не рисовать,
+// поэтому переключение на лету не требует перезапуска захвата.
+void VideoEngine::applyCursorSetting() {
+    if (!m_scrWorker) return;
+    const QRect r = m_settings->screenCursor() ? m_scrCursorRect : QRect();
+    QMetaObject::invokeMethod(m_scrWorker, "setCursorSource", Qt::QueuedConnection,
+                              Q_ARG(QRect, r));
 }
 
 void VideoEngine::setScreenPreviewActive(bool on) {

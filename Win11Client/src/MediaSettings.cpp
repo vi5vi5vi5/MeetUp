@@ -28,6 +28,14 @@ MediaSettings::MediaSettings(QObject* parent) : QObject(parent) {
     if (!resList.contains(m_screenRes)) m_screenRes = "720";
     m_screenFps = s.value("screenFps", 30).toInt();
     if (m_screenFps != 15 && m_screenFps != 30 && m_screenFps != 60) m_screenFps = 30;
+    m_screenCursor = s.value("screenCursor", true).toBool();
+    const QStringList codecs{"auto", "h264", "vp8", "vp9"};
+    m_camCodec = s.value("camCodec", "auto").toString();
+    if (!codecs.contains(m_camCodec)) m_camCodec = "auto";
+    m_screenCodec = s.value("screenCodec", "auto").toString();
+    if (!codecs.contains(m_screenCodec)) m_screenCodec = "auto";
+    m_screenAudio = s.value("screenAudio", false).toBool();
+    m_screenAudioGain = qBound(0, s.value("screenAudioGain", 80).toInt(), 200);
     m_keyMic = s.value("keyMic").toString();
     m_keySound = s.value("keySound").toString();
     m_keyCam = s.value("keyCam").toString();
@@ -128,6 +136,48 @@ void MediaSettings::setScreenFps(int fps) {
     m_screenFps = fps;
     save("screenFps", fps);
     emit screenFpsChanged();
+}
+
+void MediaSettings::setScreenCursor(bool on) {
+    if (m_screenCursor == on) return;
+    m_screenCursor = on;
+    save("screenCursor", on);
+    emit screenCursorChanged();
+}
+
+// Кодек: "auto" | "h264" | "vp8" | "vp9". Чужое значение молча игнорируем —
+// в настройках оно взяться не может, а из чужого файла настроек может.
+static bool knownCodec(const QString& c) {
+    return c == "auto" || c == "h264" || c == "vp8" || c == "vp9";
+}
+
+void MediaSettings::setCamCodec(const QString& c) {
+    if (m_camCodec == c || !knownCodec(c)) return;
+    m_camCodec = c;
+    save("camCodec", c);
+    emit camCodecChanged();
+}
+
+void MediaSettings::setScreenCodec(const QString& c) {
+    if (m_screenCodec == c || !knownCodec(c)) return;
+    m_screenCodec = c;
+    save("screenCodec", c);
+    emit screenCodecChanged();
+}
+
+void MediaSettings::setScreenAudio(bool on) {
+    if (m_screenAudio == on) return;
+    m_screenAudio = on;
+    save("screenAudio", on);
+    emit screenAudioChanged();
+}
+
+void MediaSettings::setScreenAudioGain(int v) {
+    v = qBound(0, v, 200);
+    if (m_screenAudioGain == v) return;
+    m_screenAudioGain = v;
+    save("screenAudioGain", v);
+    emit screenAudioGainChanged();
 }
 void MediaSettings::setKeyMic(const QString& s) {
     if (m_keyMic == s) return;

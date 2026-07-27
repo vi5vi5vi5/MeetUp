@@ -3,6 +3,8 @@
 #include <QByteArray>
 #include <QHash>
 #include <QList>
+#include <QPointer>
+#include <QRect>
 #include <QVideoFrame>
 
 class SignalingClient;
@@ -54,6 +56,14 @@ public:
     Q_INVOKABLE void detach(qint64 id, int token);
     Q_INVOKABLE int attachPreview(QVideoSink* sink);       // self-плитка
     Q_INVOKABLE void detachPreview(int token);
+    // Вторая «дырка» под тот же поток камеры — предпросмотр в настройках.
+    // Отдельная, а не та же: иначе окно настроек перехватывало бы превью у
+    // self-плитки, и после закрытия та осталась бы чёрной.
+    // Пока она привязана, камера снимает ДАЖЕ при выключенном тумблере —
+    // именно чтобы можно было выбрать устройство и проверить кадр до эфира;
+    // в сеть при этом не уходит ничего (см. onCamFrame).
+    Q_INVOKABLE int attachPreviewExtra(QVideoSink* sink);
+    Q_INVOKABLE void detachPreviewExtra(int token);
 
     // Сцена демонстрации экрана: чужая — attachScreen, своя — attachScreenPreview.
     Q_INVOKABLE int attachScreen(qint64 id, QVideoSink* sink);
@@ -78,6 +88,8 @@ signals:
     void screenPreviewActiveChanged();
     // Захват экрана не поднялся или окно закрыли — QML показывает уведомление.
     void screenError(const QString& text);
+    // Выбранный кодек не открылся, вещаем запасным — тот же тост.
+    void codecNotice(const QString& text);
     // Кадр камеры -> воркеру на кодирующем потоке (queued). Тяжёлый sws+encode
     // уходит с GUI-потока, чтобы окно не дёргалось при перетаскивании.
     void frameToEncode(const QVideoFrame& frame, int maxW, int maxH, int fps,
@@ -141,6 +153,9 @@ private:
     void onScreenCapFrame(const QVideoFrame& frame);
     void failScreen(const QString& text);   // сорвалось: отпустить слот и сказать
     void setScreenPreviewActive(bool on);
+    void applyCursorSetting();         // включить/выключить дорисовку курсора
+    void applyCodecPrefs();            // выбор кодека -> обоим воркерам
+    void noteCodecFallback(bool screen, int requested, int actual);
 
     SignalingClient* m_conf;           // не владеем
     MediaSettings* m_settings;         // не владеем
@@ -161,6 +176,12 @@ private:
     QMediaCaptureSession* m_session = nullptr;
     QVideoSink* m_capSink = nullptr;   // кадры камеры прилетают сюда
     QVideoSink* m_preview = nullptr;   // self-плитка (не владеем)
+    // QPointer, а не сырой указатель, как у остальных «дырок»: этот sink живёт
+    // внутри раздела настроек, который пересоздаётся Loader'ом, а
+    // Component.onDestruction в QML отложен — если он опоздает, писать кадр
+    // будет уже некуда. QPointer сам обнулится, и запись не случится.
+    QPointer<QVideoSink> m_previewExtra;    // предпросмотр в настройках (не владеем)
+    int m_previewExtraToken = 0;
     QThread* m_encThread = nullptr;    // поток кодирования камеры
     VideoSendWorker* m_worker = nullptr;   // живёт на m_encThread
     int m_encInFlight = 0;             // кадров, отданных воркеру и не отработанных
@@ -177,6 +198,7 @@ private:
     QWindowCapture* m_scrWindow = nullptr;          // выбрано окно
     QVideoSink* m_scrSink = nullptr;                // кадры экрана прилетают сюда
     QVideoSink* m_scrPreview = nullptr;             // своя сцена (не владеем)
+    QRect m_scrCursorRect;                          // физ. прямоугольник монитора
     // Отдельный поток, а не общий с камерой: на одном потоке кадр камеры ждал
     // бы, пока закодируется кадр экрана (а это десятки миллисекунд на 4K), и
     // приезжал бы получателю уже просроченным — с этого и разъезжались губы.

@@ -40,6 +40,7 @@ qt_add_executable(Win11Client
     src/net/PersonalRoomController.cpp
     src/net/LinkController.cpp
     src/media/AudioEngine.cpp
+    src/media/ScreenAudioCapture.cpp
     src/media/VideoDecoder.cpp
     src/media/VideoEncoder.cpp
     src/media/VideoSendWorker.cpp
@@ -63,6 +64,13 @@ qt_add_qml_module(Win11Client
         qml/IconButton.qml
         qml/Field.qml
         qml/AppInput.qml
+        qml/AppToggle.qml
+        qml/SoonChip.qml
+        qml/SegmentedControl.qml
+        qml/SettingSwitch.qml
+        qml/SettingsCombo.qml
+        qml/PercentSlider.qml
+        qml/KeyBind.qml
         qml/Card.qml
         qml/Badge.qml
         qml/Divider.qml
@@ -75,6 +83,14 @@ qt_add_qml_module(Win11Client
         qml/ChatMessage.qml
         qml/ControlDock.qml
         qml/SettingsModal.qml
+        qml/SettingsAudio.qml
+        qml/SettingsVideo.qml
+        qml/SettingsShare.qml
+        qml/SettingsCrypto.qml
+        qml/SettingsKeys.qml
+        qml/SettingsInterface.qml
+        qml/SettingsStats.qml
+        qml/SettingsAbout.qml
         qml/ScreenPickerModal.qml
         qml/ScreenStage.qml
         qml/PinnedStage.qml
@@ -112,7 +128,16 @@ qt_add_qml_module(Win11Client
         resources/icons/minimize.svg
         resources/icons/volume.svg
         resources/icons/volume-off.svg
+        resources/icons/lock.svg
+        resources/icons/keyboard.svg
+        resources/icons/activity.svg
+        resources/icons/layout.svg
+        resources/icons/info.svg
 )
+
+# Версия одна на весь проект: CMake → QML (Qt.application.version в разделе
+# «О программе»). Разъезжающиеся номера в интерфейсе и в сборке — классика.
+target_compile_definitions(Win11Client PRIVATE APP_VERSION="${PROJECT_VERSION}")
 
 set_target_properties(Win11Client PROPERTIES
     WIN32_EXECUTABLE ON
@@ -137,8 +162,10 @@ target_link_libraries(Win11Client PRIVATE
 
 if(WIN32)
     # dwmapi — проверка «окно скрыто композитором» (свёрнутые UWP-призраки);
-    # user32/gdi32 — PrintWindow и DIB для миниатюр окон.
-    target_link_libraries(Win11Client PRIVATE dwmapi user32 gdi32)
+    # user32/gdi32 — PrintWindow и DIB для миниатюр окон;
+    # mmdevapi/ole32 — ActivateAudioInterfaceAsync и COM для захвата звука
+    # приложений (process loopback, см. ScreenAudioCapture).
+    target_link_libraries(Win11Client PRIVATE dwmapi user32 gdi32 mmdevapi ole32)
 endif()
 
 # FFmpeg из vcpkg не даёт CMake-целей — только переменные Find-модуля.

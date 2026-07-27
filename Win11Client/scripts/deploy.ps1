@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Produce a clean, self-contained folder you can run by double-click or copy to
   another PC: just Win11Client.exe + the minimum Qt runtime it needs. All QML,
@@ -16,7 +16,11 @@ param(
     # -Portable: bundle the MSVC runtime + D3D12 shader compiler so it runs on a
     # bare PC that lacks the VC++ redistributable. Default is lean (assumes the
     # runtime is present, which every up-to-date Win11 has).
-    [switch]$Portable
+    [switch]$Portable,
+    # -NoSmoke: не запускать собранное приложение для проверки. По умолчанию
+    # запускаем: оконный exe, упавший на старте, молчит — и об этом узнаёшь
+    # только когда ярлык на рабочем столе перестаёт открывать окно.
+    [switch]$NoSmoke
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
@@ -69,6 +73,35 @@ if (-not $Portable) {
     Remove-Item -Force -Recurse -ErrorAction SilentlyContinue `
         (Join-Path $dist "dxcompiler.dll"), (Join-Path $dist "dxil.dll"), (Join-Path $dist "vc_redist.x64.exe"), `
         (Join-Path $dist "qmltooling"), (Join-Path $dist "generic"), (Join-Path $dist "iconengines")
+}
+
+# Дымовая проверка: собранное приложение обязано хотя бы подняться.
+# Оно оконное, поэтому при падении на старте Windows не показывает ничего:
+# ярлык щёлкает, окна нет, ошибок нет. Один раз это уже стоило вечера — теперь
+# запускаем сами и смотрим, живо ли через несколько секунд. Заодно ловим
+# недостающие DLL и упавший на старте QML: их жалобы уходят в stderr, который
+# у оконного exe никто не видит, а здесь он попадает в лог.
+if (-not $NoSmoke) {
+    Write-Host "==> Проверка запуска" -ForegroundColor Cyan
+    $errLog = Join-Path $dist "_startup.err"
+    $outLog = Join-Path $dist "_startup.out"
+    $env:QT_ASSUME_STDERR_HAS_CONSOLE = "1"
+    $proc = Start-Process (Join-Path $dist "Win11Client.exe") -WorkingDirectory $dist `
+        -PassThru -RedirectStandardError $errLog -RedirectStandardOutput $outLog
+
+    if ($proc.WaitForExit(6000)) {
+        $tail = (Get-Content $errLog -ErrorAction SilentlyContinue | Select-Object -Last 15) -join "`n"
+        Write-Host "!!! Приложение вышло через $([math]::Round($proc.TotalProcessorTime.TotalSeconds,1)) с, код $($proc.ExitCode)" -ForegroundColor Red
+        if ($tail) { Write-Host $tail -ForegroundColor DarkGray }
+        Write-Host "    0xC0000005 = падение; -1 = не построился QML (смотрите stderr выше)." -ForegroundColor Yellow
+        Write-Host "    Логи: $errLog" -ForegroundColor Yellow
+        throw "deployed build does not start"
+    }
+
+    $proc.CloseMainWindow() | Out-Null
+    if (-not $proc.WaitForExit(4000)) { $proc.Kill() }
+    Remove-Item $errLog, $outLog -Force -ErrorAction SilentlyContinue
+    Write-Host "    запускается" -ForegroundColor Green
 }
 
 # Report footprint.

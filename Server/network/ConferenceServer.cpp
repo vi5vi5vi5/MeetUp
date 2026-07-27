@@ -414,7 +414,7 @@ void ConferenceServer::onBinary(ClientSession *session, const QByteArray &data)
     // Кадры экрана идут только от ведущего демонстрации: остальные могли
     // не услышать отказ и продолжать слать — их кадры молча отбрасываются.
     const quint8 type = quint8(data.at(0));
-    if ((type == kMsgScreenCoded || type == kMsgScreenJpeg)
+    if ((type == kMsgScreenCoded || type == kMsgScreenJpeg || type == kMsgScreenAudio)
         && room->screenSharer() != session)
         return;
 

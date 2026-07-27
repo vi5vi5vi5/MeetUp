@@ -46,6 +46,12 @@ bool VideoEncoder::tryOpen(const char* encoderName, quint8 protoCodec,
         av_dict_set(&opts, "cpu-used", "8", 0);
         av_dict_set(&opts, "lag-in-frames", "0", 0);
         av_dict_set(&opts, "error-resilient", "1", 0);
+        if (protoCodec == Proto::CODEC_VP9) {
+            // VP9 заметно тяжелее VP8: без распараллеливания по строкам и
+            // колонкам тайлов он на 1080p не укладывается в кадр.
+            av_dict_set(&opts, "row-mt", "1", 0);
+            av_dict_set(&opts, "tile-columns", "2", 0);
+        }
     }
 
     const int rc = avcodec_open2(m_ctx, codec, &opts);
@@ -71,17 +77,40 @@ bool VideoEncoder::tryOpen(const char* encoderName, quint8 protoCodec,
     return true;
 }
 
-bool VideoEncoder::open(int width, int height, int fps, int bitrate) {
+bool VideoEncoder::open(int width, int height, int fps, int bitrate, quint8 preferred) {
     close();
     width &= ~1;                             // чётные размеры — правило §5.5
     height &= ~1;
     if (width < 2 || height < 2) return false;
 
-    // Порядок предпочтения — как у веба: H.264 (аппаратный декод почти у всех
+    struct Candidate { const char* name; quint8 proto; };
+    // Порядок по умолчанию — как у веба: H.264 (аппаратный декод почти у всех
     // приёмников), затем VP8. Оба уходят одним и тем же протоколом v2.
-    if (tryOpen("libopenh264", Proto::CODEC_H264, width, height, fps, bitrate)) return true;
-    if (tryOpen("libvpx", Proto::CODEC_VP8, width, height, fps, bitrate)) return true;
-    qWarning() << "VideoEncoder: в сборке FFmpeg нет ни libopenh264, ни libvpx";
+    static const Candidate kFallback[] = {
+        { "libopenh264", Proto::CODEC_H264 },
+        { "libvpx",      Proto::CODEC_VP8  },
+    };
+    // VP9 в запасные не входит: он дороже по процессору, и получить его
+    // случайно, не выбирая, никто не должен.
+    static const Candidate kAll[] = {
+        { "libopenh264", Proto::CODEC_H264 },
+        { "libvpx",      Proto::CODEC_VP8  },
+        { "libvpx-vp9",  Proto::CODEC_VP9  },
+    };
+
+    QList<Candidate> order;
+    const auto add = [&order](const Candidate& c) {
+        for (const Candidate& x : order) if (x.proto == c.proto) return;
+        order.append(c);
+    };
+    if (preferred)
+        for (const Candidate& c : kAll) if (c.proto == preferred) add(c);
+    for (const Candidate& c : kFallback) add(c);
+
+    for (const Candidate& c : order)
+        if (tryOpen(c.name, c.proto, width, height, fps, bitrate)) return true;
+
+    qWarning() << "VideoEncoder: в сборке FFmpeg нет ни одного пригодного энкодера";
     return false;
 }
 

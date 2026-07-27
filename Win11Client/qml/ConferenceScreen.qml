@@ -827,6 +827,12 @@ Item {
     Connections {
         target: Media
         function onScreenError(text) { root.notify(text) }
+        function onCodecNotice(text) { root.notify(text) }
+    }
+
+    Connections {
+        target: Audio
+        function onScreenAudioError(text) { root.notify(text) }
     }
 }
 

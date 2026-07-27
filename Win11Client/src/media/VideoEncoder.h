@@ -15,12 +15,15 @@ public:
     ~VideoEncoder();
 
     // Открыть кодер под размер кадра (размеры чётные — правило §5.5).
+    // preferred — Proto::CODEC_* по выбору пользователя, 0 = как раньше (H.264,
+    // при неудаче VP8). Выбранный кодек пробуется первым, но остальные остаются
+    // запасными: остаться вовсе без картинки хуже, чем вещать не тем кодеком.
     // false — ни одного подходящего энкодера в сборке FFmpeg нет.
-    bool open(int width, int height, int fps, int bitrate);
+    bool open(int width, int height, int fps, int bitrate, quint8 preferred = 0);
     void close();
 
     bool isOpen() const { return m_ctx != nullptr; }
-    quint8 protoCodec() const { return m_protoCodec; }   // Proto::CODEC_H264 | CODEC_VP8
+    quint8 protoCodec() const { return m_protoCodec; }   // Proto::CODEC_H264 | VP8 | VP9
     int width() const { return m_width; }
     int height() const { return m_height; }
 

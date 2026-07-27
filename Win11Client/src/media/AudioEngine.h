@@ -12,6 +12,7 @@ class SignalingClient;
 class MediaSettings;
 class QAudioSource;
 class QIODevice;
+class ScreenAudioCapture;
 struct OpusEncoder;   // C-структура из opus.h — вперёд объявляется как struct
 
 // Аудиодвижок конференции: микрофон -> Opus -> пакеты и приём (декодеры,
@@ -35,6 +36,8 @@ public:
 
 signals:
     void outputMutedChanged();
+    // Захват звука демонстрации не поднялся — QML показывает тост.
+    void screenAudioError(const QString& text);
 
 public:
     // Где сейчас «играющий» звук участника в шкале часов ОТПРАВИТЕЛЯ (мс):
@@ -53,6 +56,12 @@ private:
     void stopCapture();
     void restartCapture();              // смена микрофона в настройках
     void restartPlayback();             // смена динамиков (декодеры живут)
+
+    // ---- звук демонстрации (вторая полоса, тип кадра SCREEN_AUDIO) ----
+    void updateScreenAudio();           // судья: захватывать звук машины или нет
+    void startScreenAudio();
+    void stopScreenAudio();
+    void onScreenPcm(const QByteArray& pcm, qint64 wallMs);
 
     void onJoinOk();                    // (ре)вход в комнату: буферы — мусор
     void onBinaryFrame(const QByteArray& frame);
@@ -87,6 +96,14 @@ private:
         qint64 lastTsAt = 0;            // когда он к нам пришёл (локальные мс)
     };
     QHash<quint32, Peer> m_peers;       // ключ — sender из заголовка кадра
+    // Звук демонстрации приходит отдельным потоком и от того же участника, что
+    // и его голос, — поэтому вторая карта, а не общая: у них свои декодеры,
+    // свои буферы, и по ним НЕ синхронизируются губы (там нет губ).
+    QHash<quint32, Peer> m_scrPeers;
+
+    ScreenAudioCapture* m_scrCapture = nullptr;   // захват звука машины
+    OpusEncoder* m_scrEnc = nullptr;              // свой кодер: музыка, не голос
+    qint64 m_scrClockMs = 0;                      // монотонные метки этой полосы
 
     QAudioSink* m_sink = nullptr;
     QIODevice* m_out = nullptr;         // куда пишем микс (принадлежит m_sink)

@@ -32,6 +32,18 @@ class MediaSettings : public QObject {
     // screenRes: "360" | "480" | "720" | "1080" | "src" (без масштабирования).
     Q_PROPERTY(QString screenRes READ screenRes WRITE setScreenRes NOTIFY screenResChanged)
     Q_PROPERTY(int screenFps READ screenFps WRITE setScreenFps NOTIFY screenFpsChanged)
+    // Дорисовывать ли курсор при показе монитора. Захват окна курсор рисует сам
+    // (другой механизм), поэтому настройка влияет только на показ монитора.
+    Q_PROPERTY(bool screenCursor READ screenCursor WRITE setScreenCursor NOTIFY screenCursorChanged)
+    // Кодек отправки: "auto" | "h264" | "vp8" | "vp9". У камеры и демонстрации
+    // он свой — на лицах и на тексте кодеки ведут себя по-разному.
+    Q_PROPERTY(QString camCodec READ camCodec WRITE setCamCodec NOTIFY camCodecChanged)
+    Q_PROPERTY(QString screenCodec READ screenCodec WRITE setScreenCodec NOTIFY screenCodecChanged)
+    // Передавать ли вместе с картинкой звук компьютера и насколько громко его
+    // подмешивать (проценты, 100 = как есть). По умолчанию выключено: делиться
+    // звуком машины — осознанное решение, а не то, что включается само.
+    Q_PROPERTY(bool screenAudio READ screenAudio WRITE setScreenAudio NOTIFY screenAudioChanged)
+    Q_PROPERTY(int screenAudioGain READ screenAudioGain WRITE setScreenAudioGain NOTIFY screenAudioGainChanged)
     // Горячие клавиши (M8): переносимый текст QKeySequence ("Ctrl+D", "M", …);
     // пустая строка — клавиша не назначена. Слушает ConferenceScreen.
     Q_PROPERTY(QString keyMic   READ keyMic   WRITE setKeyMic   NOTIFY keyMicChanged)
@@ -55,6 +67,11 @@ public:
     QString audioQuality() const { return m_audioQuality; }
     QString screenRes() const { return m_screenRes; }
     int screenFps() const { return m_screenFps; }
+    bool screenCursor() const { return m_screenCursor; }
+    QString camCodec() const { return m_camCodec; }
+    QString screenCodec() const { return m_screenCodec; }
+    bool screenAudio() const { return m_screenAudio; }
+    int screenAudioGain() const { return m_screenAudioGain; }
     QString keyMic() const { return m_keyMic; }
     QString keySound() const { return m_keySound; }
     QString keyCam() const { return m_keyCam; }
@@ -69,6 +86,11 @@ public:
     void setAudioQuality(const QString& q);
     void setScreenRes(const QString& r);
     void setScreenFps(int fps);
+    void setScreenCursor(bool on);
+    void setCamCodec(const QString& c);
+    void setScreenCodec(const QString& c);
+    void setScreenAudio(bool on);
+    void setScreenAudioGain(int v);
     void setKeyMic(const QString& s);
     void setKeySound(const QString& s);
     void setKeyCam(const QString& s);
@@ -112,6 +134,11 @@ signals:
     void audioQualityChanged();
     void screenResChanged();
     void screenFpsChanged();
+    void screenCursorChanged();
+    void camCodecChanged();
+    void screenCodecChanged();
+    void screenAudioChanged();
+    void screenAudioGainChanged();
     void keyMicChanged();
     void keySoundChanged();
     void keyCamChanged();
@@ -127,6 +154,10 @@ private:
     QString m_camQuality = "med", m_audioQuality = "med";
     QString m_screenRes = "720";
     int m_screenFps = 30;
+    bool m_screenCursor = true;
+    QString m_camCodec = "auto", m_screenCodec = "auto";
+    bool m_screenAudio = false;
+    int m_screenAudioGain = 80;
     QString m_keyMic, m_keySound, m_keyCam;
 
     qreal m_micLevel = 0;
