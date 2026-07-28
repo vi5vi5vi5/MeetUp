@@ -2,12 +2,12 @@
 #include "../net/SignalingClient.h"
 #include <QTimer>
 
-MediaStats::MediaStats(SignalingClient* conf, QObject* parent) : QObject(parent) {
-    // Входящий трафик считаем прямо на границе сокета: так в него попадают все
-    // полосы сразу, включая те, которых движки не разбирают.
-    connect(conf, &SignalingClient::binaryFrame, this,
-            [this](const QByteArray& d) { m_rxBytes += d.size(); });
-
+MediaStats::MediaStats(SignalingClient* conf, QObject* parent)
+    : QObject(parent), m_conf(conf) {
+    // Входящий трафик считает сам транспорт (атомик), а мы забираем накопленное
+    // раз в секунду. Сигналом на каждый кадр это делать больше нельзя: звук
+    // теперь идёт мимо GUI-потока, и будить его полсотни раз в секунду ради
+    // одного сложения — ровно та работа, от которой мы уходили.
     m_window.start();
     m_timer = new QTimer(this);
     m_timer->setInterval(1000);
@@ -70,7 +70,7 @@ void MediaStats::tick() {
     const auto kbps  = [el](qint64 bytes) { return int(bytes * 8 / el); };
     const auto perSec = [el](int n) { return int(qint64(n) * 1000 / el); };
 
-    const int rxKbps = kbps(m_rxBytes);
+    const int rxKbps = kbps(m_conf->takeRxBytes());
     const int rxFps = perSec(m_rxFrames);
     const int rxStreams = m_rxSenders.size();
 
@@ -82,7 +82,7 @@ void MediaStats::tick() {
     };
 
     m_rxKbps = rxKbps; m_rxFps = rxFps; m_rxStreams = rxStreams;
-    m_rxBytes = 0; m_rxFrames = 0; m_rxSenders.clear();
+    m_rxFrames = 0; m_rxSenders.clear();
 
     close(m_cam);
     close(m_scr);

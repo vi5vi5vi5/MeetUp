@@ -687,18 +687,35 @@ Item {
                 elevated: true
                 spacing: 14
 
-                Text {
+                // Знак слева от заголовка: карточка — первое, что видит гость,
+                // пришедший по ссылке, и единственное место, где не жалко места
+                // на крупный знак. Плашка потому, что под карточкой может быть
+                // что угодно — от фона приложения до чужой демонстрации.
+                Row {
+                    id: gateHead
                     width: parent.width
-                    wrapMode: Text.WordWrap
-                    color: Theme.text
-                    font.family: Theme.displayFont
-                    font.pixelSize: 22
-                    font.weight: Font.Bold
-                    font.letterSpacing: -0.5
-                    text: root.gateOpen                ? "Присоединиться"
-                        : Conf.phase === "connecting"  ? "Подключение…"
-                        : Conf.phase === "waiting"     ? (Conf.roomTitle || "Комната") + " ещё не в эфире"
-                        : /* error */                    "Не удалось войти"
+                    spacing: 14
+
+                    BrandMark {
+                        id: gateMark
+                        anchors.verticalCenter: parent.verticalCenter
+                        size: 40
+                        plate: true
+                    }
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: gateHead.width - gateMark.width - gateHead.spacing
+                        wrapMode: Text.WordWrap
+                        color: Theme.text
+                        font.family: Theme.displayFont
+                        font.pixelSize: 22
+                        font.weight: Font.Bold
+                        font.letterSpacing: -0.5
+                        text: root.gateOpen                ? "Присоединиться"
+                            : Conf.phase === "connecting"  ? "Подключение…"
+                            : Conf.phase === "waiting"     ? (Conf.roomTitle || "Комната") + " ещё не в эфире"
+                            : /* error */                    "Не удалось войти"
+                    }
                 }
 
                 Text {   // какая это комната и что от нас требуется

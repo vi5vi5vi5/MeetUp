@@ -5,11 +5,16 @@
 #include <QHash>
 
 class ApiClient;
-class QWebSocket;
+class SignalingLink;
+class QThread;
 class QTimer;
 
 // Одно WebSocket-соединение с комнатой: join, участники, чат.
 // Виден из QML как Conf.
+//
+// Сам сокет живёт не здесь, а на отдельном потоке (SignalingLink): звук не
+// должен зависеть от того, занят ли GUI-поток отрисовкой. Здесь остались
+// состояние комнаты и разбор JSON — всё, что нужно интерфейсу.
 
 class SignalingClient : public QObject {
     Q_OBJECT
@@ -65,7 +70,14 @@ public:
 
     // Неотправленный остаток в сокете (байты). Backpressure §5.5: выше 1.5 МБ
     // видеокадры пропускаются (аудио продолжает идти).
-    qint64 bufferedBytes() const { return m_bufferedBytes; }
+    qint64 bufferedBytes() const;
+
+    // Транспорт — для аудиодвижка. Он подписывается на полосу звука напрямую,
+    // в обход GUI-потока, и туда же отдаёт свои пакеты: пройти через нас значило
+    // бы вернуть звук в очередь, которая на ресайзе окна и встаёт.
+    SignalingLink* mediaLink() const { return m_link; }
+    // Входящие байты за период — для MediaStats (считает раз в секунду).
+    qint64 takeRxBytes();
 
 signals:
     void phaseChanged();
@@ -82,7 +94,9 @@ signals:
     void joinedRoom(const QString& code, const QString& title);
     void messagesChanged();
 
-    void binaryFrame(const QByteArray& frame); // сырой кадр v2 от сервера
+    // Сырой кадр v2 от сервера — всё, кроме звука: полосу звука транспорт
+    // уводит прямо на аудиопоток, сюда она не заходит (см. mediaLink()).
+    void binaryFrame(const QByteArray& frame);
     void joinOk();                              // каждый join_ok — И РЕКОННЕКТ тоже
     void participantJoined(qint64 id);          // новичок: вещатели шлют keyframe
     void participantLeft(qint64 id);            // участник ушёл (снести его декодер)
@@ -113,7 +127,8 @@ private:
 
 
     ApiClient* m_api;
-    QWebSocket* m_ws = nullptr;
+    QThread* m_netThread = nullptr;     // поток транспорта
+    SignalingLink* m_link = nullptr;    // живёт на m_netThread
     QTimer* m_reconnectTimer = nullptr;
     QTimer* m_waitTimer = nullptr;      // room_offline: повтор join
     QTimer* m_pingTimer = nullptr;      // замер RTT раз в 4 с, как у веба
@@ -127,8 +142,6 @@ private:
     int     m_ping = -1;                     // RTT, мс; -1 — не измерен
     qint64  m_screenId = 0;                  // ведущий демонстрации (0 — никто)
     bool    m_wantScreen = false;            // мы хотим слот: повторяем заявку после реконнекта
-
-    qint64  m_bufferedBytes = 0;             // учёт неотправленного (backpressure)
 
     QString m_phase = "connecting";
     QString m_errorText, m_roomTitle;

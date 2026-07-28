@@ -8,9 +8,16 @@ Planned units:
   (`POST /api/rooms`, `GET /api/rooms/<code>`, later auth/avatars/personal
   rooms). Holds the `QNetworkCookieJar` that carries the `meetup_session`
   cookie into both HTTP and the WebSocket handshake.
-- **`SignalingClient`** — `QWebSocket` wrapper for the JSON control protocol
+- **`SignalingClient`** — room state and the JSON control protocol
   (`join` → `join_ok`, `participant_*`, `chat`, `state`, `screen`, `ping`),
-  including the 8-attempt reconnect policy.
+  including the 8-attempt reconnect policy. Lives on the GUI thread; owns the
+  transport below and talks to it with queued calls.
+- **`SignalingLink`** — the `QWebSocket` itself, on its **own thread**. Incoming
+  binary frames are split at the socket: the audio band (`AUDIO_CODED`,
+  `SCREEN_AUDIO`) goes straight to the audio thread, everything else to the GUI
+  thread where `VideoEngine` lives. The split exists because the GUI thread
+  stalls — a window resize runs Windows' modal size loop and blocks Qt Quick on
+  every frame — and 20 ms audio packets must not wait behind that.
 - **`Protocol.h`** — binary media framing (pack 11-byte header / unpack
   15-byte header) and the media type/flag/codec constants. These constants
   live only in the client — the server treats media payloads as opaque.

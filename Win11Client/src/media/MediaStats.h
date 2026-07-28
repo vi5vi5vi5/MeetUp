@@ -13,8 +13,9 @@ class QTimer;
 // прислать лог. Счётчики копятся там, где события происходят, и раз в секунду
 // превращаются в скорости. В QML — Stats.
 //
-// Всё считается на GUI-потоке: пакеты воркеров приезжают сюда queued-сигналом,
-// приём и захват тоже живут здесь. Поэтому ни атомиков, ни мьютексов.
+// Всё складывается на GUI-потоке: числа от воркеров (кодирование, звук)
+// приезжают сюда queued-сигналами, а входящие байты забираются раз в секунду из
+// атомика транспорта. Поэтому здесь ни своих атомиков, ни мьютексов.
 class MediaStats : public QObject {
     Q_OBJECT
     // Приём — суммарно по всем полосам: голос, камера, демонстрация.
@@ -87,10 +88,10 @@ private:
     bool isQuiet() const;
     Band& band(bool screen) { return screen ? m_scr : m_cam; }
 
+    SignalingClient* m_conf;       // не владеем: у него счётчик входящих байт
     Band m_cam, m_scr, m_voice;
     bool m_scrAudio = false, m_scrAudioSeen = false;
 
-    qint64 m_rxBytes = 0;
     int m_rxFrames = 0;
     QSet<quint32> m_rxSenders;     // сколько разных потоков рисовалось за окно
     int m_rxKbps = 0, m_rxFps = 0, m_rxStreams = 0;

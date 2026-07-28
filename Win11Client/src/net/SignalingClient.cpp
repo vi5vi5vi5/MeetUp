@@ -1,8 +1,8 @@
 ﻿#include "SignalingClient.h"
+#include "SignalingLink.h"
 #include "ApiClient.h"
-#include <QWebSocket>
+#include <QThread>
 #include <QTimer>
-#include <QNetworkRequest>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -11,6 +11,22 @@
 
 SignalingClient::SignalingClient(ApiClient* api, QObject* parent)
     : QObject(parent), m_api(api) {
+    // Транспорт на своём потоке: кадры звука приходят каждые 20 мс и не должны
+    // ждать, пока GUI-поток закончит ресайз окна. Сюда, на GUI, возвращаются
+    // только текстовые сообщения и видео — им задержка не страшна.
+    m_netThread = new QThread(this);
+    m_netThread->setObjectName("signaling-net");
+    m_link = new SignalingLink;              // без parent: переезжает на свой поток
+    m_link->moveToThread(m_netThread);
+    connect(m_netThread, &QThread::finished, m_link, &QObject::deleteLater);
+    connect(m_link, &SignalingLink::opened, this, &SignalingClient::onConnected);
+    connect(m_link, &SignalingLink::closed, this, &SignalingClient::onDisconnected);
+    connect(m_link, &SignalingLink::textMessage, this, &SignalingClient::onTextMessage);
+    // Видео и служебные кадры — как раньше, наружу как есть. Полоса звука
+    // (audioFrame) сюда не заходит: на неё подписан AudioEngine напрямую.
+    connect(m_link, &SignalingLink::binaryFrame, this, &SignalingClient::binaryFrame);
+    m_netThread->start();
+
     m_reconnectTimer = new QTimer(this);
     m_reconnectTimer->setSingleShot(true);
     connect(m_reconnectTimer, &QTimer::timeout, this, [this]() {
@@ -61,7 +77,17 @@ void SignalingClient::sweepSpeaking() {
     if (m_speakingUntil.isEmpty()) m_speakTimer->stop();
 }
 
-SignalingClient::~SignalingClient() { /* m_ws — child, удалится сам */ }
+SignalingClient::~SignalingClient() {
+    // Сокет закрывается на своём потоке, иначе QWebSocket разрушался бы из
+    // чужого. Блокирующий вызов безопасен: поток крутит свой цикл событий и
+    // нас не ждёт.
+    QMetaObject::invokeMethod(m_link, &SignalingLink::shutdown, Qt::BlockingQueuedConnection);
+    m_netThread->quit();
+    m_netThread->wait();        // finished -> deleteLater транспорта
+}
+
+qint64 SignalingClient::bufferedBytes() const { return m_link->bufferedBytes(); }
+qint64 SignalingClient::takeRxBytes() { return m_link->takeRxBytes(); }
 
 void SignalingClient::open(const QString& roomCode, const QString& name) {
     // Начинаем новую сессию входа: сбрасываем флаги прошлой.
@@ -87,37 +113,12 @@ void SignalingClient::open(const QString& roomCode, const QString& name) {
 }
 
 void SignalingClient::openSocket() {
-    // Пересоздаём сокет на каждую попытку (переиспользовать закрытый нельзя).
-    if (m_ws) { m_ws->deleteLater(); m_ws = nullptr; }
-    m_ws = new QWebSocket(QString(), QWebSocketProtocol::VersionLatest, this);
-
-    connect(m_ws, &QWebSocket::connected, this, &SignalingClient::onConnected);
-    connect(m_ws, &QWebSocket::textMessageReceived, this, &SignalingClient::onTextMessage);
-    connect(m_ws, &QWebSocket::disconnected, this, &SignalingClient::onDisconnected);
-    // Бинарные кадры (медиа v2) — наружу как есть: разбирает AudioEngine (M2+).
-    connect(m_ws, &QWebSocket::binaryMessageReceived, this, &SignalingClient::binaryFrame);
-    // Учёт неотправленного: sendBinary прибавляет, подтверждения ОС — вычитают.
-    // bytesWritten считает и служебные байты WS-фрейминга, поэтому кламп в ноль.
-    m_bufferedBytes = 0;
-    connect(m_ws, &QWebSocket::bytesWritten, this, [this](qint64 n) {
-        m_bufferedBytes = qMax<qint64>(0, m_bufferedBytes - n);
-        });
-    // Диагностика: молча падающий сокет выглядит как вечное «переподключение»,
-    // а причина (DNS, TLS, отказ сервера) видна только здесь.
-    connect(m_ws, &QWebSocket::errorOccurred, this, [this](QAbstractSocket::SocketError e) {
-        qWarning() << "SignalingClient: ошибка сокета:" << e << m_ws->errorString();
-        });
-    connect(m_ws, &QWebSocket::sslErrors, this, [](const QList<QSslError>& errors) {
-        for (const QSslError& e : errors)
-            qWarning() << "SignalingClient: TLS:" << e.errorString();
-        });
-
-    // Хендшейк-запрос: URL + (для аккаунта) кука сессии.
-    QNetworkRequest req{ QUrl(m_api->wsUrl()) };
+    // Адрес и куку читаем здесь: ApiClient живёт на GUI-потоке, и транспорту
+    // они уезжают значениями.
+    const QUrl url(m_api->wsUrl());
     const QString token = m_api->sessionToken();
-    if (!token.isEmpty())
-        req.setRawHeader("Cookie", QByteArray("meetup_session=") + token.toUtf8());
-    m_ws->open(req);
+    QMetaObject::invokeMethod(m_link, [this, url, token] { m_link->open(url, token); },
+        Qt::QueuedConnection);
 }
 
 void SignalingClient::onConnected() {
@@ -128,7 +129,7 @@ void SignalingClient::onConnected() {
 
 // Первое сообщение в комнату — представляемся.
 void SignalingClient::sendJoin() {
-    if (!m_ws || m_ws->state() != QAbstractSocket::ConnectedState) { openSocket(); return; }
+    if (!m_link->isConnected()) { openSocket(); return; }
     const QJsonObject join{
         {"type", "join"},
         {"room", m_roomCode},
@@ -141,8 +142,7 @@ void SignalingClient::sendJoin() {
         {"mic", m_mic},
         {"cam", m_cam},
     };
-    m_ws->sendTextMessage(QString::fromUtf8(
-        QJsonDocument(join).toJson(QJsonDocument::Compact)));
+    sendJson(join);
 }
 void SignalingClient::onTextMessage(const QString& text) {
     const QJsonObject msg =
@@ -325,9 +325,11 @@ void SignalingClient::rebuildParticipants(const QJsonArray& serverList) {
 
 // Разослать участникам, что у нас с микрофоном/камерой (веб шлёт state).
 void SignalingClient::sendJson(const QJsonObject& msg) {
-    if (!m_ws || m_ws->state() != QAbstractSocket::ConnectedState) return;
-    m_ws->sendTextMessage(QString::fromUtf8(
-        QJsonDocument(msg).toJson(QJsonDocument::Compact)));
+    if (!m_link->isConnected()) return;
+    const QString text = QString::fromUtf8(
+        QJsonDocument(msg).toJson(QJsonDocument::Compact));
+    QMetaObject::invokeMethod(m_link, [this, text] { m_link->sendText(text); },
+        Qt::QueuedConnection);
 }
 
 void SignalingClient::setLocalState(bool mic, bool cam) {
@@ -388,18 +390,9 @@ void SignalingClient::leave() {
         m_cam = false;
         emit localStateChanged(false, false);   // движки гасят захват и свои тумблеры
     }
-    if (m_ws) {
-        // Удаление сразу после close() рвёт соединение, не дав уйти close-фрейму:
-        // сервер видит не «участник вышел», а «пропал», и выносит нас из комнаты
-        // только по таймауту. Отпускаем сокет по disconnected, со страховкой на
-        // случай, если ответ не придёт вовсе.
-        QWebSocket* ws = m_ws;
-        m_ws = nullptr;
-        disconnect(ws, nullptr, this, nullptr);   // дохлый сокет нас больше не касается
-        connect(ws, &QWebSocket::disconnected, ws, &QObject::deleteLater);
-        QTimer::singleShot(3000, ws, [ws]() { ws->deleteLater(); });
-        ws->close();
-    }
+    // Закрытие с close-фреймом, чтобы сервер увидел «участник вышел», а не
+    // «пропал» (подробности — в SignalingLink::closeGracefully).
+    QMetaObject::invokeMethod(m_link, &SignalingLink::closeGracefully, Qt::QueuedConnection);
     emit left();
 }
 
@@ -412,7 +405,7 @@ void SignalingClient::setError(const QString& t) {
 void SignalingClient::fatal(const QString& t) {
     m_fatal = true;
     m_reconnectTimer->stop(); m_waitTimer->stop();
-    if (m_ws) { m_ws->close(); }
+    QMetaObject::invokeMethod(m_link, &SignalingLink::close, Qt::QueuedConnection);
     setError(t);
     setPhase("error");
 }
@@ -478,11 +471,7 @@ void SignalingClient::handleError(const QString& reason) {
 void SignalingClient::sendChat(const QString& text) {
     const QString t = text.trimmed();
     if (t.isEmpty()) return;                       // пустое/пробелы не шлём
-    if (!m_ws || m_ws->state() != QAbstractSocket::ConnectedState) return;
-
-    const QJsonObject chat{ {"type", "chat"}, {"text", t} };
-    m_ws->sendTextMessage(QString::fromUtf8(
-        QJsonDocument(chat).toJson(QJsonDocument::Compact)));
+    sendJson({ {"type", "chat"}, {"text", t} });
     // В ленту НЕ добавляем — сервер вернёт это же сообщение как "chat".
 }
 
@@ -497,9 +486,10 @@ QVariantMap SignalingClient::makeMessage(qint64 senderId, const QString& senderN
     return m;
 }
 
+// Кадры от видеодвижка (он живёт на GUI-потоке). Звук сюда не заходит: у
+// аудиопотока прямая дорога в транспорт, см. mediaLink().
 void SignalingClient::sendBinary(const QByteArray& frame) {
-    if (m_ws && m_ws->state() == QAbstractSocket::ConnectedState) {
-        m_bufferedBytes += frame.size();
-        m_ws->sendBinaryMessage(frame);
-    }
+    if (!m_link->isConnected()) return;
+    QMetaObject::invokeMethod(m_link, [this, frame] { m_link->sendBinary(frame); },
+        Qt::QueuedConnection);
 }

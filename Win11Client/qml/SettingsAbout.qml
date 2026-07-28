@@ -45,11 +45,42 @@ Column {
         }
     }
 
+    // Шапка раздела: знак, название, версия. Без неё раздел начинался прямо со
+    // строки таблицы и читался как её продолжение, а не как «о программе».
+    Row {
+        width: parent.width
+        spacing: 16
+
+        BrandMark {
+            anchors.verticalCenter: parent.verticalCenter
+            size: 56
+            plate: true
+        }
+        Column {
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 2
+            Text {
+                text: "MeetUp"
+                color: Theme.text
+                font.family: Theme.displayFont
+                font.pixelSize: 26
+                font.weight: Font.ExtraBold
+                font.letterSpacing: -0.9
+            }
+            Text {
+                text: "Версия " + Qt.application.version + " · Windows"
+                color: Theme.textMuted
+                font.family: Theme.uiFont
+                font.pixelSize: Theme.textSm
+            }
+        }
+    }
+
     Column {
         width: parent.width
         spacing: 2
 
-        InfoRow { key: "Версия клиента"; value: Qt.application.version }
+        // «Версия клиента» отдельной строкой больше не нужна — она в шапке выше.
         InfoRow { key: "Версия сервера"; value: "—"; soon: true }
         InfoRow { key: "Сервер"; value: Sys.host }
         InfoRow { key: "Кодеки"; value: "openh264 · libvpx · opus" }

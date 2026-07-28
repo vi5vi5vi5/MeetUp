@@ -1,25 +1,21 @@
-﻿#pragma once
+#pragma once
 #include <QObject>
-#include <QByteArray>
-#include <QHash>
-#include <QList>
-
-class QAudioSink;
-class QTimer;
-struct OpusDecoder;
 
 class SignalingClient;
 class MediaSettings;
 class MediaStats;
-class QAudioSource;
-class QIODevice;
-class ScreenAudioCapture;
-struct OpusEncoder;   // C-структура из opus.h — вперёд объявляется как struct
+class AudioWorker;
+class QThread;
 
 // Аудиодвижок конференции: микрофон -> Opus -> пакеты и приём (декодеры,
 // джиттер-буфер, микшер). Устройства, чувствительность/громкость и битрейт
 // приходят из MediaSettings (M8) и применяются на лету.
 // Из QML не виден: живёт между SignalingClient и звуковым железом.
+//
+// Сам звук здесь не обрабатывается — он живёт в AudioWorker на отдельном
+// потоке (почему именно так, см. AudioWorker.h). Здесь остались решения: кто
+// включает захват, что делать при смене устройств, что показать человеку.
+// Разделение то же, что у видео: VideoEngine решает, VideoSendWorker считает.
 class AudioEngine : public QObject {
     Q_OBJECT
     // «Общий звук» выключен: голоса участников не слышны (deafen). Декодеры и
@@ -40,85 +36,36 @@ public:
     void setOutputMuted(bool muted);
     bool screenAudioLive() const { return m_scrLive; }
 
+    // Часы звука участника (мс, шкала отправителя) — по ним VideoEngine
+    // придерживает обогнавшее видео. Потокобезопасно: считает воркер, здесь
+    // читается снимок.
+    qint64 playheadMs(quint32 id) const;
+
 signals:
     void outputMutedChanged();
     void screenAudioLiveChanged();
     // Захват звука демонстрации не поднялся — QML показывает тост.
     void screenAudioError(const QString& text);
 
-public:
-    // Где сейчас «играющий» звук участника в шкале часов ОТПРАВИТЕЛЯ (мс):
-    // метка последнего чанка минус то, что ещё лежит в очереди и в синке,
-    // плюс прошедшее с тех пор время. 0 — звука нет или он устарел; тогда
-    // видео не придерживают. По этому значению VideoEngine синхронизирует губы.
-    qint64 playheadMs(quint32 id) const;
-
 private:
     void onPhase();                     // фаза сменилась: live <-> остальные
     void onLocalState(bool mic, bool cam);
     void onLeft();                      // вышли из комнаты
-    void onCaptured();                  // микрофон принёс порцию сэмплов
     void updateCapture();               // единственный судья: захватывать или нет
-    void startCapture();
-    void stopCapture();
-    void restartCapture();              // смена микрофона в настройках
-    void restartPlayback();             // смена динамиков (декодеры живут)
-
-    // ---- звук демонстрации (вторая полоса, тип кадра SCREEN_AUDIO) ----
-    void updateScreenAudio();           // судья: захватывать звук машины или нет
-    void startScreenAudio();
-    void stopScreenAudio();
-    void onScreenPcm(const QByteArray& pcm, qint64 wallMs);
-    void setScreenLive(bool on);        // «звук демонстрации идёт» -> в QML
-
-    void onJoinOk();                    // (ре)вход в комнату: буферы — мусор
-    void onBinaryFrame(const QByteArray& frame);
-    void onParticipantLeft(qint64 id);
     void updatePlayback();              // играем <=> мы в эфире
-    void startPlayback();
-    void stopPlayback();
-    void resetPeers();
-    void pump();                        // насос: подкормить синк миксом
-    QByteArray mixOneFrame();           // один кадр микса всех участников
+    void updateScreenAudio();           // судья: захватывать звук машины или нет
+    void pushDevices();                 // выбранные устройства -> воркеру
+    void pushGains();                   // громкость/чувствительность -> воркеру
+    void setScreenLive(bool on);
 
     SignalingClient* m_conf;            // не владеем
     MediaSettings* m_settings;          // не владеем
     MediaStats* m_stats;                // не владеем: складываем туда числа
+    QThread* m_thread = nullptr;        // поток звука
+    AudioWorker* m_worker = nullptr;    // живёт на m_thread
+
     bool m_live = false;                // phase == "live"
     bool m_micOn = false;               // тумблер микрофона (по умолчанию выкл.)
     bool m_outputMuted = false;         // «общий звук» выключен (deafen)
-
-    QAudioSource* m_source = nullptr;   // захват (жив только пока говорим)
-    QIODevice* m_mic = nullptr;         // поток сэмплов (принадлежит m_source)
-    QByteArray m_pcm;                   // накопитель до полного кадра
-    OpusEncoder* m_enc = nullptr;       // кодер (жив вместе с захватом)
-    qint64 m_audioClockMs = 0;          // монотонные часы меток отправки
-
-    int sinkQueuedMs() const;           // сколько звука ещё лежит в QAudioSink
-
-    // Приёмная сторона одного участника: декодер + джиттер-буфер.
-    struct Peer {
-        OpusDecoder* dec = nullptr;
-        QList<QByteArray> queue;        // декодированные кадры по 1920 байт
-        bool playing = false;           // предбуфер (3 кадра) пройден
-        qint64 lastTs = 0;              // метка последнего принятого чанка
-        qint64 lastTsAt = 0;            // когда он к нам пришёл (локальные мс)
-    };
-    QHash<quint32, Peer> m_peers;       // ключ — sender из заголовка кадра
-    // Звук демонстрации приходит отдельным потоком и от того же участника, что
-    // и его голос, — поэтому вторая карта, а не общая: у них свои декодеры,
-    // свои буферы, и по ним НЕ синхронизируются губы (там нет губ).
-    QHash<quint32, Peer> m_scrPeers;
-
-    ScreenAudioCapture* m_scrCapture = nullptr;   // захват звука машины
-    OpusEncoder* m_scrEnc = nullptr;              // свой кодер: музыка, не голос
-    qint64 m_scrClockMs = 0;                      // монотонные метки этой полосы
-    bool m_scrLive = false;                       // звук демонстрации приходит
-    qint64 m_scrRxAt = 0;                         // когда пришёл последний кадр
-    QTimer* m_scrLiveTimer = nullptr;             // тикает, только пока идёт звук
-
-    QAudioSink* m_sink = nullptr;
-    QIODevice* m_out = nullptr;         // куда пишем микс (принадлежит m_sink)
-    QTimer* m_pumpTimer = nullptr;
-
+    bool m_scrLive = false;             // звук демонстрации приходит
 };

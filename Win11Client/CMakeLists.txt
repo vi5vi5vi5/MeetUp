@@ -1,5 +1,7 @@
 ﻿cmake_minimum_required(VERSION 3.21)
-project(Win11Client VERSION 0.1 LANGUAGES CXX)
+# RC — ради resources/app.rc: значок .exe (панель задач, Alt+Tab, ярлык).
+# Без него CMake не знает, чем собирать .rc, и молча его пропустит.
+project(Win11Client VERSION 0.1 LANGUAGES CXX RC)
 
 # ---- MeetUp Win11 client ----------------------------------------------------
 # Qt6/QML desktop client for the MeetUp conference server.
@@ -37,9 +39,11 @@ qt_add_executable(Win11Client
     src/net/AuthController.cpp
     src/net/RoomController.cpp
     src/net/SignalingClient.cpp
+    src/net/SignalingLink.cpp
     src/net/PersonalRoomController.cpp
     src/net/LinkController.cpp
     src/media/AudioEngine.cpp
+    src/media/AudioWorker.cpp
     src/media/ScreenAudioCapture.cpp
     src/media/VideoDecoder.cpp
     src/media/VideoEncoder.cpp
@@ -47,6 +51,9 @@ qt_add_executable(Win11Client
     src/media/ScreenCursor.cpp
     src/media/VideoEngine.cpp
     src/media/MediaStats.cpp
+    # Значок приложения. В qrc он НЕ нужен: ресурс Windows и ресурс Qt — разные
+    # механизмы, класть .ico в оба означало бы носить его дважды.
+    resources/app.rc
 )
 
 # The Theme and MockData QML files are exposed to every screen as singletons.
@@ -60,6 +67,7 @@ qt_add_qml_module(Win11Client
         qml/Main.qml
         qml/Theme.qml
         qml/MockData.qml
+        qml/BrandMark.qml
         qml/AppIcon.qml
         qml/AppButton.qml
         qml/IconButton.qml
@@ -134,6 +142,9 @@ qt_add_qml_module(Win11Client
         resources/icons/activity.svg
         resources/icons/layout.svg
         resources/icons/info.svg
+        # Знак: две готовые заготовки под тему (см. BrandMark.qml).
+        resources/brand/meetup-mark-light.svg
+        resources/brand/meetup-mark-dark.svg
 )
 
 # Версия одна на весь проект: CMake → QML (Qt.application.version в разделе

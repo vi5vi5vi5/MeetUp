@@ -2,9 +2,14 @@
 
 The media pipeline (see `docs/ROADMAP.md`).
 
-- **M2 Audio** (`AudioEngine`) — `QAudioSource` capture (48 kHz mono) → libopus
-  20 ms frames → v2 packets; receive → libopus decode → jitter buffer (3-chunk
-  prebuffer) → mix → `QAudioSink`.
+- **M2 Audio** (`AudioEngine` + `AudioWorker`) — `QAudioSource` capture
+  (48 kHz mono) → libopus 20 ms frames → v2 packets; receive → libopus decode →
+  jitter buffer → mix → `QAudioSink`. All of it runs on a dedicated **audio
+  thread** (`AudioWorker`), fed straight from the socket thread; `AudioEngine`
+  stays on the GUI thread and only decides *when* to capture and play.
+  The jitter buffer starts at a 3-chunk (60 ms) prebuffer and adapts: an
+  underrun is concealed with Opus PLC and widens the buffer by 2 chunks
+  (up to 160 ms), which decays back after 5 s of clean playback.
 - **M3 Video receive** (`VideoEngine` + `VideoDecoder`) — FFmpeg (libavcodec)
   decode of H.264/VP8/VP9, keyframe and `KEYFRAME_REQ` handling, render into
   tiles via `QVideoSink`.

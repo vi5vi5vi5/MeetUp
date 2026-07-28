@@ -1,0 +1,10 @@
+// MeetUp application icon.
+//
+// The resource MUST be named IDI_ICON1: the Qt windows platform plugin looks up
+// exactly that name in the executable and uses it for the window icon (title
+// bar, Alt+Tab). Windows itself takes the same icon for the taskbar, shortcuts
+// and the installed-apps list.
+//
+// ASCII only on purpose - rc.exe reads this file in the system ANSI codepage.
+
+IDI_ICON1 ICON "brand/meetup.ico"

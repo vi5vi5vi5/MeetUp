@@ -72,15 +72,26 @@ Item {
         anchors.leftMargin: Theme.padStage
         anchors.rightMargin: Theme.padStage
 
-        Text {
+        // Логотип: знак + слово. См. AuthScaffold — id и implicitWidth несущие,
+        // от них считает ширину LinkBar.
+        Row {
             id: logo
             anchors.verticalCenter: parent.verticalCenter
-            text: "MEETUP"
-            color: Theme.text
-            font.family: Theme.labelFont
-            font.pixelSize: Theme.textLg
-            font.letterSpacing: 3
-            font.weight: Font.Bold
+            spacing: 10
+
+            BrandMark {
+                anchors.verticalCenter: parent.verticalCenter
+                size: 26
+            }
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "MEETUP"
+                color: Theme.text
+                font.family: Theme.labelFont
+                font.pixelSize: Theme.textLg
+                font.letterSpacing: 3
+                font.weight: Font.Bold
+            }
         }
 
         // Адресная строка конференции — см. AuthScaffold: ширина считается от

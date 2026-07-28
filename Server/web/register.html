@@ -4,6 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MeetUp — Регистрация</title>
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="icon" href="assets/brand/meetup-mark-auto.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/brand/meetup-avatar-512.png">
+<meta property="og:type" content="website">
+<meta property="og:title" content="MeetUp — Регистрация">
+<meta property="og:description" content="Видеовстречи без установки и регистрации.">
+<meta property="og:image" content="https://meetup.linkpc.net/assets/brand/meetup-og.jpg">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="stylesheet" href="assets/fonts.css">
 <link rel="stylesheet" href="assets/theme.css">
 <style>
@@ -26,9 +34,11 @@
 
   .topbar { display: flex; align-items: center; padding: 22px 28px; }
   .wordmark {
+    display: flex; align-items: center; gap: 11px;
     font-family: var(--font-label); font-weight: 700; font-size: 18px;
     letter-spacing: 2px; text-transform: uppercase;
   }
+  .wordmark-mark { width: 28px; height: 28px; display: block; flex: none; }
 
   .stagewrap { flex: 1; display: grid; place-items: center; padding: 0 28px 40px; overflow: auto; }
   .stage {
@@ -144,7 +154,11 @@
     return (
       <div className="page" style={{ background: "var(--bg)", color: "var(--text)", fontFamily: "var(--font-ui)" }}>
         <div className="topbar">
-          <div className="wordmark">MeetUp</div>
+          <div className="wordmark">
+            <img className="wordmark-mark" alt=""
+                 src={`assets/brand/meetup-mark-${theme === "dark" ? "light" : "dark"}.svg`} />
+            MeetUp
+          </div>
           <span style={{ flex: 1 }} />
           <IconButton icon={theme === "dark" ? "sun" : "moon"} size="sm"
                       label="Сменить тему" onClick={toggle} />

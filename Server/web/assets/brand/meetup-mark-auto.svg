@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="MeetUp">
+  <!-- Фавиконку браузер рисует ВНЕ страницы, поэтому currentColor из
+       meetup-mark.svg стал бы чёрным и пропал в тёмной теме. Медиазапрос
+       внутри самого файла решает это: скобки идут по теме браузера,
+       лаймовая точка не меняется никогда. -->
+  <style>
+    .b { fill: #16161a }
+    @media (prefers-color-scheme: dark) { .b { fill: #f2f2f4 } }
+  </style>
+  <g class="b"><circle cx="23" cy="14" r="3.4"></circle><circle cx="15" cy="14" r="3.4"></circle><circle cx="15" cy="23" r="3.4"></circle><circle cx="15" cy="32" r="3.4"></circle><circle cx="15" cy="41" r="3.4"></circle><circle cx="15" cy="50" r="3.4"></circle><circle cx="23" cy="50" r="3.4"></circle><circle cx="41" cy="14" r="3.4"></circle><circle cx="49" cy="14" r="3.4"></circle><circle cx="49" cy="23" r="3.4"></circle><circle cx="49" cy="32" r="3.4"></circle><circle cx="49" cy="41" r="3.4"></circle><circle cx="49" cy="50" r="3.4"></circle><circle cx="41" cy="50" r="3.4"></circle></g>
+  <circle cx="32" cy="32" r="6.4" fill="#c6ff3d"></circle>
+</svg>
