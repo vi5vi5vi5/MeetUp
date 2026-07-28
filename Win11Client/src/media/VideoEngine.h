@@ -194,7 +194,12 @@ private:
     bool m_previewActive = false;
     bool m_keyNext = false;            // форсировать опорный на следующем кадре
     qint64 m_lastForceAt = 0;          // rate-limit форс-keyframe (500 мс)
-    qint64 m_lastEncodeAt = 0;         // троттлинг до fps пресета
+    // Срок следующего кадра, а не «когда был прошлый». Разница не косметическая:
+    // при пороге «прошло не меньше периода» кадр, приехавший на пару миллисекунд
+    // раньше срока, выбрасывался ЦЕЛИКОМ, и следующий приезжал только через
+    // период — на дрожащем источнике (а захват экрана именно такой) частота
+    // проваливалась вдвое. Со сроком мелкое опережение просто съедает запас.
+    qint64 m_nextDueMs = 0;
 
     // отправка экрана
     QMediaCaptureSession* m_scrSession = nullptr;   // своя сессия: у камеры своя
@@ -211,5 +216,5 @@ private:
     int m_scrInFlight = 0;
     bool m_screenPreviewActive = false;
     bool m_scrKeyNext = false;
-    qint64 m_scrLastEncodeAt = 0;
+    qint64 m_scrNextDueMs = 0;         // см. m_nextDueMs
 };

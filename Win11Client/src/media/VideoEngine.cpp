@@ -596,7 +596,7 @@ void VideoEngine::startCapture() {
             });
 
     m_keyNext = true;              // первый кадр нового захвата — опорный
-    m_lastEncodeAt = 0;
+    m_nextDueMs = 0;               // первый кадр нового захвата — сразу
     m_camera->start();
 }
 
@@ -649,7 +649,8 @@ void VideoEngine::onCamFrame(const QVideoFrame& frame) {
     if (!m_live || !m_camOn) return;
     const MediaSettings::CamPreset q = m_settings->camPreset();
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    if (now - m_lastEncodeAt < 1000 / q.fps) return;         // троттлинг к fps пресета
+    const qint64 period = qMax<qint64>(1, 1000 / q.fps);
+    if (now < m_nextDueMs) return;                           // ещё рано
     // Дальше кадр обязан был уйти — всё, что его останавливает, идёт в счёт
     // пропусков: именно из них складывается «дёргается картинка».
     m_stats->noteTxAttempt(false);
@@ -661,7 +662,10 @@ void VideoEngine::onCamFrame(const QVideoFrame& frame) {
     // ней стареют, а метка времени у них с момента съёмки, и получатель
     // увидит картинку позже звука. Лучше пропустить кадр, чем отстать.
     if (m_encInFlight > 0) { m_stats->noteTxDrop(false); return; }
-    m_lastEncodeAt = now;
+    // Сдвигаем срок ровно на период — так частота держится ровной. Но если
+    // источник молчал дольше периода, догонять пропущенное нельзя: иначе после
+    // паузы разом проскочит пачка кадров.
+    m_nextDueMs = (m_nextDueMs < now - period) ? now + period : m_nextDueMs + period;
 
     // Тяжёлый sws+encode — на кодирующем потоке. QVideoFrame неявно расшарен:
     // копия дешёвая, буфер общий; воркер маппит его read-only у себя.
@@ -737,7 +741,7 @@ void VideoEngine::startScreenCapture() {
     }
 
     m_scrKeyNext = true;
-    m_scrLastEncodeAt = 0;
+    m_scrNextDueMs = 0;
 }
 
 void VideoEngine::stopScreenCapture() {
@@ -840,14 +844,16 @@ void VideoEngine::onScreenCapFrame(const QVideoFrame& frame) {
     if (!m_live) return;
     const MediaSettings::CamPreset q = m_settings->screenPreset();
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    if (now - m_scrLastEncodeAt < 1000 / q.fps) return;
+    const qint64 period = qMax<qint64>(1, 1000 / q.fps);
+    if (now < m_scrNextDueMs) return;                           // ещё рано
     m_stats->noteTxAttempt(true);
     if (m_conf->bufferedBytes() > kMaxBufferedScreen) {         // экран уступает дорогу
         m_stats->noteTxDrop(true);
         return;
     }
     if (m_scrInFlight > 0) { m_stats->noteTxDrop(true); return; }   // см. onCamFrame
-    m_scrLastEncodeAt = now;
+    m_scrNextDueMs = (m_scrNextDueMs < now - period) ? now + period
+                                                    : m_scrNextDueMs + period;
 
     const bool forceKey = m_scrKeyNext;
     m_scrKeyNext = false;
