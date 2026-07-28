@@ -14,10 +14,11 @@ Planned units:
   transport below and talks to it with queued calls.
 - **`SignalingLink`** — the `QWebSocket` itself, on its **own thread**. Incoming
   binary frames are split at the socket: the audio band (`AUDIO_CODED`,
-  `SCREEN_AUDIO`) goes straight to the audio thread, everything else to the GUI
-  thread where `VideoEngine` lives. The split exists because the GUI thread
+  `SCREEN_AUDIO`) goes to the audio thread, the video bands (`VIDEO_*`,
+  `SCREEN_*`) to the two decode threads, and only service frames
+  (`KEYFRAME_REQ`) to the GUI thread. The split exists because the GUI thread
   stalls — a window resize runs Windows' modal size loop and blocks Qt Quick on
-  every frame — and 20 ms audio packets must not wait behind that.
+  every frame — and media must not wait behind that.
 - **`Protocol.h`** — binary media framing (pack 11-byte header / unpack
   15-byte header) and the media type/flag/codec constants. These constants
   live only in the client — the server treats media payloads as opaque.

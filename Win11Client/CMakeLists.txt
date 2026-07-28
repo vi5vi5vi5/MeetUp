@@ -48,6 +48,7 @@ qt_add_executable(Win11Client
     src/media/VideoDecoder.cpp
     src/media/VideoEncoder.cpp
     src/media/VideoSendWorker.cpp
+    src/media/VideoRecvWorker.cpp
     src/media/ScreenCursor.cpp
     src/media/VideoEngine.cpp
     src/media/MediaStats.cpp

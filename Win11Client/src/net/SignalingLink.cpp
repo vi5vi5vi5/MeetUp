@@ -52,13 +52,26 @@ void SignalingLink::open(const QUrl& url, const QString& sessionToken) {
     m_ws->open(req);
 }
 
-// Развилка на входе: звук уходит прямо на аудиопоток, остальное — на GUI.
-// Тип лежит в первом байте заголовка (§5.3), разбирать кадр целиком незачем.
+// Развилка на входе: каждая полоса уезжает на свой поток, и только служебные
+// кадры — на GUI. Тип лежит в первом байте заголовка (§5.3), разбирать кадр
+// целиком незачем — это делает уже тот, кто будет его декодировать.
 void SignalingLink::onBinary(const QByteArray& d) {
     m_rxBytes.fetch_add(d.size(), std::memory_order_relaxed);
-    const quint8 type = d.isEmpty() ? 0 : quint8(d[0]);
-    if (type == Proto::AUDIO_CODED || type == Proto::SCREEN_AUDIO) emit audioFrame(d);
-    else                                                           emit binaryFrame(d);
+    switch (d.isEmpty() ? 0 : quint8(d[0])) {
+    case Proto::AUDIO_CODED:
+    case Proto::SCREEN_AUDIO:
+        emit audioFrame(d);
+        break;
+    case Proto::VIDEO_CODED:
+    case Proto::SCREEN_CODED:
+    case Proto::VIDEO_JPEG:
+    case Proto::SCREEN_JPEG:
+        emit videoFrame(d);
+        break;
+    default:
+        emit binaryFrame(d);
+        break;
+    }
 }
 
 void SignalingLink::sendText(const QString& text) {

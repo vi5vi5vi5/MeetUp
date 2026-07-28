@@ -53,8 +53,11 @@ signals:
     // Полоса звука (AUDIO_CODED / SCREEN_AUDIO) — сразу на аудиопоток, минуя
     // GUI. Ради этой строчки всё и затевалось.
     void audioFrame(const QByteArray& frame);
-    // Всё остальное (видео, демонстрация, KEYFRAME_REQ) — на GUI-поток: там
-    // живёт VideoEngine, и там же рисуются его кадры.
+    // Полосы видео (камера и демонстрация, включая legacy-JPEG) — на потоки
+    // декодирования. Обе полосы идут одним сигналом, воркеры разбирают свою по
+    // типу: подписчиков двое, и заводить ради этого два сигнала незачем.
+    void videoFrame(const QByteArray& frame);
+    // Всё остальное (KEYFRAME_REQ и незнакомые типы) — на GUI-поток.
     void binaryFrame(const QByteArray& frame);
 
 private:

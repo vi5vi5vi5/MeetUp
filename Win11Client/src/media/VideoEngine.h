@@ -12,8 +12,8 @@ class MediaSettings;
 class ScreenSources;
 class AudioEngine;
 class MediaStats;
-class VideoDecoder;
 class VideoSendWorker;
+class VideoRecvWorker;
 class QVideoSink;
 class QVideoFrame;
 class QCamera;
@@ -22,8 +22,6 @@ class QWindowCapture;
 class QMediaCaptureSession;
 class QThread;
 class QTimer;
-struct AVFrame;
-struct SwsContext;
 
 // Видеодвижок. Приём (M3): маршрутизирует VIDEO_CODED-кадры по отправителям —
 // декодер на участника, ожидание keyframe, доставка в QVideoSink плитки.
@@ -106,15 +104,19 @@ private:
         qint64 ts = 0;                 // метка отправителя, мс
     };
 
-    // Приёмная сторона одного участника.
+    // Приёмная сторона одного участника. Декодер и нормализатор пикселей живут
+    // не здесь, а в VideoRecvWorker на своём потоке — сюда приезжает готовый
+    // кадр. Тут осталось то, что умеет только GUI-поток: куда рисовать и что
+    // об этом знает QML.
     struct Peer {
-        VideoDecoder* dec = nullptr;   // создаётся под первый кадр
-        SwsContext* sws = nullptr;     // нормализатор пикселей (кэшируется)
-        bool awaitKey = true;          // дельты без опорного кадра — мусор
         QVideoSink* sink = nullptr;    // «дырка» плитки (не владеем)
         int token = 0;                 // номер текущей привязки (см. attach)
         qint64 lastFrameAt = 0;        // мс: сторож заглушки
         bool active = false;           // сейчас есть живая картинка
+        // Зеркало флага воркера: поток отправителя прерван и ждёт опорного
+        // кадра. Нужно ровно в одном месте — attach() по нему решает, вернуть
+        // ли плитку к аватарке вместо застывшего кадра.
+        bool awaitKey = true;
         QList<Held> holdQ;             // кадры, обогнавшие звук
     };
 
@@ -124,16 +126,16 @@ private:
     void onLeft();
     void sweepStale();                 // сторож: >5 с без кадров — заглушка
     void requestKeyframe();            // KEYFRAME_REQ, не чаще 1 раза в секунду
-    // Кадр кодека -> декодер нужного участника. screen выбирает и полосу
+    // Готовый кадр от воркера -> плитка. screen выбирает и полосу
     // (камера/экран), и то, какой сигнал уйдёт в QML.
-    void routeCoded(QHash<quint32, Peer>& peers, quint32 sender, quint8 flags,
-                    quint8 codec, quint64 ts, const QByteArray& payload, bool screen);
-    void deliver(Peer& p, quint32 sender, const AVFrame* f, qint64 tsMs, bool screen);
+    void onDecoded(QHash<quint32, Peer>& peers, quint32 sender,
+                   const QVideoFrame& vf, qint64 tsMs, bool screen);
     void paint(Peer& p, quint32 sender, const QVideoFrame& vf, bool screen);
     void drainHeld();                  // отдать кадры, чьё время пришло
-    void paintJpeg(Peer& p, quint32 sender, const QByteArray& jpeg, bool screen);
-    void resetPeers();                 // мягкий сброс: декодеры в мусор, sink'и живут
+    void resetPeers();                 // мягкий сброс: картинка гаснет, sink'и живут
     void dropPeer(QHash<quint32, Peer>& peers, quint32 id, bool screen);
+    // Плитка появилась/пропала — воркеру: декодировать в никуда незачем.
+    void tellWanted(bool screen, quint32 sender, bool wanted);
 
     // ---- отправка ----
     void onPhase();
@@ -174,6 +176,12 @@ private:
     int m_scrPreviewToken = 0;         // …и превью своей демонстрации
     QTimer* m_staleTimer = nullptr;
     QTimer* m_holdTimer = nullptr;     // тикает, только пока есть придержанное
+
+    // Приём: по потоку на полосу — см. VideoRecvWorker.
+    QThread* m_recvThread = nullptr;
+    VideoRecvWorker* m_recv = nullptr;         // камеры участников
+    QThread* m_scrRecvThread = nullptr;
+    VideoRecvWorker* m_scrRecv = nullptr;      // чужая демонстрация
 
     // отправка
     QCamera* m_camera = nullptr;
