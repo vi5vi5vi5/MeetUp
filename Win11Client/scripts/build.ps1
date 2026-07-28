@@ -6,7 +6,10 @@
 #>
 param(
     [ValidateSet("Debug", "Release")]
-    [string]$Config = "Debug"
+    [string]$Config = "Debug",
+    # Кит Qt едет насквозь до configure.ps1: иначе сборка и windeployqt в
+    # deploy.ps1 могли бы взять РАЗНЫЕ Qt, а это ловится уже только падением.
+    [string]$QtDir = $env:QTDIR
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
@@ -21,12 +24,12 @@ Enter-MsvcEnv
 # this when build.ninja already exists left stale caches (e.g. missing the
 # vcpkg toolchain after Opus was added) that ninja's own incremental
 # "re-running CMake" step can't fix, since it just replays the old cache.
-& (Join-Path $PSScriptRoot "configure.ps1") -Config $Config
+& (Join-Path $PSScriptRoot "configure.ps1") -Config $Config -QtDir $QtDir
 
 Push-Location $root
 try {
     Write-Host "==> Building ($Config)" -ForegroundColor Cyan
-    cmake --build $binDir
+    Invoke-Native { cmake --build $binDir }
     if ($LASTEXITCODE -ne 0) { throw "build failed ($LASTEXITCODE)" }
     Write-Host "==> Built -> $binDir/Win11Client.exe" -ForegroundColor Green
 }

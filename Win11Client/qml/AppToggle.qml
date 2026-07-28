@@ -35,11 +35,12 @@ Item {
         Behavior on color { ColorAnimation { duration: Theme.durFast } }
     }
 
+    // Себя не переключаем: наружу уходит только просьба. Тумблер рисует то,
+    // что ему привязали, и если источник правды просьбу не исполнил (захват
+    // звука демонстрации не поднялся — настройка вернулась в «выкл»), тумблер
+    // честно отыграет назад. Стоило ему щёлкать самому — он бы врал.
     TapHandler {
-        onTapped: {
-            root.checked = !root.checked
-            root.toggled(root.checked)
-        }
+        onTapped: root.toggled(!root.checked)
     }
     HoverHandler { cursorShape: Qt.PointingHandCursor }
 }

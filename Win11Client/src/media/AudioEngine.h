@@ -10,6 +10,7 @@ struct OpusDecoder;
 
 class SignalingClient;
 class MediaSettings;
+class MediaStats;
 class QAudioSource;
 class QIODevice;
 class ScreenAudioCapture;
@@ -26,16 +27,22 @@ class AudioEngine : public QObject {
     // индикатор «говорит» и синхронизация губ не ломаются. Из QML — Audio.
     Q_PROPERTY(bool outputMuted READ outputMuted WRITE setOutputMuted
                NOTIFY outputMutedChanged)
+    // Звук демонстрации сейчас РЕАЛЬНО идёт (пакеты приходили в последние ~2 с).
+    // По нему сцена решает, показывать ли ручку громкости: ручка, которая ничем
+    // не управляет, — это обещание звука, которого нет.
+    Q_PROPERTY(bool screenAudioLive READ screenAudioLive NOTIFY screenAudioLiveChanged)
 public:
     explicit AudioEngine(SignalingClient* conf, MediaSettings* settings,
-                         QObject* parent = nullptr);
+                         MediaStats* stats, QObject* parent = nullptr);
     ~AudioEngine() override;
 
     bool outputMuted() const { return m_outputMuted; }
     void setOutputMuted(bool muted);
+    bool screenAudioLive() const { return m_scrLive; }
 
 signals:
     void outputMutedChanged();
+    void screenAudioLiveChanged();
     // Захват звука демонстрации не поднялся — QML показывает тост.
     void screenAudioError(const QString& text);
 
@@ -62,6 +69,7 @@ private:
     void startScreenAudio();
     void stopScreenAudio();
     void onScreenPcm(const QByteArray& pcm, qint64 wallMs);
+    void setScreenLive(bool on);        // «звук демонстрации идёт» -> в QML
 
     void onJoinOk();                    // (ре)вход в комнату: буферы — мусор
     void onBinaryFrame(const QByteArray& frame);
@@ -75,6 +83,7 @@ private:
 
     SignalingClient* m_conf;            // не владеем
     MediaSettings* m_settings;          // не владеем
+    MediaStats* m_stats;                // не владеем: складываем туда числа
     bool m_live = false;                // phase == "live"
     bool m_micOn = false;               // тумблер микрофона (по умолчанию выкл.)
     bool m_outputMuted = false;         // «общий звук» выключен (deafen)
@@ -104,6 +113,9 @@ private:
     ScreenAudioCapture* m_scrCapture = nullptr;   // захват звука машины
     OpusEncoder* m_scrEnc = nullptr;              // свой кодер: музыка, не голос
     qint64 m_scrClockMs = 0;                      // монотонные метки этой полосы
+    bool m_scrLive = false;                       // звук демонстрации приходит
+    qint64 m_scrRxAt = 0;                         // когда пришёл последний кадр
+    QTimer* m_scrLiveTimer = nullptr;             // тикает, только пока идёт звук
 
     QAudioSink* m_sink = nullptr;
     QIODevice* m_out = nullptr;         // куда пишем микс (принадлежит m_sink)

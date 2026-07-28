@@ -155,21 +155,66 @@ AppModal {
         font.pixelSize: Theme.textSm
     }
 
+    // ---- Звук демонстрации ----
+    // Тот же тумблер, что в настройках, но здесь он попадается на глаза в
+    // единственный момент, когда о звуке вообще думают, — когда выбирают, что
+    // показать. В настройки за этим никто не пойдёт: там его ищут уже потом,
+    // когда собеседники сказали, что музыки не слышно.
+    Rectangle {
+        width: parent.width
+        height: 56
+        radius: Theme.radiusMd
+        color: Theme.surface2
+        border.width: 1
+        border.color: AV.screenAudio ? Theme.accentLine : Theme.border
+
+        AppIcon {
+            id: sndIcon
+            anchors.left: parent.left
+            anchors.leftMargin: 14
+            anchors.verticalCenter: parent.verticalCenter
+            name: AV.screenAudio ? "volume" : "volume-off"
+            size: 18
+            color: AV.screenAudio ? Theme.accentInk : Theme.textMuted
+        }
+        Column {
+            anchors.left: sndIcon.right
+            anchors.leftMargin: 12
+            anchors.right: sndToggle.left
+            anchors.rightMargin: 12
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 2
+            Text {
+                text: "Передавать звук компьютера"
+                color: Theme.text
+                font.family: Theme.uiFont
+                font.pixelSize: Theme.textSm
+                font.weight: Font.DemiBold
+            }
+            Text {
+                width: parent.width
+                elide: Text.ElideRight
+                text: AV.screenAudio ? "Голоса собеседников в него не попадут."
+                                     : "Участники увидят только изображение."
+                color: Theme.textFaint
+                font.family: Theme.uiFont
+                font.pixelSize: Theme.text2xs
+            }
+        }
+        AppToggle {
+            id: sndToggle
+            anchors.right: parent.right
+            anchors.rightMargin: 14
+            anchors.verticalCenter: parent.verticalCenter
+            checked: AV.screenAudio
+            onToggled: function (v) { AV.screenAudio = v }
+        }
+    }
+
     // ---- Подвал ----
     Item {
         width: parent.width
         height: 44
-
-        Text {
-            anchors.left: parent.left
-            anchors.verticalCenter: parent.verticalCenter
-            width: parent.width - refreshBtn.width - startBtn.width - 24
-            elide: Text.ElideRight
-            text: "Звук системы не передаётся — только изображение."
-            color: Theme.textFaint
-            font.family: Theme.uiFont
-            font.pixelSize: Theme.text2xs
-        }
 
         Row {
             anchors.right: parent.right

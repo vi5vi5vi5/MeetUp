@@ -3,6 +3,7 @@
 #include "VideoSendWorker.h"
 #include "ScreenCursor.h"
 #include "AudioEngine.h"
+#include "MediaStats.h"
 #include "../MediaSettings.h"
 #include "../ScreenSources.h"
 #include "../net/SignalingClient.h"
@@ -36,9 +37,10 @@ static const qint64 kMaxBuffered = 1500000;
 static const qint64 kMaxBufferedScreen = 350000;
 
 VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
-                         ScreenSources* sources, AudioEngine* audio, QObject* parent)
+                         ScreenSources* sources, AudioEngine* audio,
+                         MediaStats* stats, QObject* parent)
     : QObject(parent), m_conf(conf), m_settings(settings), m_sources(sources),
-      m_audio(audio)
+      m_audio(audio), m_stats(stats)
 {
     connect(conf, &SignalingClient::binaryFrame,       this, &VideoEngine::onBinaryFrame);
     connect(conf, &SignalingClient::joinOk,            this, &VideoEngine::onJoinOk);
@@ -84,9 +86,22 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
     connect(this, &VideoEngine::screenFrameToEncode, m_scrWorker, &VideoSendWorker::encode);
     // Готовый пакет возвращается на GUI-поток и уходит в сокет (queued).
     connect(m_worker, &VideoSendWorker::packetReady, this,
-            [this](const QByteArray& frame) { m_conf->sendBinary(frame); });
+            [this](const QByteArray& frame) {
+                m_conf->sendBinary(frame);
+                m_stats->noteTxVideo(false, frame.size());
+            });
     connect(m_scrWorker, &VideoSendWorker::packetReady, this,
-            [this](const QByteArray& frame) { m_conf->sendBinary(frame); });
+            [this](const QByteArray& frame) {
+                m_conf->sendBinary(frame);
+                m_stats->noteTxVideo(true, frame.size());
+            });
+    // Кодировщик открылся: кодек и размер кадра — в «Диагностику». Спрашивать
+    // об этом настройки нельзя: там «Авто», а кадр может быть меньше пресета,
+    // если камера столько не даёт.
+    connect(m_worker, &VideoSendWorker::encoderOpened, this,
+            [this](int c, int w, int h) { noteEncoderOpened(false, c, w, h); });
+    connect(m_scrWorker, &VideoSendWorker::encoderOpened, this,
+            [this](int c, int w, int h) { noteEncoderOpened(true, c, w, h); });
     // Учёт занятости воркеров: пока кадр не отработан, следующий не шлём.
     connect(m_worker, &VideoSendWorker::frameDone, this,
             [this] { if (m_encInFlight > 0) --m_encInFlight; });
@@ -465,6 +480,7 @@ void VideoEngine::deliver(Peer& p, quint32 sender, const AVFrame* f, qint64 tsMs
     const qint64 ph = (m_audio && !screen) ? m_audio->playheadMs(sender) : 0;
     const qint64 lead = ph ? tsMs - ph : 0;
     if (lead > 30 && lead < 1200) {
+        m_stats->noteSyncHold(lead);      // на столько картинка ждёт свой звук
         p.holdQ.append({ vf, tsMs });
         if (p.holdQ.size() > 12) p.holdQ.removeFirst();   // очередь не копим
         if (!m_holdTimer->isActive()) m_holdTimer->start();
@@ -477,6 +493,7 @@ void VideoEngine::deliver(Peer& p, quint32 sender, const AVFrame* f, qint64 tsMs
 void VideoEngine::paint(Peer& p, quint32 sender, const QVideoFrame& vf, bool screen) {
     if (!p.sink) return;
     p.sink->setVideoFrame(vf);
+    m_stats->noteRxFrame(sender);
 
     p.lastFrameAt = QDateTime::currentMSecsSinceEpoch();
     if (!p.active) {
@@ -512,6 +529,7 @@ void VideoEngine::paintJpeg(Peer& p, quint32 sender, const QByteArray& jpeg, boo
     if (img.isNull()) return;
 
     p.sink->setVideoFrame(QVideoFrame(img));
+    m_stats->noteRxFrame(sender);
 
     p.lastFrameAt = QDateTime::currentMSecsSinceEpoch();
     if (!p.active) {
@@ -595,6 +613,7 @@ void VideoEngine::stopCapture() {
     if (m_preview) m_preview->setVideoFrame(QVideoFrame());   // стереть стоп-кадр
     if (m_previewExtra) m_previewExtra->setVideoFrame(QVideoFrame());
     setPreviewActive(false);
+    m_stats->noteTxOff(false);
 }
 
 void VideoEngine::setPreviewActive(bool on) {
@@ -631,11 +650,17 @@ void VideoEngine::onCamFrame(const QVideoFrame& frame) {
     const MediaSettings::CamPreset q = m_settings->camPreset();
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     if (now - m_lastEncodeAt < 1000 / q.fps) return;         // троттлинг к fps пресета
-    if (m_conf->bufferedBytes() > kMaxBuffered) return;      // затор — кадр в мусор (§5.5)
+    // Дальше кадр обязан был уйти — всё, что его останавливает, идёт в счёт
+    // пропусков: именно из них складывается «дёргается картинка».
+    m_stats->noteTxAttempt(false);
+    if (m_conf->bufferedBytes() > kMaxBuffered) {            // затор — кадр в мусор (§5.5)
+        m_stats->noteTxDrop(false);
+        return;
+    }
     // Воркер ещё не отработал прошлый кадр: очередь копить нельзя — кадры в
     // ней стареют, а метка времени у них с момента съёмки, и получатель
     // увидит картинку позже звука. Лучше пропустить кадр, чем отстать.
-    if (m_encInFlight > 0) return;
+    if (m_encInFlight > 0) { m_stats->noteTxDrop(false); return; }
     m_lastEncodeAt = now;
 
     // Тяжёлый sws+encode — на кодирующем потоке. QVideoFrame неявно расшарен:
@@ -729,6 +754,7 @@ void VideoEngine::stopScreenCapture() {
     m_scrKeyNext = true;
     if (m_scrPreview) m_scrPreview->setVideoFrame(QVideoFrame());
     setScreenPreviewActive(false);
+    m_stats->noteTxOff(true);
 }
 
 // Смена пресета качества на лету: перезапускаем, только если реально снимаем.
@@ -776,6 +802,10 @@ void VideoEngine::applyCodecPrefs() {
                                   Q_ARG(int, protoOfCodec(m_settings->screenCodec())));
 }
 
+void VideoEngine::noteEncoderOpened(bool screen, int codec, int width, int height) {
+    m_stats->noteEncoder(screen, codecName(codec), width, height);
+}
+
 void VideoEngine::noteCodecFallback(bool screen, int requested, int actual) {
     emit codecNotice(QStringLiteral("%1: %2 недоступен, идёт %3")
                          .arg(screen ? QStringLiteral("Демонстрация")
@@ -811,8 +841,12 @@ void VideoEngine::onScreenCapFrame(const QVideoFrame& frame) {
     const MediaSettings::CamPreset q = m_settings->screenPreset();
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     if (now - m_scrLastEncodeAt < 1000 / q.fps) return;
-    if (m_conf->bufferedBytes() > kMaxBufferedScreen) return;   // экран уступает дорогу
-    if (m_scrInFlight > 0) return;                              // см. onCamFrame
+    m_stats->noteTxAttempt(true);
+    if (m_conf->bufferedBytes() > kMaxBufferedScreen) {         // экран уступает дорогу
+        m_stats->noteTxDrop(true);
+        return;
+    }
+    if (m_scrInFlight > 0) { m_stats->noteTxDrop(true); return; }   // см. onCamFrame
     m_scrLastEncodeAt = now;
 
     const bool forceKey = m_scrKeyNext;

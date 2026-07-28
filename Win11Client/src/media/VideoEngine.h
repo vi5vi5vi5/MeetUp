@@ -11,6 +11,7 @@ class SignalingClient;
 class MediaSettings;
 class ScreenSources;
 class AudioEngine;
+class MediaStats;
 class VideoDecoder;
 class VideoSendWorker;
 class QVideoSink;
@@ -42,7 +43,7 @@ class VideoEngine : public QObject {
 public:
     explicit VideoEngine(SignalingClient* conf, MediaSettings* settings,
                          ScreenSources* sources, AudioEngine* audio,
-                         QObject* parent = nullptr);
+                         MediaStats* stats, QObject* parent = nullptr);
     ~VideoEngine() override;
 
     // Плитка родилась: возвращает НОМЕР привязки, который она обязана вернуть
@@ -156,11 +157,14 @@ private:
     void applyCursorSetting();         // включить/выключить дорисовку курсора
     void applyCodecPrefs();            // выбор кодека -> обоим воркерам
     void noteCodecFallback(bool screen, int requested, int actual);
+    // Кодировщик полосы открылся: какой кодек и какой кадр — в «Диагностику».
+    void noteEncoderOpened(bool screen, int codec, int width, int height);
 
     SignalingClient* m_conf;           // не владеем
     MediaSettings* m_settings;         // не владеем
     ScreenSources* m_sources;          // не владеем: что именно снимать
     AudioEngine* m_audio;              // не владеем: спрашиваем часы звука
+    MediaStats* m_stats;               // не владеем: складываем туда числа
     QHash<quint32, Peer> m_peers;      // ключ — sender из заголовка кадра
     QHash<quint32, Peer> m_screenPeers;    // та же схема для полосы экрана
     qint64 m_lastKeyReqAt = 0;

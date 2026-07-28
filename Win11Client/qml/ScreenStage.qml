@@ -79,6 +79,7 @@ Item {
         // шапке: разворачивать надо именно её, а окно человек и без нас
         // развернёт. Двойной щелчок по сцене делает то же — как у плееров.
         IconButton {
+            id: expandBtn
             anchors.right: parent.right
             anchors.top: parent.top
             anchors.margins: 12
@@ -90,6 +91,108 @@ Item {
         TapHandler {
             gesturePolicy: TapHandler.ReleaseWithinBounds
             onDoubleTapped: root.expandRequested()
+        }
+
+        // Громкость звука демонстрации — у каждого своя. Ручка стоит здесь, а
+        // не в настройках, потому что она приёмная: фонограмма одна, но одному
+        // она фон, а другому мешает расслышать разговор. Пока ведущий крутил
+        // общий уровень, выбор был один на всех.
+        // Ползунок выползает по наведению: постоянно занимать угол кадра ради
+        // ручки, которую трогают раз за встречу, — плохой размен.
+        Rectangle {
+            id: volPill
+            anchors.right: parent.right
+            anchors.top: expandBtn.bottom
+            anchors.rightMargin: 12
+            anchors.topMargin: 8
+            // Своя демонстрация звучит у нас и так — регулировать нечего.
+            // Чужая без звука тоже: ручка, которая ничем не управляет, врёт.
+            visible: !root.isSelf && Audio.screenAudioLive
+
+            readonly property bool open: volHover.hovered || volSlider.pressed
+            property int lastVolume: 100        // куда возвращаться из «тихо»
+
+            height: 40
+            width: open ? 208 : 40
+            radius: height / 2
+            color: Theme.surface
+            border.width: 1
+            border.color: Theme.border
+            clip: true
+
+            Behavior on width { NumberAnimation { duration: Theme.durMed; easing.type: Easing.OutCubic } }
+
+            HoverHandler { id: volHover }
+            // Гасит двойной щелчок по пилюле: у сцены он разворачивает показ на
+            // весь экран, и подвинуть ползунок туда-обратно значило бы уехать в
+            // полноэкранный режим. Лежит ПОД ползунком и кнопкой — они выше по
+            // порядку и события получают первыми.
+            MouseArea { anchors.fill: parent; onDoubleClicked: {} }
+
+            Item {
+                id: volIcon
+                anchors.right: parent.right
+                width: 40
+                height: parent.height
+
+                AppIcon {
+                    anchors.centerIn: parent
+                    name: AV.screenVolume === 0 ? "volume-off" : "volume"
+                    size: 18
+                    color: AV.screenVolume === 0 ? Theme.textMuted : Theme.text
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        if (AV.screenVolume > 0) {
+                            volPill.lastVolume = AV.screenVolume
+                            AV.screenVolume = 0
+                        } else {
+                            AV.screenVolume = volPill.lastVolume > 0 ? volPill.lastVolume : 100
+                        }
+                    }
+                }
+            }
+
+            Text {
+                id: volPct
+                anchors.left: parent.left
+                anchors.leftMargin: 16
+                anchors.verticalCenter: parent.verticalCenter
+                // Ширина фиксированная: иначе ползунок дёргался бы вслед за
+                // числом, пока его тянут («9%» и «195%» — разной ширины).
+                width: 34
+                text: AV.screenVolume + "%"
+                color: Theme.textMuted
+                font.family: Theme.uiFont
+                font.pixelSize: Theme.text2xs
+                font.weight: Font.DemiBold
+                opacity: volPill.open ? 1 : 0
+                Behavior on opacity { NumberAnimation { duration: Theme.durFast } }
+            }
+
+            PercentSlider {
+                id: volSlider
+                anchors.left: volPct.right
+                anchors.leftMargin: 6
+                anchors.right: volIcon.left
+                anchors.verticalCenter: parent.verticalCenter
+                enabled: volPill.open
+                opacity: volPill.open ? 1 : 0
+                value: AV.screenVolume
+                onMoved: AV.screenVolume = Math.round(value)
+                Behavior on opacity { NumberAnimation { duration: Theme.durFast } }
+
+                // Slider на перетаскивании присваивает value сам и тем рвёт
+                // привязку выше. Дальше настройка менялась бы мимо него —
+                // и «тихо» двигало бы проценты, но не ручку. Поэтому после
+                // первого движения источник правды доносим руками.
+                Connections {
+                    target: AV
+                    function onScreenVolumeChanged() { volSlider.value = AV.screenVolume }
+                }
+            }
         }
 
         // Плашка «кто показывает» — как stage-chip у веба.

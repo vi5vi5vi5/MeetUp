@@ -39,11 +39,14 @@ class MediaSettings : public QObject {
     // он свой — на лицах и на тексте кодеки ведут себя по-разному.
     Q_PROPERTY(QString camCodec READ camCodec WRITE setCamCodec NOTIFY camCodecChanged)
     Q_PROPERTY(QString screenCodec READ screenCodec WRITE setScreenCodec NOTIFY screenCodecChanged)
-    // Передавать ли вместе с картинкой звук компьютера и насколько громко его
-    // подмешивать (проценты, 100 = как есть). По умолчанию выключено: делиться
-    // звуком машины — осознанное решение, а не то, что включается само.
+    // Передавать ли вместе с картинкой звук компьютера. По умолчанию выключено:
+    // делиться звуком машины — осознанное решение, а не то, что включается само.
     Q_PROPERTY(bool screenAudio READ screenAudio WRITE setScreenAudio NOTIFY screenAudioChanged)
-    Q_PROPERTY(int screenAudioGain READ screenAudioGain WRITE setScreenAudioGain NOTIFY screenAudioGainChanged)
+    // Громкость ЧУЖОЙ демонстрации (проценты, 100 = как у ведущего). Ручка
+    // приёмная, а не отправляющая: громкость фонограммы у каждого своя — кто-то
+    // слушает музыку, кто-то пытается расслышать за ней разговор. Раньше это
+    // регулировал ведущий, и все слышали одно и то же, что бы им ни хотелось.
+    Q_PROPERTY(int screenVolume READ screenVolume WRITE setScreenVolume NOTIFY screenVolumeChanged)
     // Горячие клавиши (M8): переносимый текст QKeySequence ("Ctrl+D", "M", …);
     // пустая строка — клавиша не назначена. Слушает ConferenceScreen.
     Q_PROPERTY(QString keyMic   READ keyMic   WRITE setKeyMic   NOTIFY keyMicChanged)
@@ -71,7 +74,7 @@ public:
     QString camCodec() const { return m_camCodec; }
     QString screenCodec() const { return m_screenCodec; }
     bool screenAudio() const { return m_screenAudio; }
-    int screenAudioGain() const { return m_screenAudioGain; }
+    int screenVolume() const { return m_screenVolume; }
     QString keyMic() const { return m_keyMic; }
     QString keySound() const { return m_keySound; }
     QString keyCam() const { return m_keyCam; }
@@ -90,7 +93,7 @@ public:
     void setCamCodec(const QString& c);
     void setScreenCodec(const QString& c);
     void setScreenAudio(bool on);
-    void setScreenAudioGain(int v);
+    void setScreenVolume(int v);
     void setKeyMic(const QString& s);
     void setKeySound(const QString& s);
     void setKeyCam(const QString& s);
@@ -119,6 +122,7 @@ public:
     // Гейны как множители (0..2): проценты — интерфейсу, движкам — числа.
     qreal volumeGain() const { return m_volume / 100.0; }
     qreal sensitivityGain() const { return m_sensitivity / 100.0; }
+    qreal screenVolumeGain() const { return m_screenVolume / 100.0; }
 
     // AudioEngine сообщает RMS захвата; уведомления QML прорежены до ~10 Гц.
     void reportMicLevel(qreal level);
@@ -138,7 +142,7 @@ signals:
     void camCodecChanged();
     void screenCodecChanged();
     void screenAudioChanged();
-    void screenAudioGainChanged();
+    void screenVolumeChanged();
     void keyMicChanged();
     void keySoundChanged();
     void keyCamChanged();
@@ -157,7 +161,7 @@ private:
     bool m_screenCursor = true;
     QString m_camCodec = "auto", m_screenCodec = "auto";
     bool m_screenAudio = false;
-    int m_screenAudioGain = 80;
+    int m_screenVolume = 100;
     QString m_keyMic, m_keySound, m_keyCam;
 
     qreal m_micLevel = 0;

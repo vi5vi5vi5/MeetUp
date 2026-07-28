@@ -4,6 +4,23 @@
   launched from a plain PowerShell we enter the Visual Studio dev environment.
   Idempotent — a no-op if cl.exe is already available (e.g. Dev PowerShell).
 #>
+# Вызов ВНЕШНЕЙ программы (cmake, ninja, windeployqt) без риска, что скрипт
+# оборвётся на её предупреждении.
+#
+# Windows PowerShell 5.1 заворачивает stderr родной программы в объекты-ошибки,
+# как только вывод скрипта куда-то перенаправляют — в файл, в конвейер, в лог
+# сборки. При $ErrorActionPreference = "Stop" ПЕРВАЯ же такая строка обрывает
+# скрипт. А cmake пишет в stderr обычные предупреждения (например, про приватные
+# модули Qt), и сборка падала «на пустом месте» — но только у того, кто
+# догадался сохранить лог. Провал мы и так ловим по $LASTEXITCODE, поэтому на
+# время вызова снимаем Stop, а потом возвращаем как было.
+function Invoke-Native {
+    param([Parameter(Mandatory)][scriptblock]$Command)
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try { & $Command } finally { $ErrorActionPreference = $prev }
+}
+
 function Enter-MsvcEnv {
     # Просим у компилятора английские диагностики. Это не косметика: Ninja
     # определяет зависимости от заголовков, вылавливая из вывода cl /showIncludes

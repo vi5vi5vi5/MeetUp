@@ -46,6 +46,7 @@ qt_add_executable(Win11Client
     src/media/VideoSendWorker.cpp
     src/media/ScreenCursor.cpp
     src/media/VideoEngine.cpp
+    src/media/MediaStats.cpp
 )
 
 # The Theme and MockData QML files are exposed to every screen as singletons.

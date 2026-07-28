@@ -1,5 +1,6 @@
 ﻿#include "AudioEngine.h"
 #include "ScreenAudioCapture.h"
+#include "MediaStats.h"
 #include "../MediaSettings.h"
 #include "../net/SignalingClient.h"
 #include "../net/Protocol.h"
@@ -34,8 +35,9 @@ static QAudioFormat confFormat() {
     return f;
 }
 
-AudioEngine::AudioEngine(SignalingClient* conf, MediaSettings* settings, QObject* parent)
-    : QObject(parent), m_conf(conf), m_settings(settings)
+AudioEngine::AudioEngine(SignalingClient* conf, MediaSettings* settings,
+                         MediaStats* stats, QObject* parent)
+    : QObject(parent), m_conf(conf), m_settings(settings), m_stats(stats)
 {
     connect(conf, &SignalingClient::phaseChanged, this, &AudioEngine::onPhase);
     connect(conf, &SignalingClient::localStateChanged, this, &AudioEngine::onLocalState);
@@ -68,6 +70,15 @@ AudioEngine::AudioEngine(SignalingClient* conf, MediaSettings* settings, QObject
         });
     connect(conf, &SignalingClient::screenChanged, this, &AudioEngine::updateScreenAudio);
     connect(settings, &MediaSettings::screenAudioChanged, this, &AudioEngine::updateScreenAudio);
+
+    // Сторож второй полосы: ведущий мог выключить звук демонстрации или уйти,
+    // и тогда ручка громкости на сцене должна исчезнуть. Тикает только пока
+    // звук идёт — в тишине таймера нет.
+    m_scrLiveTimer = new QTimer(this);
+    m_scrLiveTimer->setInterval(1000);
+    connect(m_scrLiveTimer, &QTimer::timeout, this, [this] {
+        if (QDateTime::currentMSecsSinceEpoch() - m_scrRxAt > 2000) setScreenLive(false);
+        });
 
     // Насос вывода: 10 мс, точный таймер (обычный на Windows может «плавать» до 15 мс).
     m_pumpTimer = new QTimer(this);
@@ -235,10 +246,12 @@ void AudioEngine::onCaptured() {
 
         // Заголовок: тип AUDIO_CODED, без флагов, кодек OPUS, часы — мс эпохи
         // (общая шкала аудио/видео — §5.3, не выдумывать свою!).
-        m_conf->sendBinary(Proto::pack(
+        const QByteArray frame = Proto::pack(
             Proto::AUDIO_CODED, 0, Proto::CODEC_OPUS,
             quint64(m_audioClockMs),
-            QByteArray(reinterpret_cast<const char*>(packet), bytes)));
+            QByteArray(reinterpret_cast<const char*>(packet), bytes));
+        m_conf->sendBinary(frame);
+        m_stats->noteTxAudio(false, frame.size());
         m_audioClockMs += kFrameMs;   // следующий кадр — ровно на 20 мс позже
     }
 }
@@ -287,12 +300,11 @@ void AudioEngine::stopScreenAudio() {
 void AudioEngine::onScreenPcm(const QByteArray& pcm, qint64 wallMs) {
     if (!m_scrEnc || pcm.size() != kFrameBytes) return;
 
-    QByteArray frame = pcm;                   // копия: гейн правит сэмплы на месте
-    opus_int16* samples = reinterpret_cast<opus_int16*>(frame.data());
-    const qreal gain = m_settings->screenAudioGain() / 100.0;
-    if (!qFuzzyCompare(gain, 1.0))
-        for (int i = 0; i < kFrameSamples; ++i)
-            samples[i] = opus_int16(qBound<qint32>(-32768, qint32(samples[i] * gain), 32767));
+    // Отправляем как есть, ничего не приглушая: громкость этой полосы крутит
+    // КАЖДЫЙ слушатель у себя (screenVolume, см. mixOneFrame). Пока ручка была
+    // здесь, ведущий решал за всю комнату сразу — а расслышать за фонограммой
+    // разговор хотят не все и не одновременно.
+    const opus_int16* samples = reinterpret_cast<const opus_int16*>(pcm.constData());
 
     // Метки — та же монотонная схема, что у микрофона: кадр ровно на 20 мс
     // позже предыдущего, подтяжка к стенным часам только при расхождении.
@@ -303,9 +315,11 @@ void AudioEngine::onScreenPcm(const QByteArray& pcm, qint64 wallMs) {
                                   packet, int(sizeof(packet)));
     if (bytes <= 0) { qWarning() << "AudioEngine: opus_encode (экран) =" << bytes; return; }
 
-    m_conf->sendBinary(Proto::pack(
+    const QByteArray frame = Proto::pack(
         Proto::SCREEN_AUDIO, 0, Proto::CODEC_OPUS, quint64(m_scrClockMs),
-        QByteArray(reinterpret_cast<const char*>(packet), bytes)));
+        QByteArray(reinterpret_cast<const char*>(packet), bytes));
+    m_conf->sendBinary(frame);
+    m_stats->noteTxAudio(true, frame.size());   // цена демонстрации — вместе со звуком
     m_scrClockMs += kFrameMs;
 }
 
@@ -345,6 +359,18 @@ void AudioEngine::resetPeers() {
     for (Peer& p : m_scrPeers)
         if (p.dec) opus_decoder_destroy(p.dec);
     m_scrPeers.clear();
+    setScreenLive(false);
+}
+
+// Ручка громкости на сцене живёт по этому признаку, поэтому он должен гаснуть
+// не только по тишине, но и на выходе из комнаты — иначе она осталась бы висеть
+// над следующей демонстрацией, ничем не управляя.
+void AudioEngine::setScreenLive(bool on) {
+    if (m_scrLive == on) return;
+    m_scrLive = on;
+    if (on) m_scrLiveTimer->start();
+    else    m_scrLiveTimer->stop();
+    emit screenAudioLiveChanged();
 }
 
 // Каждый join_ok — в т.ч. РЕКОННЕКТ: всё накопленное до обрыва — мусор,
@@ -406,6 +432,7 @@ void AudioEngine::onBinaryFrame(const QByteArray& d) {
     // Часы звука этого участника — по ним VideoEngine придержит обогнавшее видео.
     p.lastTs = qint64(f.ts);
     p.lastTsAt = QDateTime::currentMSecsSinceEpoch();
+    if (isScreen) { m_scrRxAt = p.lastTsAt; setScreenLive(true); }
 
     p.queue.append(chunk);
     if (p.queue.size() > 12)                          // лаг раздулся — срезаем
@@ -429,9 +456,10 @@ void AudioEngine::pump() {
 QByteArray AudioEngine::mixOneFrame() {
     qint32 acc[kFrameSamples] = {};                   // 32 бита: сумма не переполнится
 
-    // Голоса и звук демонстраций подмешиваются одинаково — разница только в
-    // том, что у второй полосы свои декодеры и свои буферы.
-    const auto mixInto = [&acc](QHash<quint32, AudioEngine::Peer>& peers) {
+    // Голоса и звук демонстраций подмешиваются одинаково — разница в том, что у
+    // второй полосы свои декодеры, свои буферы и своя громкость: фонограмма
+    // может заглушать разговор, и убавляет её тот, кому мешает, а не ведущий.
+    const auto mixInto = [&acc](QHash<quint32, AudioEngine::Peer>& peers, qreal gain) {
         for (Peer& p : peers) {
             if (!p.playing) {
                 if (p.queue.size() >= 3) p.playing = true; // предбуфер ~60 мс набран
@@ -444,11 +472,11 @@ QByteArray AudioEngine::mixOneFrame() {
             const QByteArray chunk = p.queue.takeFirst();
             const qint16* s = reinterpret_cast<const qint16*>(chunk.constData());
             for (int i = 0; i < kFrameSamples; ++i)
-                acc[i] += s[i];                            // микс = сложение волн
+                acc[i] += qint32(s[i] * gain);             // микс = сложение волн
         }
     };
-    mixInto(m_peers);
-    mixInto(m_scrPeers);
+    mixInto(m_peers, 1.0);
+    mixInto(m_scrPeers, m_settings->screenVolumeGain());
 
     // Громкость воспроизведения из настроек (0..2) — на итоговый микс.
     // «Общий звук» выключен — выход в ноль, но очереди выше мы уже вычерпали:

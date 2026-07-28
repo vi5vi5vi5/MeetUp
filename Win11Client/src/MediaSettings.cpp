@@ -35,7 +35,7 @@ MediaSettings::MediaSettings(QObject* parent) : QObject(parent) {
     m_screenCodec = s.value("screenCodec", "auto").toString();
     if (!codecs.contains(m_screenCodec)) m_screenCodec = "auto";
     m_screenAudio = s.value("screenAudio", false).toBool();
-    m_screenAudioGain = qBound(0, s.value("screenAudioGain", 80).toInt(), 200);
+    m_screenVolume = qBound(0, s.value("screenVolume", 100).toInt(), 200);
     m_keyMic = s.value("keyMic").toString();
     m_keySound = s.value("keySound").toString();
     m_keyCam = s.value("keyCam").toString();
@@ -172,12 +172,12 @@ void MediaSettings::setScreenAudio(bool on) {
     emit screenAudioChanged();
 }
 
-void MediaSettings::setScreenAudioGain(int v) {
+void MediaSettings::setScreenVolume(int v) {
     v = qBound(0, v, 200);
-    if (m_screenAudioGain == v) return;
-    m_screenAudioGain = v;
-    save("screenAudioGain", v);
-    emit screenAudioGainChanged();
+    if (m_screenVolume == v) return;
+    m_screenVolume = v;
+    save("screenVolume", v);
+    emit screenVolumeChanged();
 }
 void MediaSettings::setKeyMic(const QString& s) {
     if (m_keyMic == s) return;

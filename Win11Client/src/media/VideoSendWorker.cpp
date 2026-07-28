@@ -177,6 +177,7 @@ void VideoSendWorker::encodeFrame(const QVideoFrame& frame, int maxW, int maxH,
         // чтобы человек об этом узнал, а не гадал, почему настройка «не работает».
         if (m_codecPref && m_enc->protoCodec() != m_codecPref)
             emit codecFallback(m_codecPref, m_enc->protoCodec());
+        emit encoderOpened(m_enc->protoCodec(), tw, th);
         m_frames = 0;
         m_keyNext = true;
     }

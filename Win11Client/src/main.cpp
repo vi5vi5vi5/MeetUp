@@ -20,6 +20,7 @@
 
 #include "media/AudioEngine.h"
 #include "media/VideoEngine.h"
+#include "media/MediaStats.h"
 
 int main(int argc, char *argv[])
 {
@@ -55,8 +56,9 @@ int main(int argc, char *argv[])
     MediaSettings av;                      // устройства/громкость/качество (QSettings)
     ScreenSources screens;                 // мониторы и окна для демонстрации
     GlobalHotkeys hotkeys(&av);            // системные бинды (работают вне фокуса)
-    AudioEngine audio(&conf, &av);
-    VideoEngine video(&conf, &av, &screens, &audio);   // audio даёт часы звука
+    MediaStats stats(&conf);               // счётчики для раздела «Диагностика»
+    AudioEngine audio(&conf, &av, &stats);
+    VideoEngine video(&conf, &av, &screens, &audio, &stats);   // audio даёт часы звука
 
     // Движок QML объявлен ПОСЛЕ screens: провайдер миниатюр принадлежит
     // движку и держит указатель на screens, а разрушается движок первым.
@@ -77,6 +79,8 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("Screens", &screens);
     // Аудиодвижок виден QML только ради «общего звука» (deafen) — Audio.
     engine.rootContext()->setContextProperty("Audio", &audio);
+    // Числа для раздела «Диагностика» — Stats.
+    engine.rootContext()->setContextProperty("Stats", &stats);
     engine.rootContext()->setContextProperty("Hotkeys", &hotkeys);
 
     

@@ -25,14 +25,19 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 
+# Ради Invoke-Native: функции, объявленные внутри build.ps1, сюда не попадают —
+# каждый скрипт получает свою область видимости.
+. (Join-Path $PSScriptRoot "_vsdevenv.ps1")
+
 if (-not $QtDir) { $QtDir = "P:/Qt/6.11.1/msvc2022_64" }
 $windeployqt = Join-Path $QtDir "bin/windeployqt.exe"
 if (-not (Test-Path $windeployqt)) {
     throw "windeployqt not found at $windeployqt. Pass -QtDir <path-to-qt-kit>."
 }
 
-# Fresh build.
-& (Join-Path $PSScriptRoot "build.ps1") -Config $Config
+# Fresh build. Кит передаём явно — тот же, из которого ниже берётся
+# windeployqt: собирать одним Qt, а раскладывать рантайм другим нельзя.
+& (Join-Path $PSScriptRoot "build.ps1") -Config $Config -QtDir $QtDir
 
 $exe  = Join-Path $root "out/build/$($Config.ToLower())/Win11Client.exe"
 $dist = Join-Path $root "dist/$Config"
@@ -57,7 +62,7 @@ if ($Portable) { $flags += "--compiler-runtime" }
 if ($Config -eq "Release") { $flags += "--release" } else { $flags += "--debug" }
 
 Write-Host "==> Running windeployqt" -ForegroundColor Cyan
-& $windeployqt @flags (Join-Path $dist "Win11Client.exe")
+Invoke-Native { & $windeployqt @flags (Join-Path $dist "Win11Client.exe") }
 if ($LASTEXITCODE -ne 0) { throw "windeployqt failed ($LASTEXITCODE)" }
 
 # Lean mode: drop bits this app never loads at runtime.
@@ -85,23 +90,32 @@ if (-not $NoSmoke) {
     Write-Host "==> Проверка запуска" -ForegroundColor Cyan
     $errLog = Join-Path $dist "_startup.err"
     $outLog = Join-Path $dist "_startup.out"
+    # Переменную возвращаем как было: скрипт часто запускают из живой сессии,
+    # и оставлять в ней свои следы — плохая привычка.
+    $prevStderrEnv = $env:QT_ASSUME_STDERR_HAS_CONSOLE
     $env:QT_ASSUME_STDERR_HAS_CONSOLE = "1"
-    $proc = Start-Process (Join-Path $dist "Win11Client.exe") -WorkingDirectory $dist `
-        -PassThru -RedirectStandardError $errLog -RedirectStandardOutput $outLog
+    try {
+        $clock = [System.Diagnostics.Stopwatch]::StartNew()
+        $proc = Start-Process (Join-Path $dist "Win11Client.exe") -WorkingDirectory $dist `
+            -PassThru -RedirectStandardError $errLog -RedirectStandardOutput $outLog
 
-    if ($proc.WaitForExit(6000)) {
-        $tail = (Get-Content $errLog -ErrorAction SilentlyContinue | Select-Object -Last 15) -join "`n"
-        Write-Host "!!! Приложение вышло через $([math]::Round($proc.TotalProcessorTime.TotalSeconds,1)) с, код $($proc.ExitCode)" -ForegroundColor Red
-        if ($tail) { Write-Host $tail -ForegroundColor DarkGray }
-        Write-Host "    0xC0000005 = падение; -1 = не построился QML (смотрите stderr выше)." -ForegroundColor Yellow
-        Write-Host "    Логи: $errLog" -ForegroundColor Yellow
-        throw "deployed build does not start"
+        if ($proc.WaitForExit(6000)) {
+            $clock.Stop()
+            $tail = (Get-Content $errLog -ErrorAction SilentlyContinue | Select-Object -Last 15) -join "`n"
+            Write-Host ("!!! Приложение вышло через {0:N1} с, код {1}" -f `
+                        $clock.Elapsed.TotalSeconds, $proc.ExitCode) -ForegroundColor Red
+            if ($tail) { Write-Host $tail -ForegroundColor DarkGray }
+            Write-Host "    -1073741819 (0xC0000005) = падение; -1 = не построился QML." -ForegroundColor Yellow
+            Write-Host "    Логи оставлены рядом с exe: $errLog" -ForegroundColor Yellow
+            throw "deployed build does not start"
+        }
+
+        $proc.CloseMainWindow() | Out-Null
+        if (-not $proc.WaitForExit(4000)) { $proc.Kill() }
+        Remove-Item $errLog, $outLog -Force -ErrorAction SilentlyContinue
+        Write-Host "    запускается" -ForegroundColor Green
     }
-
-    $proc.CloseMainWindow() | Out-Null
-    if (-not $proc.WaitForExit(4000)) { $proc.Kill() }
-    Remove-Item $errLog, $outLog -Force -ErrorAction SilentlyContinue
-    Write-Host "    запускается" -ForegroundColor Green
+    finally { $env:QT_ASSUME_STDERR_HAS_CONSOLE = $prevStderrEnv }
 }
 
 # Report footprint.
