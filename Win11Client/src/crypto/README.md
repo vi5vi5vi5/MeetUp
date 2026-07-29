@@ -12,13 +12,16 @@ other", not "slightly worse interop".
     `#k=<base64url>` invite fragment.
   - **AES-256-GCM** seal/open of media payloads and chat strings.
     IV = 4-byte per-key random prefix + 8-byte LE counter; AAD = `[type, codec]`
-    for media, `[250,0]` for chat text (`[251,0]` for chat images, which this
-    client does not send yet); 16-byte tag appended. Only the payload is
-    encrypted — the frame header stays cleartext, the server needs it to relay.
-    The counter is **atomic**: lanes seal from different threads, and a repeated
-    IV under one key destroys GCM outright.
+    for media, `[250,0]` for chat text, `[251,0]` for chat images; 16-byte tag
+    appended. Only the payload is encrypted — the frame header stays cleartext,
+    the server needs it to relay. The counter is **atomic**: lanes seal from
+    different threads, and a repeated IV under one key destroys GCM outright.
   - Chat rides as `"🔒e2e:<base64url(iv|ct|tag)>"` — an ordinary message string
-    as far as the server is concerned.
+    as far as the server is concerned. Images use the **same envelope** but a
+    different AAD type, so an image ciphertext cannot be passed off as a text
+    message or the reverse; note that what gets sealed is the **raw JPEG bytes**,
+    not their base64 (the web decodes before sealing, and the two must agree or
+    the picture simply will not open on the other side).
 - **`E2eController`** (QML: `Crypto`) — where the key comes from and when it
   goes away: phrase → PBKDF2 (off the GUI thread, it is deliberately slow),
   `#k=` from the invite link, building an invite link *with* the key, and
@@ -36,5 +39,6 @@ provides is a poor trade.
 
 Interop is verified against the real WebCrypto API rather than by inspection: a
 cross-check probe runs the web client's own key-derivation and seal/open code in
-Node against this implementation, both directions, for media, chat and link
-keys.
+Node against this implementation, both directions, for media, chat text, chat
+images and link keys — including the negative cases (wrong key, wrong AAD type,
+text-as-image and image-as-text) that prove the AAD is actually binding.

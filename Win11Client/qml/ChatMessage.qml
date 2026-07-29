@@ -14,9 +14,18 @@ Item {
     // было бы враньём, промолчать — потерей сообщения: показываем, что оно
     // было, и почему его не видно.
     property bool locked: false
+    // Картинка: ссылка image://chatimg/<id> либо пусто. Три разных «пусто»,
+    // и путать их нельзя — см. заглушки ниже.
+    property string image: ""
+    property bool imageLocked: false     // зашифрована, ключа нет
+    property bool imageDropped: false    // была, но вытеснена из истории сервера
+    signal imageClicked(string source)
 
     readonly property real _maxContent: width * 0.82 - 24
     readonly property color _linkColor: root.self ? Theme.accentFg : Theme.accent
+    // Пузырь с текстом не нужен, когда текста нет: у сообщения-картинки
+    // подписи может не быть вовсе.
+    readonly property bool _hasText: root.locked || root.text !== ""
 
     implicitHeight: col.implicitHeight
     // width supplied by the containing list
@@ -117,9 +126,83 @@ Item {
             }
         }
 
+        // ---- Картинка ----
+        // Показываем над текстом: подпись читается после того, что подписано.
+        Item {
+            id: pic
+            visible: root.image !== "" || root.imageLocked || root.imageDropped
+            x: root.self ? parent.width - width : 0
+            width: shot.visible ? shot.width : stub.width
+            height: shot.visible ? shot.height : stub.height
+
+            Image {
+                id: shot
+                visible: root.image !== ""
+                source: root.image
+                // Просим ровно тот размер, в котором показываем: провайдер
+                // отдаст уменьшенную копию, а не полный кадр (см. ChatImages).
+                sourceSize.width: Math.round(root._maxContent)
+                fillMode: Image.PreserveAspectFit
+                width: Math.min(root._maxContent, implicitWidth)
+                height: implicitWidth > 0 ? width * (implicitHeight / implicitWidth) : 0
+                smooth: true
+                asynchronous: true
+
+                Rectangle {          // рамка вместо тени: дешевле и в духе темы
+                    anchors.fill: parent
+                    color: "transparent"
+                    radius: Theme.radiusSm
+                    border.width: 1
+                    border.color: Theme.border
+                }
+
+                TapHandler {
+                    gesturePolicy: TapHandler.ReleaseWithinBounds
+                    onTapped: root.imageClicked(root.image)
+                }
+                HoverHandler { cursorShape: Qt.PointingHandCursor }
+            }
+
+            // Заглушка на оба «картинки не видно», с разными объяснениями:
+            // ключ можно ввести, а вытесненную из истории уже не вернуть.
+            Rectangle {
+                id: stub
+                visible: !shot.visible
+                width: stubRow.implicitWidth + 24
+                height: stubRow.implicitHeight + 16
+                color: "transparent"
+                radius: Theme.radiusSm
+                border.width: 1
+                border.color: Theme.border
+
+                Row {
+                    id: stubRow
+                    anchors.centerIn: parent
+                    spacing: 8
+                    AppIcon {
+                        anchors.verticalCenter: parent.verticalCenter
+                        name: root.imageDropped ? "image" : "lock"
+                        size: 13
+                        color: Theme.textFaint
+                    }
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: root.imageDropped
+                                ? "Изображение больше не хранится"
+                                : (Crypto.active ? "Изображение зашифровано другим ключом"
+                                                 : "Изображение зашифровано, нужен ключ")
+                        color: Theme.textMuted
+                        font.family: Theme.uiFont
+                        font.pixelSize: Theme.textSm
+                        font.italic: true
+                    }
+                }
+            }
+        }
+
         Rectangle {
             id: bubble
-            visible: !root.locked
+            visible: root._hasText && !root.locked
             x: root.self ? parent.width - width : 0
             width: msg.width + 24
             height: msg.implicitHeight + 16

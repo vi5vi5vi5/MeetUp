@@ -63,6 +63,13 @@ public:
     // Возвращает false, если расшифровать не удалось (нет ключа или чужой).
     bool openText(const QString& sealed, QString& outText) const;
 
+    // Картинка чата. Конверт на проводе тот же — "🔒e2e:<base64url>", — но
+    // AAD-тип свой, и шифруются САМИ БАЙТЫ JPEG, а не их base64-запись. Веб
+    // делает ровно так (sealImage переводит b64 в байты перед seal), и разойтись
+    // здесь нельзя: картинка просто не откроется на другой стороне.
+    QString sealImage(const QByteArray& jpeg) const;
+    bool openImage(const QString& sealed, QByteArray& outJpeg) const;
+
 private:
     struct Key;                                  // держит хендл CNG и сами байты
     std::shared_ptr<const Key> currentKey() const;

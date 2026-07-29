@@ -22,6 +22,17 @@ Planned units:
 - **`Protocol.h`** — binary media framing (pack 11-byte header / unpack
   15-byte header) and the media type/flag/codec constants. These constants
   live only in the client — the server treats media payloads as opaque.
+- **`ChatImages`** — chat pictures: a store of JPEG bytes plus the QML image
+  provider behind `image://chatimg/<id>`. Bytes rather than decoded `QImage`s
+  because the server keeps up to 24 pictures in room history — expanded to
+  pixels that would be ~180 MB, as JPEG about ten — so decoding happens in
+  `requestImage`, straight to the size actually being drawn. Every `put()`
+  mints a **new** id on purpose: when a key is entered late and the feed is
+  re-read, the URL has to change or QML serves the previous (empty) result from
+  its cache. `packChatImage` is the send side — the same ladder the web uses
+  (1600/1024/720 × quality 85/70/55 until it fits 480 000 base64 chars, against
+  the server's 600 000 cap), run off the GUI thread because decoding a phone
+  photo takes hundreds of milliseconds.
 
 Connection rule: `wss://<host>/ws` when the server origin is https, otherwise
 `ws://<host>:9000`; REST rides the same scheme+host.

@@ -5,10 +5,12 @@
 #include <QHash>
 
 class ApiClient;
+class ChatImages;
 class SignalingLink;
 class E2eCipher;
 class QThread;
 class QTimer;
+class QUrl;
 
 // Одно WebSocket-соединение с комнатой: join, участники, чат.
 // Виден из QML как Conf.
@@ -36,7 +38,8 @@ class SignalingClient : public QObject {
         // Время до сервера и обратно, мс. -1 — ещё не мерили (или связи нет).
         Q_PROPERTY(int          ping         READ ping         NOTIFY pingChanged)
 public:
-    SignalingClient(ApiClient* api, E2eCipher* cipher, QObject* parent = nullptr);
+    SignalingClient(ApiClient* api, E2eCipher* cipher, ChatImages* images,
+        QObject* parent = nullptr);
     ~SignalingClient() override;
 
     QString phase() const { return m_phase; }
@@ -73,6 +76,15 @@ public:
     Q_INVOKABLE void setScreenShare(bool on);
     Q_INVOKABLE void leave();
     Q_INVOKABLE void sendChat(const QString& text);
+    // Отправить картинку. url — то, что дал FileDialog (file:///…).
+    // Ужимание и шифрование считаются в стороне от GUI-потока: декод и
+    // масштаб снимка с телефона — это сотни миллисекунд, а окно в это время
+    // рисует чужое видео.
+    Q_INVOKABLE void sendImageFile(const QUrl& url);
+    // Скриншот из буфера обмена (Ctrl+V в поле сообщения), как у веба.
+    // Возвращает false, если в буфере картинки нет, — тогда QML не мешает
+    // обычной вставке текста.
+    Q_INVOKABLE bool sendClipboardImage();
     void sendBinary(const QByteArray& frame); // не Q_INVOKABLE - зовёт C++ медиадвижок, не QML
 
     // Неотправленный остаток в сокете (байты). Backpressure §5.5: выше 1.5 МБ
@@ -113,6 +125,9 @@ signals:
     // messagesChanged: тот летит ещё от истории в join_ok и от reReadMessages()
     // при смене ключа, а звук уведомления такие поводы устраивать не должны.
     void chatArrived(bool self);
+    // Картинку не приняли (не открылась, не влезла, сервер отказал). Текст
+    // готов к показу — QML только выводит его пилюлей.
+    void chatImageFailed(const QString& text);
 
 private:
     void openSocket();
@@ -131,8 +146,10 @@ private:
     void rebuildSpeaking();             // m_speakingUntil -> m_speakingIds
     void sweepSpeaking();               // снять подсветку с отговоривших
     QVariantMap makeMessage(qint64 senderId, const QString& senderName,
-        const QString& text, qint64 tsMs);
-    void renderBody(QVariantMap& m) const;   // raw -> text/locked текущим ключом
+        const QString& text, const QString& image, bool imageDropped, qint64 tsMs);
+    // raw/rawImage -> text/locked/image текущим ключом.
+    void renderBody(QVariantMap& m) const;
+    void sendImageB64(const QByteArray& b64);   // общий хвост обоих источников
     void setPhase(const QString& p);
     void setError(const QString& t);
     void fatal(const QString& t);
@@ -140,6 +157,7 @@ private:
 
     ApiClient* m_api;
     E2eCipher* m_cipher;                // не владеем: общий на всё приложение
+    ChatImages* m_images;               // не владеем: принадлежит движку QML
     QThread* m_netThread = nullptr;     // поток транспорта
     SignalingLink* m_link = nullptr;    // живёт на m_netThread
     QTimer* m_reconnectTimer = nullptr;

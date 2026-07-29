@@ -2,6 +2,7 @@
 import QtQuick.Window
 import QtQuick.Layouts
 import QtQuick.Controls.Basic
+import QtQuick.Dialogs
 import QtQuick.Effects
 import MeetUp
 
@@ -382,6 +383,10 @@ Item {
                     time: modelData.time
                     self: modelData.self
                     locked: modelData.locked === true
+                    image: modelData.image || ""
+                    imageLocked: modelData.imageLocked === true
+                    imageDropped: modelData.imageDropped === true
+                    onImageClicked: function (src) { root.lightbox = src }
                 }
                 // Лента живёт на QVariantList, и любое изменение подменяет
                 // модель ЦЕЛИКОМ — ListView при этом сбрасывает прокрутку в
@@ -416,13 +421,26 @@ Item {
                     anchors.fill: parent
                     anchors.margins: 12
                     spacing: 8
-                    IconButton { size: "sm"; icon: "paperclip"; variant: "neutral"; enabled: false }  // картинки — M5
+                    IconButton {
+                        size: "sm"; icon: "paperclip"; variant: "neutral"
+                        enabled: Conf.phase === "live"
+                        onClicked: imagePicker.open()
+                    }
                     AppInput {
                         id: chatInput
                         Layout.fillWidth: true
                         placeholderText: "Сообщение…"
                         enabled: Conf.phase === "live"
                         onAccepted: { Conf.sendChat(chatInput.text); chatInput.text = ""; }
+                        // Ctrl+V со скриншотом отправляет картинку — так быстрее
+                        // всего показать, о чём речь. Если в буфере не картинка,
+                        // sendClipboardImage() отвечает false и вставка идёт
+                        // своим чередом, как обычный текст.
+                        Keys.onPressed: function (e) {
+                            if (e.key === Qt.Key_V && (e.modifiers & Qt.ControlModifier)
+                                && Conf.phase === "live" && Conf.sendClipboardImage())
+                                e.accepted = true
+                        }
                     }
                     IconButton {
                         size: "sm"; icon: "send"; variant: "accent"
@@ -969,6 +987,60 @@ Item {
     Connections {
         target: Audio
         function onScreenAudioError(text) { root.notify(text) }
+    }
+
+    // ---- Картинки в чате ----
+    // Отправляем сразу по выбору, без предпросмотра, — как в вебе: лишний шаг
+    // «подтвердите отправку» на скриншотах только мешает.
+    FileDialog {
+        id: imagePicker
+        title: "Отправить изображение"
+        nameFilters: ["Изображения (*.png *.jpg *.jpeg *.gif *.bmp *.webp)", "Все файлы (*)"]
+        onAccepted: Conf.sendImageFile(selectedFile)
+    }
+
+    Connections {
+        target: Conf
+        function onChatImageFailed(text) { root.notify(text) }
+    }
+
+    // Просмотр во весь экран: щелчок по картинке в ленте, выход — щелчок мимо
+    // или Esc. Своего окна не заводим, хватает оверлея поверх конференции.
+    property string lightbox: ""
+    Rectangle {
+        visible: root.lightbox !== ""
+        anchors.fill: parent
+        color: Qt.rgba(0, 0, 0, 0.88)
+        z: 300
+
+        TapHandler {
+            gesturePolicy: TapHandler.ReleaseWithinBounds
+            onTapped: root.lightbox = ""
+        }
+        // Оверлей открыт — забираем фокус, иначе Esc уйдёт в полноэкранный режим.
+        focus: root.lightbox !== ""
+        Keys.onEscapePressed: root.lightbox = ""
+
+        Image {
+            anchors.centerIn: parent
+            source: root.lightbox
+            // Здесь нужен исходный размер, а не размер пузыря: сюда и лезут,
+            // чтобы разглядеть. sourceSize не задаём — провайдер отдаст как есть.
+            fillMode: Image.PreserveAspectFit
+            width: Math.min(implicitWidth, parent.width - 80)
+            height: Math.min(implicitHeight, parent.height - 80)
+            smooth: true
+            asynchronous: true
+        }
+
+        IconButton {
+            anchors.top: parent.top
+            anchors.right: parent.right
+            anchors.margins: 18
+            size: "sm"
+            icon: "x"
+            onClicked: root.lightbox = ""
+        }
     }
 }
 

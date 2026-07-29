@@ -1,17 +1,25 @@
 ﻿#include "SignalingClient.h"
 #include "SignalingLink.h"
 #include "ApiClient.h"
+#include "ChatImages.h"
 #include "../crypto/E2eCipher.h"
 #include <QThread>
 #include <QTimer>
+#include <QClipboard>
+#include <QGuiApplication>
+#include <QImage>
+#include <QImageReader>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QPointer>
+#include <QThreadPool>
 #include <QUrl>
 #include <QDateTime>
 
-SignalingClient::SignalingClient(ApiClient* api, E2eCipher* cipher, QObject* parent)
-    : QObject(parent), m_api(api), m_cipher(cipher) {
+SignalingClient::SignalingClient(ApiClient* api, E2eCipher* cipher, ChatImages* images,
+    QObject* parent)
+    : QObject(parent), m_api(api), m_cipher(cipher), m_images(images) {
     // Транспорт на своём потоке: кадры звука приходят каждые 20 мс и не должны
     // ждать, пока GUI-поток закончит ресайз окна. Сюда, на GUI, возвращаются
     // только текстовые сообщения и видео — им задержка не страшна.
@@ -105,6 +113,7 @@ void SignalingClient::open(const QString& roomCode, const QString& name) {
     // Лента прошлой комнаты: join_ok пересоберёт её заново, но до его прихода
     // в новой комнате висела бы чужая переписка.
     if (!m_messages.isEmpty()) { m_messages.clear(); emit messagesChanged(); }
+    m_images->clear();      // и её картинки: держать их дальше незачем
     // Остатки прошлой конференции: заголовок личной комнаты и флаг реконнекта.
     if (!m_roomTitle.isEmpty()) { m_roomTitle.clear(); emit roomTitleChanged(); }
     if (m_reconnecting) { m_reconnecting = false; emit reconnectingChanged(); }
@@ -197,6 +206,7 @@ void SignalingClient::onJson(const QJsonObject& msg) {
         // История чата: пересобираем ленту из join_ok (и на реконнекте — тоже,
         // чтобы не задвоить уже показанные сообщения).
         m_messages.clear();
+        m_images->clear();     // ленту собираем заново — старые id больше не нужны
         const QJsonArray history = msg.value("history").toArray();
         for (const QJsonValue& v : history) {
             const QJsonObject h = v.toObject();
@@ -204,6 +214,8 @@ void SignalingClient::onJson(const QJsonObject& msg) {
                 static_cast<qint64>(h.value("sender_id").toDouble()),
                 h.value("sender_name").toString(),
                 h.value("text").toString(),
+                h.value("image").toString(),
+                h.value("image_dropped").toBool(),
                 static_cast<qint64>(h.value("timestamp_ms").toDouble())));
         }
         emit messagesChanged();
@@ -283,6 +295,8 @@ void SignalingClient::onJson(const QJsonObject& msg) {
             from,
             msg.value("sender_name").toString(),
             msg.value("text").toString(),
+            msg.value("image").toString(),
+            false,                        // живое сообщение вытеснить ещё не успели
             static_cast<qint64>(msg.value("timestamp_ms").toDouble())));
         emit messagesChanged();
         emit chatArrived(from == m_myId);   // сервер возвращает и наши сообщения
@@ -459,6 +473,12 @@ void SignalingClient::handleError(const QString& reason) {
         setPhase("waiting");
         if (!m_waitTimer->isActive()) m_waitTimer->start(5000);   // повтор через 5 с
     }
+    else if (reason == "image_too_large") {
+        // Сервер отверг картинку. Своя лестница ужимания целится с запасом, так
+        // что сюда попадают только шифрованные на самой границе — но молчать
+        // нельзя: человек уверен, что отправил.
+        emit chatImageFailed("Сервер не принял изображение: слишком большое.");
+    }
     else if (reason == "screen_busy") {
         // Слот демонстрации занят другим: захват мы ещё не начинали (ждём
         // подтверждения), поэтому достаточно снять заявку и сказать об этом.
@@ -485,23 +505,89 @@ void SignalingClient::sendChat(const QString& text) {
     // В ленту НЕ добавляем — сервер вернёт это же сообщение как "chat".
 }
 
+// ---------- картинки в чате ----------
+
+void SignalingClient::sendImageFile(const QUrl& url) {
+    const QString path = url.isLocalFile() ? url.toLocalFile() : url.toString();
+    if (path.isEmpty()) return;
+
+    QPointer<SignalingClient> self(this);
+    QThreadPool::globalInstance()->start([self, path]() {
+        // Читаем и ужимаем в стороне: снимок с телефона — это декод на
+        // несколько мегапикселей плюс масштабирование, сотни миллисекунд.
+        // На GUI-потоке это была бы заметная заминка окна.
+        QImageReader r(path);
+        r.setAutoTransform(true);          // учесть поворот из EXIF
+        const QImage img = r.read();
+        const QByteArray b64 = img.isNull() ? QByteArray() : packChatImage(img);
+        if (!self) return;
+        QMetaObject::invokeMethod(self, [self, b64, null = img.isNull()]() {
+            if (!self) return;
+            if (null)          emit self->chatImageFailed("Не удалось открыть изображение.");
+            else if (b64.isEmpty()) emit self->chatImageFailed(
+                "Изображение слишком большое — не удалось ужать его до предела сервера.");
+            else self->sendImageB64(b64);
+            }, Qt::QueuedConnection);
+        });
+}
+
+bool SignalingClient::sendClipboardImage() {
+    const QImage img = QGuiApplication::clipboard()->image();
+    if (img.isNull()) return false;       // в буфере не картинка — не наш случай
+
+    QPointer<SignalingClient> self(this);
+    QThreadPool::globalInstance()->start([self, img]() {
+        const QByteArray b64 = packChatImage(img);
+        if (!self) return;
+        QMetaObject::invokeMethod(self, [self, b64]() {
+            if (!self) return;
+            if (b64.isEmpty()) emit self->chatImageFailed(
+                "Изображение слишком большое — не удалось ужать его до предела сервера.");
+            else self->sendImageB64(b64);
+            }, Qt::QueuedConnection);
+        });
+    return true;
+}
+
+void SignalingClient::sendImageB64(const QByteArray& b64) {
+    QString payload = QString::fromLatin1(b64);
+    if (m_cipher->active()) {
+        // Шифруем БАЙТЫ jpeg, а не их base64-запись — так делает веб, и это
+        // единственный вариант, при котором картинка откроется в браузере.
+        const QString sealed = m_cipher->sealImage(b64.isEmpty()
+            ? QByteArray() : QByteArray::fromBase64(b64));
+        if (sealed.isEmpty()) {           // не смогли — молчим, а не шлём открытым
+            emit chatImageFailed("Не удалось зашифровать изображение.");
+            return;
+        }
+        payload = sealed;
+    }
+    sendJson({ {"type", "chat"}, {"image", payload} });
+}
+
 QVariantMap SignalingClient::makeMessage(qint64 senderId, const QString& senderName,
-    const QString& text, qint64 tsMs) {
+    const QString& text, const QString& image, bool imageDropped, qint64 tsMs) {
     QVariantMap m;
     m["author"] = senderName.isEmpty() ? ("Участник " + QString::number(senderId))
         : senderName;
-    // Храним строку как пришла: ключ могут ввести уже после этого сообщения,
+    // Храним строки как пришли: ключ могут ввести уже после этого сообщения,
     // и тогда ленту перечитают (см. reReadMessages).
     m["raw"] = text;
+    m["rawImage"] = image;
+    // Картинка была, но сервер вытеснил её из истории (держит 24 свежие).
+    // Отличать от «картинки не было» обязательно: иначе сообщение выглядит
+    // пустым и человек решит, что потерялось всё.
+    m["imageDropped"] = imageDropped;
     m["time"] = QDateTime::fromMSecsSinceEpoch(tsMs).toString("HH:mm");
     m["self"] = (senderId == m_myId);
     renderBody(m);
     return m;
 }
 
-// Как показать пришедшую строку: обычный текст — как есть, "🔒e2e:…" —
+// Как показать пришедшее: обычный текст — как есть, "🔒e2e:…" —
 // расшифрованный. Ключа нет или он чужой — честная заглушка вместо текста:
 // показать шифротекст было бы враньём, а промолчать — потерей сообщения.
+// С картинкой ровно та же развилка, только заглушку рисует QML.
 void SignalingClient::renderBody(QVariantMap& m) const {
     const QString raw = m.value("raw").toString();
     QString plain;
@@ -515,10 +601,32 @@ void SignalingClient::renderBody(QVariantMap& m) const {
         m["text"] = QString();
         m["locked"] = true;
     }
+
+    const QString rawImage = m.value("rawImage").toString();
+    m["image"] = QString();
+    m["imageLocked"] = false;
+    if (rawImage.isEmpty()) return;
+
+    QByteArray jpeg;
+    if (!E2eCipher::isSealedText(rawImage)) {
+        jpeg = QByteArray::fromBase64(rawImage.toLatin1());
+    } else if (!m_cipher->openImage(rawImage, jpeg)) {
+        m["imageLocked"] = true;
+        return;
+    }
+    if (jpeg.isEmpty()) { m["imageLocked"] = true; return; }
+    // put() каждый раз выдаёт новый id — это и нужно: при перечитывании ленты
+    // новым ключом у картинки обязан смениться URL, иначе QML возьмёт из кеша
+    // прежний результат (то есть пустоту, ведь до ключа её не было).
+    m["image"] = "image://chatimg/" + m_images->put(jpeg);
 }
 
 void SignalingClient::reReadMessages() {
     if (m_messages.isEmpty()) return;
+    // Перечитываем всё подряд, поэтому старые id картинок сразу выбрасываем:
+    // renderBody выдаст каждой новый, а иначе они копились бы при каждой
+    // смене ключа.
+    m_images->clear();
     for (QVariant& v : m_messages) {
         QVariantMap m = v.toMap();
         renderBody(m);

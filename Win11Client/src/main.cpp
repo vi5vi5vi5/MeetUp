@@ -10,6 +10,7 @@
 #include "net/AuthController.h"
 #include "net/RoomController.h"
 #include "net/SignalingClient.h"
+#include "net/ChatImages.h"
 #include "net/PersonalRoomController.h"
 #include "net/LinkController.h"
 #include "SysBridge.h"
@@ -52,7 +53,11 @@ int main(int argc, char *argv[])
     // Ключ комнаты. Объявлен раньше всех, кто шифрует: один на приложение и
     // потокобезопасен — им пользуются сразу пять потоков медиа.
     E2eCipher cipher;
-    SignalingClient conf(&api, &cipher);
+    // Картинки чата. Объявлены здесь, но владеет ими движок QML (провайдеры
+    // удаляются вместе с ним) — поэтому ниже addImageProvider отдаёт новый
+    // объект, а этот указатель нужен только SignalingClient'у.
+    auto* chatImages = new ChatImages;
+    SignalingClient conf(&api, &cipher, chatImages);
     PersonalRoomController myRoom(&api);   // тот же api -> та же сессия
     SysBridge sys(&api);                   // буфер обмена + ссылки
     // Ссылка-приглашение целиком: код комнаты, ключ E2E и смена сервера.
@@ -75,6 +80,7 @@ int main(int argc, char *argv[])
     // движку и держит указатель на screens, а разрушается движок первым.
     QQmlApplicationEngine engine;
     engine.addImageProvider("screengrab", new ScreenThumbProvider(&screens));
+    engine.addImageProvider("chatimg", chatImages);   // движок забирает владение
     // Кладём объект в глобальный контекст QML под именем "Auth".
     // Теперь в любом .qml доступно Auth.login(...), Auth.busy, Auth.errorText.
     engine.rootContext()->setContextProperty("Auth", &auth);

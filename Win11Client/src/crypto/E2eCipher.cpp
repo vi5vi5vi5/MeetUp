@@ -246,3 +246,21 @@ bool E2eCipher::openText(const QString& sealed, QString& outText) const {
     outText = QString::fromUtf8(plain);
     return true;
 }
+
+QString E2eCipher::sealImage(const QByteArray& jpeg) const {
+    const QByteArray body = seal(ImageAad, 0, jpeg);
+    if (body.isEmpty()) return {};
+    return textMark() + QString::fromLatin1(body.toBase64(
+        QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals));
+}
+
+bool E2eCipher::openImage(const QString& sealed, QByteArray& outJpeg) const {
+    if (!isSealedText(sealed)) return false;
+    const QByteArray body = QByteArray::fromBase64(
+        sealed.mid(kTextMarkChars).toLatin1(),
+        QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
+    const QByteArray plain = open(ImageAad, 0, body);
+    if (plain.isEmpty()) return false;
+    outJpeg = plain;
+    return true;
+}
