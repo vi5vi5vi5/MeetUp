@@ -47,6 +47,9 @@ class MediaSettings : public QObject {
     // слушает музыку, кто-то пытается расслышать за ней разговор. Раньше это
     // регулировал ведущий, и все слышали одно и то же, что бы им ни хотелось.
     Q_PROPERTY(int screenVolume READ screenVolume WRITE setScreenVolume NOTIFY screenVolumeChanged)
+    // Звуки интерфейса: тумблеры, входящее сообщение, приход и уход участников.
+    // По умолчанию включены — это подтверждение действия, а не украшение.
+    Q_PROPERTY(bool uiSounds READ uiSounds WRITE setUiSounds NOTIFY uiSoundsChanged)
     // Горячие клавиши (M8): переносимый текст QKeySequence ("Ctrl+D", "M", …);
     // пустая строка — клавиша не назначена. Слушает ConferenceScreen.
     Q_PROPERTY(QString keyMic   READ keyMic   WRITE setKeyMic   NOTIFY keyMicChanged)
@@ -75,6 +78,7 @@ public:
     QString screenCodec() const { return m_screenCodec; }
     bool screenAudio() const { return m_screenAudio; }
     int screenVolume() const { return m_screenVolume; }
+    bool uiSounds() const { return m_uiSounds; }
     QString keyMic() const { return m_keyMic; }
     QString keySound() const { return m_keySound; }
     QString keyCam() const { return m_keyCam; }
@@ -94,6 +98,7 @@ public:
     void setScreenCodec(const QString& c);
     void setScreenAudio(bool on);
     void setScreenVolume(int v);
+    void setUiSounds(bool on);
     void setKeyMic(const QString& s);
     void setKeySound(const QString& s);
     void setKeyCam(const QString& s);
@@ -143,6 +148,7 @@ signals:
     void screenCodecChanged();
     void screenAudioChanged();
     void screenVolumeChanged();
+    void uiSoundsChanged();
     void keyMicChanged();
     void keySoundChanged();
     void keyCamChanged();
@@ -162,6 +168,7 @@ private:
     QString m_camCodec = "auto", m_screenCodec = "auto";
     bool m_screenAudio = false;
     int m_screenVolume = 100;
+    bool m_uiSounds = true;
     QString m_keyMic, m_keySound, m_keyCam;
 
     qreal m_micLevel = 0;

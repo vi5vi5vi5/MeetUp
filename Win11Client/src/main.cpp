@@ -21,6 +21,7 @@
 #include "media/AudioEngine.h"
 #include "media/VideoEngine.h"
 #include "media/MediaStats.h"
+#include "media/UiSounds.h"
 #include "crypto/E2eCipher.h"
 #include "crypto/E2eController.h"
 
@@ -66,6 +67,9 @@ int main(int argc, char *argv[])
     // audio даёт часы звука (синхронизация губ) и «замки» голосовой полосы
     VideoEngine video(&conf, &av, &screens, &audio, &stats, &cipher);
     E2eController crypto(&cipher, &conf, &link, &sys);   // ключ: фраза и ссылка
+    // Звуки интерфейса. Держит av (выключатель и устройство вывода) и audio —
+    // уведомления молчат, когда снят звук конференции.
+    UiSounds sfx(&av, &audio);
 
     // Движок QML объявлен ПОСЛЕ screens: провайдер миниатюр принадлежит
     // движку и держит указатель на screens, а разрушается движок первым.
@@ -91,6 +95,8 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("Hotkeys", &hotkeys);
     // Сквозное шифрование: фраза-ключ, ссылка с ключом — Crypto.
     engine.rootContext()->setContextProperty("Crypto", &crypto);
+    // Звуки интерфейса — Sfx.play("toggle-on") и далее по каталогу.
+    engine.rootContext()->setContextProperty("Sfx", &sfx);
 
     
 

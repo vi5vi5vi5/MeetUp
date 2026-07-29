@@ -45,27 +45,37 @@ Item {
     property bool _micBeforeDeafen: false
 
     // Локальные тумблеры в одном месте — их дёргают и док, и горячие клавиши.
-    function toggleMic() {
+    // silent — микрофон дёргает не человек, а toggleSound(): у того жеста свой
+    // звук, и тумблерный поверх него звучал бы дребезгом.
+    function toggleMic(silent) {
         micOn = !micOn
+        if (!silent) Sfx.play(micOn ? "toggle-on" : "toggle-off")
         // Человек тронул микрофон сам — восстанавливать за него больше нечего.
         // toggleSound() ставит флаг ПОСЛЕ вызова этой функции, поэтому её
         // собственное выключение микрофона флаг не затирает.
         _micBeforeDeafen = false
         Conf.setLocalState(micOn, camOn)
     }
-    function toggleCam()   { camOn = !camOn; Conf.setLocalState(micOn, camOn) }
+    // У камеры звук тот же, что у микрофона: подтверждать нужно «включилось» и
+    // «выключилось», а какую кнопку нажали — человек и так знает.
+    function toggleCam() {
+        camOn = !camOn
+        Sfx.play(camOn ? "toggle-on" : "toggle-off")
+        Conf.setLocalState(micOn, camOn)
+    }
     // «Не слышу вас» почти всегда значит и «не говорю»: выключая звук
     // конференции, снимаем и микрофон, а возвращая — включаем обратно, но
     // только если он был включён до этого. Само по себе выключение звука
     // микрофон не включает никогда.
     function toggleSound() {
         var deafen = !Audio.outputMuted
+        Sfx.play(deafen ? "deafen-on" : "deafen-off")
         if (deafen) {
             var had = micOn
-            if (micOn) toggleMic()
+            if (micOn) toggleMic(true)
             _micBeforeDeafen = had
         } else {
-            if (_micBeforeDeafen && !micOn) toggleMic()
+            if (_micBeforeDeafen && !micOn) toggleMic(true)
             _micBeforeDeafen = false
         }
         Audio.outputMuted = deafen
@@ -182,12 +192,60 @@ Item {
         function onScreenChanged() {
             if (Conf.screenId !== 0) root.pinnedId = null
             else if (root.theater) root.toggleTheater()
+            // Демонстрация — самое крупное изменение сцены, и слышать его стоит
+            // независимо от того, своя она или чужая.
+            if (root._sfxArmed)
+                Sfx.play(Conf.screenId !== 0 ? "share-on" : "share-off")
         }
         function onScreenBusy() {
             root.notify("Демонстрацию экрана уже ведёт другой участник.")
         }
     }
     Timer { id: linkCopyReset; interval: 1400; onTriggered: root.linkCopied = false }
+
+    // ---------------------------------------------------------------- Звуки
+    // Каталог и правила «когда молчать» живут в C++ (src/media/UiSounds.cpp);
+    // здесь только то, что знает про обстановку экрана.
+    //
+    // Взвод с задержкой. join_ok приносит разом список участников, чужую
+    // демонстрацию и историю чата — без паузы вход в живую комнату встречал бы
+    // человека залпом, и то же повторялось бы на каждом реконнекте. Фаза
+    // уходит из "live" при обрыве, поэтому взвод сбрасывается сам.
+    property bool _sfxArmed: false
+    Timer { id: sfxArm; interval: 1200; onTriggered: root._sfxArmed = true }
+    onInRoomChanged: {
+        _sfxArmed = false
+        if (inRoom) sfxArm.restart(); else sfxArm.stop()
+    }
+
+    // Чат виден целиком — условие повторяет видимость самой панели (см. side).
+    readonly property bool chatVisible:
+        inRoom && (sideDocked || panelOpen) && !theater && activeTab === 0
+
+    // Приходы и уходы в большой комнате идут потоком и превращаются в шум: на
+    // десятерых важно, что кто-то пришёл, а не кто именно.
+    readonly property int sfxPeerLimit: 6
+    function peerSfx(name) {
+        if (!_sfxArmed || Conf.participants.length > sfxPeerLimit) return
+        Sfx.play(name)
+    }
+
+    Connections {
+        target: Conf
+        // Свой вход — единственный звук, которому взвод не нужен: он и есть
+        // то самое событие. Реконнект его не повторяет (joinedRoom один раз).
+        function onJoinedRoom() { Sfx.play("room-join") }
+        function onParticipantJoined() { root.peerSfx("peer-join") }
+        function onParticipantLeft()   { root.peerSfx("peer-leave") }
+        function onChatArrived(self) {
+            if (self || !root._sfxArmed) return
+            // Чат на виду и окно в фокусе — сообщение уже прочитано глазами, и
+            // звук был бы дублем. В свёрнутом окне он, наоборот, единственный
+            // способ узнать о сообщении.
+            if (root.chatVisible && Window.active) return
+            Sfx.play("message")
+        }
+    }
 
     // ---- Горячие клавиши (глобальные, работают и вне фокуса окна) ----
     // Их регистрирует система (Hotkeys). Отключаем, когда: открыта модалка

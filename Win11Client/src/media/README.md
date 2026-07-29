@@ -26,5 +26,23 @@ The media pipeline (see `docs/ROADMAP.md`).
   (low/med/high for camera resolution+bitrate+fps and Opus bitrate), persisted
   in QSettings and applied live by both engines.
 
+- **UI sounds** (`UiSounds`, QML `Sfx`) — ten short WAVs in
+  `../../resources/sounds`, played through `QSoundEffect` into the **selected**
+  output device (the pool is rebuilt when `MediaSettings::outId` changes, so a
+  notification never lands in a different pair of headphones than the call).
+  One family derived from a single tine sample: events differ by note count,
+  interval and direction rather than by timbre, and levels are baked into the
+  files (`message` loudest, `peer-leave` quietest) — nothing is mixed at
+  runtime. Policy lives in the catalogue in `UiSounds.cpp`: *notifications*
+  (`message`, `peer-join`, `peer-leave`) go silent while the conference sound
+  is off, *actions* (toggles, share, join) always play, and a per-sound minimum
+  gap collapses bursts. Context the C++ side cannot know stays at the call site
+  in `ConferenceScreen.qml`: sounds are armed ~1.2 s after entering a room (so
+  `join_ok` and reconnects don't fire a volley), peer sounds stop above six
+  participants, and an incoming message is silent while the chat is visible in
+  a focused window.
+
 External deps introduced here (MSVC, via vcpkg): FFmpeg (avcodec/swscale with
-`openh264` + `vpx` features) and libopus.
+`openh264` + `vpx` features) and libopus. UI sounds need no dependency beyond
+Qt Multimedia — `QSoundEffect` plays uncompressed PCM WAV only, which is what
+the files are (48 kHz, mono, 16-bit).

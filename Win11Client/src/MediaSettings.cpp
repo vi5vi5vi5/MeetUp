@@ -36,6 +36,7 @@ MediaSettings::MediaSettings(QObject* parent) : QObject(parent) {
     if (!codecs.contains(m_screenCodec)) m_screenCodec = "auto";
     m_screenAudio = s.value("screenAudio", false).toBool();
     m_screenVolume = qBound(0, s.value("screenVolume", 100).toInt(), 200);
+    m_uiSounds = s.value("uiSounds", true).toBool();
     m_keyMic = s.value("keyMic").toString();
     m_keySound = s.value("keySound").toString();
     m_keyCam = s.value("keyCam").toString();
@@ -143,6 +144,13 @@ void MediaSettings::setScreenCursor(bool on) {
     m_screenCursor = on;
     save("screenCursor", on);
     emit screenCursorChanged();
+}
+
+void MediaSettings::setUiSounds(bool on) {
+    if (m_uiSounds == on) return;
+    m_uiSounds = on;
+    save("uiSounds", on);
+    emit uiSoundsChanged();
 }
 
 // Кодек: "auto" | "h264" | "vp8" | "vp9". Чужое значение молча игнорируем —

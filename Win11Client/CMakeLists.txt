@@ -52,6 +52,7 @@ qt_add_executable(Win11Client
     src/media/ScreenCursor.cpp
     src/media/VideoEngine.cpp
     src/media/MediaStats.cpp
+    src/media/UiSounds.cpp
     src/crypto/E2eCipher.cpp
     src/crypto/E2eController.cpp
     # Значок приложения. В qrc он НЕ нужен: ресурс Windows и ресурс Qt — разные
@@ -150,6 +151,19 @@ qt_add_qml_module(Win11Client
         # Знак: две готовые заготовки под тему (см. BrandMark.qml).
         resources/brand/meetup-mark-light.svg
         resources/brand/meetup-mark-dark.svg
+        # Звуки интерфейса: одно семейство из одного тембра, различаются числом
+        # нот и направлением интервала (см. src/media/UiSounds.cpp). Все — 48 кГц
+        # моно 16 бит без сжатия: QSoundEffect играет только такой PCM.
+        resources/sounds/toggle-on.wav
+        resources/sounds/toggle-off.wav
+        resources/sounds/deafen-on.wav
+        resources/sounds/deafen-off.wav
+        resources/sounds/message.wav
+        resources/sounds/peer-join.wav
+        resources/sounds/peer-leave.wav
+        resources/sounds/share-on.wav
+        resources/sounds/share-off.wav
+        resources/sounds/room-join.wav
 )
 
 # Версия одна на весь проект: CMake → QML (Qt.application.version в разделе

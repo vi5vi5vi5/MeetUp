@@ -37,6 +37,15 @@ Column {
 
     Rectangle { width: parent.width; height: 1; color: Theme.border }
 
+    SettingSwitch {
+        width: parent.width
+        label: "Звуки интерфейса"
+        description: "Микрофон и камера, сообщение в чате, вход и выход участников. "
+                   + "Звучат в те же наушники, что и разговор."
+        checked: AV.uiSounds
+        onToggled: function (v) { AV.uiSounds = v }
+    }
+
     Column {
         width: parent.width
         spacing: 14
@@ -51,11 +60,6 @@ Column {
         SettingSwitch {
             label: "Скрывать участников без видео"
             description: "В больших комнатах на экране остаются только говорящие."
-        }
-        SettingSwitch {
-            label: "Звуки уведомлений"
-            description: "Вход и выход участников, новое сообщение в чате."
-            checked: true
         }
     }
 }

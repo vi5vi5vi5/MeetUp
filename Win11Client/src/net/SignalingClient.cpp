@@ -278,12 +278,14 @@ void SignalingClient::onJson(const QJsonObject& msg) {
     }
 
     if (type == "chat") {
+        const qint64 from = static_cast<qint64>(msg.value("sender_id").toDouble());
         m_messages.append(makeMessage(
-            static_cast<qint64>(msg.value("sender_id").toDouble()),
+            from,
             msg.value("sender_name").toString(),
             msg.value("text").toString(),
             static_cast<qint64>(msg.value("timestamp_ms").toDouble())));
         emit messagesChanged();
+        emit chatArrived(from == m_myId);   // сервер возвращает и наши сообщения
         return;
     }
 

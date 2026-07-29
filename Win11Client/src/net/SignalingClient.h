@@ -109,6 +109,10 @@ signals:
     void participantLeft(qint64 id);            // участник ушёл (снести его декодер)
     void localStateChanged(bool mic, bool cam); // локальные микрофон/камера
     void left();    // вышли из комнаты (leave) — медиа немедленно глушится
+    // Живое входящее сообщение (self — своё ли оно). Отдельно от
+    // messagesChanged: тот летит ещё от истории в join_ok и от reReadMessages()
+    // при смене ключа, а звук уведомления такие поводы устраивать не должны.
+    void chatArrived(bool self);
 
 private:
     void openSocket();
