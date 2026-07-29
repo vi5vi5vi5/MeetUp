@@ -62,6 +62,7 @@ Item {
                 }
 
                 TapHandler {
+                    gesturePolicy: TapHandler.ReleaseWithinBounds
                     enabled: !seg.isSoon
                     onTapped: root.picked(seg.modelData.id)
                 }

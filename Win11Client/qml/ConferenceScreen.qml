@@ -118,6 +118,12 @@ Item {
     property var pinnedId: null
     function togglePin(id) { pinnedId = (pinnedId === id ? null : id) }
 
+    // Личная громкость участника по правой кнопке. Точку щелчка плитки дают в
+    // координатах сцены — переводим в свои, карточка живёт здесь.
+    function openPeerVolume(id, who, scenePos) {
+        peerVolume.popup(id, who, root.mapFromItem(null, scenePos))
+    }
+
     // Режим сцены: демонстрация экрана либо закреплённый участник. Демонстрация
     // старше — пока она идёт, крупно показываем именно её (как у веба).
     readonly property bool stageMode: screenActive || pinnedId !== null
@@ -520,6 +526,9 @@ Item {
                     cam: modelData.isSelf ? root.camOn : modelData.cam
                     avatar: modelData.isSelf ? Auth.avatarUrl : (modelData.avatarUrl || "")
                     onClicked: root.togglePin(modelData.id)
+                    onVolumeRequested: function (pos) {
+                        root.openPeerVolume(modelData.id, modelData.name, pos)
+                    }
                 }
             }
         }
@@ -563,6 +572,9 @@ Item {
                             cam: modelData.isSelf ? root.camOn : modelData.cam
                             avatar: modelData.isSelf ? Auth.avatarUrl : (modelData.avatarUrl || "")
                             onClicked: root.togglePin(modelData.id)
+                            onVolumeRequested: function (pos) {
+                                root.openPeerVolume(modelData.id, modelData.name, pos)
+                            }
                         }
                     }
                 }
@@ -600,6 +612,9 @@ Item {
                     cam: modelData.isSelf ? root.camOn : modelData.cam
                     avatar: modelData.isSelf ? Auth.avatarUrl : (modelData.avatarUrl || "")
                     onClicked: root.pinnedId = null
+                    onVolumeRequested: function (pos) {
+                        root.openPeerVolume(modelData.id, modelData.name, pos)
+                    }
                 }
             }
         }
@@ -622,7 +637,10 @@ Item {
                     color: index === root.curPage ? Theme.accent : Theme.borderStrong
                     Behavior on width { NumberAnimation { duration: Theme.durFast } }
                     HoverHandler { cursorShape: Qt.PointingHandCursor }
-                    TapHandler { onTapped: root.page = index }
+                    TapHandler {
+                        gesturePolicy: TapHandler.ReleaseWithinBounds
+                        onTapped: root.page = index
+                    }
                 }
             }
         }
@@ -857,6 +875,9 @@ Item {
             }
         }
     }
+
+    // Личная громкость участника — открывается правой кнопкой по его плитке.
+    PeerVolumePopup { id: peerVolume }
 
     // Настройки: устройства, громкость/чувствительность, качество отправки.
     SettingsModal {

@@ -1,5 +1,6 @@
 #pragma once
 #include <QObject>
+#include <QHash>
 
 class SignalingClient;
 class MediaSettings;
@@ -42,9 +43,18 @@ public:
     // читается снимок.
     qint64 playheadMs(quint32 id) const;
 
+    // Личная громкость участника, проценты 0..200 (100 — как есть). Живёт
+    // только пока идёт разговор и только у нас: наружу не уходит ничего.
+    // Хранить её между сессиями нельзя — у анонимов id меняется на каждом
+    // переподключении, и настройка досталась бы случайному человеку.
+    Q_INVOKABLE int peerVolume(qint64 id) const;
+    Q_INVOKABLE void setPeerVolume(qint64 id, int percent);
+
 signals:
     void outputMutedChanged();
     void screenAudioLiveChanged();
+    // Громкость участника изменилась — плитка обновляет свой значок.
+    void peerVolumeChanged(qint64 id, int percent);
     // Захват звука демонстрации не поднялся — QML показывает тост.
     void screenAudioError(const QString& text);
     // Голос участника не открывается нашим ключом (или открылся снова).
@@ -60,6 +70,7 @@ private:
     void updateScreenAudio();           // судья: захватывать звук машины или нет
     void pushDevices();                 // выбранные устройства -> воркеру
     void pushGains();                   // громкость/чувствительность -> воркеру
+    void forgetPeerVolumes();           // сброс личных громкостей (новая комната)
     void setScreenLive(bool on);
 
     SignalingClient* m_conf;            // не владеем
@@ -72,4 +83,5 @@ private:
     bool m_micOn = false;               // тумблер микрофона (по умолчанию выкл.)
     bool m_outputMuted = false;         // «общий звук» выключен (deafen)
     bool m_scrLive = false;             // звук демонстрации приходит
+    QHash<qint64, int> m_peerVolume;    // проценты; нет записи = 100
 };

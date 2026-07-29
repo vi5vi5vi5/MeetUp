@@ -68,6 +68,7 @@ Item {
         onActiveFocusChanged: if (!activeFocus) kb.listening = false
 
         TapHandler {
+            gesturePolicy: TapHandler.ReleaseWithinBounds
             onTapped: { kb.listening = true; box.forceActiveFocus() }
         }
         HoverHandler { cursorShape: Qt.PointingHandCursor }

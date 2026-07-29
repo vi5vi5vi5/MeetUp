@@ -88,7 +88,10 @@ AuthScaffold {
             font.pixelSize: Theme.textXs
             font.weight: Font.DemiBold
             HoverHandler { cursorShape: Qt.PointingHandCursor }
-            TapHandler { onTapped: root.signInRequested() }
+            TapHandler {
+                gesturePolicy: TapHandler.ReleaseWithinBounds
+                onTapped: root.signInRequested()
+            }
         }
     }
 

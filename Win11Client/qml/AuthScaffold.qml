@@ -75,7 +75,10 @@ Item {
                 font.pixelSize: Theme.text2xs
                 font.letterSpacing: 2
                 HoverHandler { id: hoverSignIn }
-                TapHandler { onTapped: root.signInRequested() }
+                TapHandler {
+                    gesturePolicy: TapHandler.ReleaseWithinBounds
+                    onTapped: root.signInRequested()
+                }
             }
             IconButton {
                 anchors.verticalCenter: parent.verticalCenter

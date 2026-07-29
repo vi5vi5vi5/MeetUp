@@ -22,8 +22,14 @@ Item {
     // Без этого признака чужой ключ выглядит как «выключил камеру и молчит», и
     // причину ищут где угодно, кроме настроек шифрования.
     property bool locked: false
+    // Мы убавили его до нуля личной ручкой громкости (см. PeerVolumePopup).
+    property bool mutedByMe: false
 
     signal clicked()             // клик по плитке — закрепить/отпустить
+    // Правая кнопка — личная громкость этого участника. Точка в координатах
+    // сцены: карточку показывают у курсора, а плитка своего места на экране
+    // не знает.
+    signal volumeRequested(point scenePos)
 
     // Видео рисуем, когда камера включена и кадры реально приходят.
     readonly property bool videoShown: cam && live
@@ -181,6 +187,16 @@ Item {
                     size: 13
                     color: Theme.danger
                 }
+                // Мы сами приглушили этого участника до нуля. Без пометки это
+                // ловушка: человек молчит не потому, что молчит, а потому что
+                // его выключили — и об этом забывают через минуту.
+                AppIcon {
+                    visible: root.mutedByMe
+                    anchors.verticalCenter: parent.verticalCenter
+                    name: "volume-off"
+                    size: 13
+                    color: Theme.textMuted
+                }
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
                     text: root.name + (root.isSelf ? " · вы" : "")
@@ -212,6 +228,7 @@ Item {
             // состояние, а не ждём сигнала о переходе, которого не будет.
             live = Media.isLive(pid)
             locked = Media.isLocked(pid)      // и по той же причине — замок
+            mutedByMe = Audio.peerVolume(pid) === 0
         }
     }
     Component.onDestruction: {
@@ -231,6 +248,14 @@ Item {
         gesturePolicy: TapHandler.ReleaseWithinBounds
         onTapped: root.clicked()
     }
+    // Своя плитка — не в счёт: собственный голос мы не слышим, и крутить в нём
+    // нечего.
+    TapHandler {
+        enabled: !root.isSelf && root.pid
+        acceptedButtons: Qt.RightButton
+        gesturePolicy: TapHandler.ReleaseWithinBounds
+        onTapped: function (ep) { root.volumeRequested(ep.scenePosition) }
+    }
 
     Connections {
         target: Media
@@ -239,6 +264,13 @@ Item {
         }
         function onLockedChanged(id, isLocked) {
             if (!root.isSelf && id === root.pid) root.locked = isLocked
+        }
+    }
+
+    Connections {
+        target: Audio
+        function onPeerVolumeChanged(id, percent) {
+            if (!root.isSelf && id === root.pid) root.mutedByMe = (percent === 0)
         }
     }
 }

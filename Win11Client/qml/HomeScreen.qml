@@ -61,7 +61,10 @@ Item {
             }
         }
         HoverHandler { id: hh; cursorShape: Qt.PointingHandCursor }
-        TapHandler { onTapped: triggered() }
+        TapHandler {
+            gesturePolicy: TapHandler.ReleaseWithinBounds
+            onTapped: triggered()
+        }
     }
 
     // ---------------------------------------------------------------- Top bar
@@ -143,7 +146,10 @@ Item {
                     AppIcon { anchors.verticalCenter: parent.verticalCenter; name: "more"; size: 16; color: Theme.textMuted }
                 }
                 HoverHandler { id: chipHover; cursorShape: Qt.PointingHandCursor }
-                TapHandler { onTapped: accountMenu.open() }
+                TapHandler {
+                    gesturePolicy: TapHandler.ReleaseWithinBounds
+                    onTapped: accountMenu.open()
+                }
 
                 Popup {
                     id: accountMenu
@@ -439,7 +445,10 @@ Item {
                         }
                     }
                     HoverHandler { id: emptyHover; cursorShape: Qt.PointingHandCursor }
-                    TapHandler { onTapped: createModal.open = true }
+                    TapHandler {
+                        gesturePolicy: TapHandler.ReleaseWithinBounds
+                        onTapped: createModal.open = true
+                    }
                 }
             }
 
@@ -532,7 +541,10 @@ Item {
                             font.pixelSize: Theme.textXs
                             font.weight: Font.DemiBold
                             HoverHandler { cursorShape: Qt.PointingHandCursor }
-                            TapHandler { onTapped: History.clear() }
+                            TapHandler {
+                                gesturePolicy: TapHandler.ReleaseWithinBounds
+                                onTapped: History.clear()
+                            }
                         }
                     }
                     Repeater {
@@ -580,7 +592,11 @@ Item {
                             }
 
                             HoverHandler { id: histHover; cursorShape: Qt.PointingHandCursor }
-                            TapHandler { onTapped: Rooms.enter(modelData.code, Auth.displayName) }  // доверенный вход (№2)
+                            // доверенный вход (№2)
+                            TapHandler {
+                                gesturePolicy: TapHandler.ReleaseWithinBounds
+                                onTapped: Rooms.enter(modelData.code, Auth.displayName)
+                            }
                         }
                     }
                 }
@@ -689,6 +705,7 @@ Item {
                     font.weight: Font.DemiBold
                     HoverHandler { cursorShape: Qt.PointingHandCursor }
                     TapHandler {
+                        gesturePolicy: TapHandler.ReleaseWithinBounds
                         onTapped: {
                             nameField.text = root.name
                             nameBlock.editing = true
@@ -914,7 +931,10 @@ Item {
                     font.pixelSize: Theme.textXs
                     font.weight: Font.DemiBold
                     HoverHandler { cursorShape: Qt.PointingHandCursor }
-                    TapHandler { onTapped: roomModal.showPass = !roomModal.showPass }
+                    TapHandler {
+                        gesturePolicy: TapHandler.ReleaseWithinBounds
+                        onTapped: roomModal.showPass = !roomModal.showPass
+                    }
                 }
                 AppButton {
                     text: "Изменить"; variant: "secondary"; size: "sm"
@@ -1108,7 +1128,10 @@ Item {
                                 font.pixelSize: Theme.textXs
                                 font.weight: Font.DemiBold
                                 HoverHandler { cursorShape: Qt.PointingHandCursor }
-                                TapHandler { onTapped: MyRoom.toggleAlias(aliasRow.modelData.id, !aliasRow.modelData.enabled) }
+                                TapHandler {
+                                    gesturePolicy: TapHandler.ReleaseWithinBounds
+                                    onTapped: MyRoom.toggleAlias(aliasRow.modelData.id, !aliasRow.modelData.enabled)
+                                }
                             }
                         }
                     }

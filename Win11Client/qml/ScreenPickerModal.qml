@@ -61,7 +61,10 @@ AppModal {
                     font.weight: Font.Bold
                 }
                 HoverHandler { cursorShape: Qt.PointingHandCursor }
-                TapHandler { onTapped: root.tab = modelData.idx }
+                TapHandler {
+                    gesturePolicy: TapHandler.ReleaseWithinBounds
+                    onTapped: root.tab = modelData.idx
+                }
             }
         }
     }
@@ -139,7 +142,10 @@ AppModal {
                 }
 
                 HoverHandler { cursorShape: Qt.PointingHandCursor }
-                TapHandler { onTapped: root.pick = modelData.key }
+                TapHandler {
+                    gesturePolicy: TapHandler.ReleaseWithinBounds
+                    onTapped: root.pick = modelData.key
+                }
             }
         }
     }

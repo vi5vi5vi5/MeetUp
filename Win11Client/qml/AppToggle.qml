@@ -40,6 +40,7 @@ Item {
     // звука демонстрации не поднялся — настройка вернулась в «выкл»), тумблер
     // честно отыграет назад. Стоило ему щёлкать самому — он бы врал.
     TapHandler {
+        gesturePolicy: TapHandler.ReleaseWithinBounds
         onTapped: root.toggled(!root.checked)
     }
     HoverHandler { cursorShape: Qt.PointingHandCursor }

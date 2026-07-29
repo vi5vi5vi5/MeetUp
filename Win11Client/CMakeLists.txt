@@ -1,7 +1,7 @@
 ﻿cmake_minimum_required(VERSION 3.21)
 # RC — ради resources/app.rc: значок .exe (панель задач, Alt+Tab, ярлык).
 # Без него CMake не знает, чем собирать .rc, и молча его пропустит.
-project(Win11Client VERSION 0.1 LANGUAGES CXX RC)
+project(Win11Client VERSION 1.04 LANGUAGES CXX RC)
 
 # ---- MeetUp Win11 client ----------------------------------------------------
 # Qt6/QML desktop client for the MeetUp conference server.
@@ -93,6 +93,7 @@ qt_add_qml_module(Win11Client
         qml/AuthScaffold.qml
         qml/VideoTile.qml
         qml/LockPlate.qml
+        qml/PeerVolumePopup.qml
         qml/ChatMessage.qml
         qml/ControlDock.qml
         qml/SettingsModal.qml

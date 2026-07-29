@@ -161,6 +161,15 @@ void AudioWorker::setGains(qreal volume, qreal sensitivity, qreal screenVolume) 
 
 void AudioWorker::setOutputMuted(bool muted) { m_outputMuted = muted; }
 
+void AudioWorker::setPeerGain(qint64 id, qreal gain) {
+    // 1.0 — это «как есть»: не храним, чтобы карта не росла от каждого, кого
+    // покрутили туда-обратно.
+    if (qFuzzyCompare(gain, qreal(1.0))) m_peerGain.remove(quint32(id));
+    else                                 m_peerGain[quint32(id)] = gain;
+}
+
+void AudioWorker::clearPeerGains() { m_peerGain.clear(); }
+
 // ---------- захват микрофона ----------
 
 void AudioWorker::startCapture() {
@@ -522,8 +531,8 @@ QByteArray AudioWorker::mixOneFrame() {
     // Голоса и звук демонстраций подмешиваются одинаково — разница в том, что у
     // второй полосы свои декодеры, свои буферы и своя громкость: фонограмма
     // может заглушать разговор, и убавляет её тот, кому мешает, а не ведущий.
-    mixInto(acc, m_peers, 1.0, now);
-    mixInto(acc, m_scrPeers, m_scrVolGain, now);
+    mixInto(acc, m_peers, 1.0, now, true);
+    mixInto(acc, m_scrPeers, m_scrVolGain, now, false);
 
     // Громкость воспроизведения из настроек (0..2) — на итоговый микс.
     // «Общий звук» выключен — выход в ноль, но очереди выше мы уже вычерпали:
@@ -537,8 +546,15 @@ QByteArray AudioWorker::mixOneFrame() {
     return out;
 }
 
-void AudioWorker::mixInto(qint32* acc, QHash<quint32, Peer>& peers, qreal gain, qint64 now) {
-    for (Peer& p : peers) {
+void AudioWorker::mixInto(qint32* acc, QHash<quint32, Peer>& peers, qreal gain, qint64 now,
+                          bool perPeer) {
+    for (auto it = peers.begin(); it != peers.end(); ++it) {
+        Peer& p = it.value();
+        // Личная громкость участника — множителем к полосе. Считается ЗДЕСЬ, а
+        // не в кодеке: подсветка «говорит» и часы для синхронизации губ берутся
+        // до неё, поэтому приглушённый собеседник продолжает подсвечиваться, а
+        // его видео не разъезжается со звуком.
+        const qreal g = perPeer ? gain * m_peerGain.value(it.key(), 1.0) : gain;
         if (!p.playing) {
             if (p.queue.size() >= p.prebuf) {          // предбуфер набран
                 p.playing = true;
@@ -580,7 +596,7 @@ void AudioWorker::mixInto(qint32* acc, QHash<quint32, Peer>& peers, qreal gain, 
 
         const qint16* s = reinterpret_cast<const qint16*>(chunk.constData());
         for (int i = 0; i < kFrameSamples; ++i)
-            acc[i] += qint32(s[i] * gain);             // микс = сложение волн
+            acc[i] += qint32(s[i] * g);                // микс = сложение волн
     }
 }
 

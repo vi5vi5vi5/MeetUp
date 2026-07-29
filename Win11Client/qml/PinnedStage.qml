@@ -21,6 +21,8 @@ Item {
     property bool locked: false
 
     signal clicked()
+    // Правая кнопка — личная громкость участника (см. VideoTile).
+    signal volumeRequested(point scenePos)
 
     readonly property bool videoShown: cam && live
 
@@ -156,6 +158,12 @@ Item {
     TapHandler {
         gesturePolicy: TapHandler.ReleaseWithinBounds
         onTapped: root.clicked()
+    }
+    TapHandler {
+        enabled: !root.isSelf && root.pid
+        acceptedButtons: Qt.RightButton
+        gesturePolicy: TapHandler.ReleaseWithinBounds
+        onTapped: function (ep) { root.volumeRequested(ep.scenePosition) }
     }
 
     Connections {

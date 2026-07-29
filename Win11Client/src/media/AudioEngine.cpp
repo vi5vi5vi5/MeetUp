@@ -53,6 +53,9 @@ AudioEngine::AudioEngine(SignalingClient* conf, MediaSettings* settings,
     connect(conf, &SignalingClient::left, this, &AudioEngine::onLeft);
     connect(conf, &SignalingClient::joinOk, this, [this] {
         QMetaObject::invokeMethod(m_worker, &AudioWorker::resetPeers, Qt::QueuedConnection);
+        // Личные громкости — тоже мусор: после реконнекта у анонимов новые id
+        // (§2.3), и приглушённый час назад собеседник достался бы другому.
+        forgetPeerVolumes();
         });
     connect(conf, &SignalingClient::participantLeft, this, [this](qint64 id) {
         QMetaObject::invokeMethod(m_worker, [this, id] { m_worker->dropPeer(id); },
@@ -97,6 +100,19 @@ AudioEngine::~AudioEngine() {
 
 qint64 AudioEngine::playheadMs(quint32 id) const { return m_worker->playheadMs(id); }
 
+int AudioEngine::peerVolume(qint64 id) const { return m_peerVolume.value(id, 100); }
+
+void AudioEngine::setPeerVolume(qint64 id, int percent) {
+    const int v = qBound(0, percent, 200);
+    if (peerVolume(id) == v) return;
+    if (v == 100) m_peerVolume.remove(id);
+    else          m_peerVolume[id] = v;
+    const qreal gain = v / 100.0;
+    QMetaObject::invokeMethod(m_worker, [this, id, gain] { m_worker->setPeerGain(id, gain); },
+                              Qt::QueuedConnection);
+    emit peerVolumeChanged(id, v);
+}
+
 void AudioEngine::setOutputMuted(bool muted) {
     if (m_outputMuted == muted) return;
     m_outputMuted = muted;
@@ -128,6 +144,17 @@ void AudioEngine::onLeft() {
     updateCapture();
     updatePlayback();
     updateScreenAudio();
+    forgetPeerVolumes();
+}
+
+// Сбросить личные громкости и сказать об этом плиткам: они держат своё
+// значение и сами бы о сбросе не узнали.
+void AudioEngine::forgetPeerVolumes() {
+    if (m_peerVolume.isEmpty()) return;
+    const QList<qint64> ids = m_peerVolume.keys();
+    m_peerVolume.clear();
+    QMetaObject::invokeMethod(m_worker, &AudioWorker::clearPeerGains, Qt::QueuedConnection);
+    for (qint64 id : ids) emit peerVolumeChanged(id, 100);
 }
 
 // Захват идёт <=> мы в эфире И микрофон включён. Все дороги ведут сюда.
