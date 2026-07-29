@@ -1,6 +1,7 @@
 ﻿#include "SignalingClient.h"
 #include "SignalingLink.h"
 #include "ApiClient.h"
+#include "../crypto/E2eCipher.h"
 #include <QThread>
 #include <QTimer>
 #include <QJsonDocument>
@@ -9,8 +10,8 @@
 #include <QUrl>
 #include <QDateTime>
 
-SignalingClient::SignalingClient(ApiClient* api, QObject* parent)
-    : QObject(parent), m_api(api) {
+SignalingClient::SignalingClient(ApiClient* api, E2eCipher* cipher, QObject* parent)
+    : QObject(parent), m_api(api), m_cipher(cipher) {
     // Транспорт на своём потоке: кадры звука приходят каждые 20 мс и не должны
     // ждать, пока GUI-поток закончит ресайз окна. Сюда, на GUI, возвращаются
     // только текстовые сообщения и видео — им задержка не страшна.
@@ -469,8 +470,15 @@ void SignalingClient::handleError(const QString& reason) {
 }
 
 void SignalingClient::sendChat(const QString& text) {
-    const QString t = text.trimmed();
+    QString t = text.trimmed();
     if (t.isEmpty()) return;                       // пустое/пробелы не шлём
+    // С включённым ключом сервер получает и хранит только шифротекст — для
+    // него это обычная строка сообщения.
+    if (m_cipher->active()) {
+        const QString sealed = m_cipher->sealText(t);
+        if (sealed.isEmpty()) return;              // не смогли — молчим, а не шлём открытым
+        t = sealed;
+    }
     sendJson({ {"type", "chat"}, {"text", t} });
     // В ленту НЕ добавляем — сервер вернёт это же сообщение как "chat".
 }
@@ -480,10 +488,41 @@ QVariantMap SignalingClient::makeMessage(qint64 senderId, const QString& senderN
     QVariantMap m;
     m["author"] = senderName.isEmpty() ? ("Участник " + QString::number(senderId))
         : senderName;
-    m["text"] = text;
+    // Храним строку как пришла: ключ могут ввести уже после этого сообщения,
+    // и тогда ленту перечитают (см. reReadMessages).
+    m["raw"] = text;
     m["time"] = QDateTime::fromMSecsSinceEpoch(tsMs).toString("HH:mm");
     m["self"] = (senderId == m_myId);
+    renderBody(m);
     return m;
+}
+
+// Как показать пришедшую строку: обычный текст — как есть, "🔒e2e:…" —
+// расшифрованный. Ключа нет или он чужой — честная заглушка вместо текста:
+// показать шифротекст было бы враньём, а промолчать — потерей сообщения.
+void SignalingClient::renderBody(QVariantMap& m) const {
+    const QString raw = m.value("raw").toString();
+    QString plain;
+    if (!E2eCipher::isSealedText(raw)) {
+        m["text"] = raw;
+        m["locked"] = false;
+    } else if (m_cipher->openText(raw, plain)) {
+        m["text"] = plain;
+        m["locked"] = false;
+    } else {
+        m["text"] = QString();
+        m["locked"] = true;
+    }
+}
+
+void SignalingClient::reReadMessages() {
+    if (m_messages.isEmpty()) return;
+    for (QVariant& v : m_messages) {
+        QVariantMap m = v.toMap();
+        renderBody(m);
+        v = m;
+    }
+    emit messagesChanged();
 }
 
 // Кадры от видеодвижка (он живёт на GUI-потоке). Звук сюда не заходит: у

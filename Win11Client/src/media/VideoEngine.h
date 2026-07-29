@@ -5,6 +5,7 @@
 #include <QList>
 #include <QPointer>
 #include <QRect>
+#include <QSet>
 #include <QVideoFrame>
 
 class SignalingClient;
@@ -14,6 +15,7 @@ class AudioEngine;
 class MediaStats;
 class VideoSendWorker;
 class VideoRecvWorker;
+class E2eCipher;
 class QVideoSink;
 class QVideoFrame;
 class QCamera;
@@ -39,9 +41,9 @@ class VideoEngine : public QObject {
     Q_PROPERTY(bool screenPreviewActive READ screenPreviewActive
                NOTIFY screenPreviewActiveChanged)
 public:
-    explicit VideoEngine(SignalingClient* conf, MediaSettings* settings,
-                         ScreenSources* sources, AudioEngine* audio,
-                         MediaStats* stats, QObject* parent = nullptr);
+    VideoEngine(SignalingClient* conf, MediaSettings* settings,
+                ScreenSources* sources, AudioEngine* audio, MediaStats* stats,
+                E2eCipher* cipher, QObject* parent = nullptr);
     ~VideoEngine() override;
 
     // Плитка родилась: возвращает НОМЕР привязки, который она обязана вернуть
@@ -76,6 +78,10 @@ public:
     // вопроса новая плитка сидела бы на аватарке при живом потоке кадров.
     Q_INVOKABLE bool isLive(qint64 id) const;
     Q_INVOKABLE bool isScreenLive(qint64 id) const;
+    // Кадры этого участника не открываются нашим ключом. Один ответ на все его
+    // полосы: ключ у человека один, и плитке незачем знать, на чём именно
+    // споткнулись — на голосе или на картинке.
+    Q_INVOKABLE bool isLocked(qint64 id) const;
 
     bool previewActive() const { return m_previewActive; }
     bool screenPreviewActive() const { return m_screenPreviewActive; }
@@ -83,6 +89,10 @@ public:
 signals:
     void videoChanged(qint64 id, bool active);  // картинка появилась/пропала
     void screenVideoChanged(qint64 id, bool active);
+    // «Заблокировано ключом»: у участника другой ключ E2E. Плитка по этому
+    // сигналу показывает замок вместо аватарки — иначе чужой ключ выглядит
+    // как «выключил камеру и молчит», и человек ищет проблему не там.
+    void lockedChanged(qint64 id, bool locked);
     void previewActiveChanged();
     void screenPreviewActiveChanged();
     // Захват экрана не поднялся или окно закрыли — QML показывает уведомление.
@@ -136,6 +146,8 @@ private:
     void dropPeer(QHash<quint32, Peer>& peers, quint32 id, bool screen);
     // Плитка появилась/пропала — воркеру: декодировать в никуда незачем.
     void tellWanted(bool screen, quint32 sender, bool wanted);
+    // Свести «замки» полос в одно состояние участника.
+    void noteLocked(qint64 id, bool locked, bool fromAudio);
 
     // ---- отправка ----
     void onPhase();
@@ -182,6 +194,13 @@ private:
     VideoRecvWorker* m_recv = nullptr;         // камеры участников
     QThread* m_scrRecvThread = nullptr;
     VideoRecvWorker* m_scrRecv = nullptr;      // чужая демонстрация
+
+    // Кто сейчас «заперт» чужим ключом. Два множества, а не одно: голос и
+    // картинка спотыкаются в разные моменты (у каждого свой счётчик неудач), и
+    // без разделения та полоса, что открылась первой, снимала бы замок за обе.
+    // Камера и экран делят второе множество осознанно: ключ у клиента один, и
+    // разойтись эти полосы не могут.
+    QSet<qint64> m_lockedAudio, m_lockedVideo;
 
     // отправка
     QCamera* m_camera = nullptr;

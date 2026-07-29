@@ -18,6 +18,10 @@ Item {
     property bool isSelf: false
     property var pid: 0          // id участника — ключ привязки к Media
     property bool live: false    // Media сообщил: картинка реально идёт
+    // У участника другой ключ E2E: его кадры к нам приходят, но не открываются.
+    // Без этого признака чужой ключ выглядит как «выключил камеру и молчит», и
+    // причину ищут где угодно, кроме настроек шифрования.
+    property bool locked: false
 
     signal clicked()             // клик по плитке — закрепить/отпустить
 
@@ -98,6 +102,14 @@ Item {
             layer.enabled: true
             visible: false
             Rectangle { anchors.fill: parent; radius: Theme.radiusLg; color: "white" }
+        }
+
+        // Заслонка поверх картинки и аватарки: под чужим ключом показывать
+        // нечего, а застывший последний кадр был бы прямым враньём. Рамка и
+        // чип с именем остаются сверху — кто это, знать по-прежнему полезно.
+        LockPlate {
+            visible: root.locked
+            anchors.fill: parent
         }
 
         // Рамка и подсветка «говорит» — поверх видео, иначе их не видно.
@@ -199,6 +211,7 @@ Item {
             // QML пересобирается целиком на каждый чужой mute) — спрашиваем
             // состояние, а не ждём сигнала о переходе, которого не будет.
             live = Media.isLive(pid)
+            locked = Media.isLocked(pid)      // и по той же причине — замок
         }
     }
     Component.onDestruction: {
@@ -208,12 +221,24 @@ Item {
     }
 
     HoverHandler { cursorShape: Qt.PointingHandCursor }
-    TapHandler { onTapped: root.clicked() }
+    // gesturePolicy обязателен. По умолчанию TapHandler берёт ПАССИВНЫЙ захват:
+    // он продолжает слышать отпускание даже после того, как нажатие съел кто-то
+    // сверху. Из-за этого клики по модалке настроек доходили до плитки под ней,
+    // и переключение разделов закрепляло случайного участника.
+    // ReleaseWithinBounds берёт захват исключительный — до плитки доходит
+    // только то, что предназначено ей.
+    TapHandler {
+        gesturePolicy: TapHandler.ReleaseWithinBounds
+        onTapped: root.clicked()
+    }
 
     Connections {
         target: Media
         function onVideoChanged(id, active) {
             if (!root.isSelf && id === root.pid) root.live = active
+        }
+        function onLockedChanged(id, isLocked) {
+            if (!root.isSelf && id === root.pid) root.locked = isLocked
         }
     }
 }

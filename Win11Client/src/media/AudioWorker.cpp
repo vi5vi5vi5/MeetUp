@@ -1,6 +1,7 @@
 #include "AudioWorker.h"
 #include "ScreenAudioCapture.h"
 #include "../net/Protocol.h"
+#include "../crypto/E2eCipher.h"
 #include <QAudioSource>
 #include <QAudioSink>
 #include <QAudioFormat>
@@ -43,7 +44,8 @@ static QAudioFormat confFormat() {
     return f;
 }
 
-AudioWorker::AudioWorker(QObject* parent) : QObject(parent) {}
+AudioWorker::AudioWorker(E2eCipher* cipher, QObject* parent)
+    : QObject(parent), m_cipher(cipher) {}
 
 AudioWorker::~AudioWorker() { shutdown(); }
 
@@ -254,12 +256,22 @@ void AudioWorker::onCaptured() {
         m_pcm.remove(0, kFrameBytes);
         if (bytes <= 0) { qWarning() << "AudioWorker: opus_encode =" << bytes; continue; }
 
-        // Заголовок: тип AUDIO_CODED, без флагов, кодек OPUS, часы — мс эпохи
+        // Шифруется только payload: заголовок сервер обязан читать, чтобы
+        // понять, кому релеить полосу. Не смогли запечатать — молчим: отдать
+        // голос открытым при включённом шифровании хуже, чем не отдать вовсе.
+        QByteArray body(reinterpret_cast<const char*>(packet), bytes);
+        quint8 flags = 0;
+        if (m_cipher->active()) {
+            body = m_cipher->seal(Proto::AUDIO_CODED, Proto::CODEC_OPUS, body);
+            if (body.isEmpty()) { m_audioClockMs += kFrameMs; continue; }
+            flags = Proto::FLAG_ENCRYPTED;
+        }
+
+        // Заголовок: тип AUDIO_CODED, кодек OPUS, часы — мс эпохи
         // (общая шкала аудио/видео — §5.3, не выдумывать свою!).
         const QByteArray frame = Proto::pack(
-            Proto::AUDIO_CODED, 0, Proto::CODEC_OPUS,
-            quint64(m_audioClockMs),
-            QByteArray(reinterpret_cast<const char*>(packet), bytes));
+            Proto::AUDIO_CODED, flags, Proto::CODEC_OPUS,
+            quint64(m_audioClockMs), body);
         emit packetReady(frame);
         emit txAudio(false, frame.size());
         m_audioClockMs += kFrameMs;   // следующий кадр — ровно на 20 мс позже
@@ -313,9 +325,16 @@ void AudioWorker::onScreenPcm(const QByteArray& pcm, qint64 wallMs) {
                                   packet, int(sizeof(packet)));
     if (bytes <= 0) { qWarning() << "AudioWorker: opus_encode (экран) =" << bytes; return; }
 
+    QByteArray body(reinterpret_cast<const char*>(packet), bytes);
+    quint8 flags = 0;
+    if (m_cipher->active()) {                       // см. onCaptured
+        body = m_cipher->seal(Proto::SCREEN_AUDIO, Proto::CODEC_OPUS, body);
+        if (body.isEmpty()) { m_scrClockMs += kFrameMs; return; }
+        flags = Proto::FLAG_ENCRYPTED;
+    }
+
     const QByteArray frame = Proto::pack(
-        Proto::SCREEN_AUDIO, 0, Proto::CODEC_OPUS, quint64(m_scrClockMs),
-        QByteArray(reinterpret_cast<const char*>(packet), bytes));
+        Proto::SCREEN_AUDIO, flags, Proto::CODEC_OPUS, quint64(m_scrClockMs), body);
     emit packetReady(frame);
     emit txAudio(true, frame.size());   // цена демонстрации — вместе со звуком
     m_scrClockMs += kFrameMs;
@@ -354,9 +373,19 @@ void AudioWorker::stopPlayback() {
 }
 
 void AudioWorker::destroyPeers(QHash<quint32, Peer>& peers) {
-    for (Peer& p : peers)
-        if (p.dec) opus_decoder_destroy(p.dec);
+    for (auto it = peers.begin(); it != peers.end(); ++it) {
+        if (it->dec) opus_decoder_destroy(it->dec);
+        // Замок снимаем явно: участник мог уйти запертым, а его плитка в
+        // интерфейсе живёт своей жизнью и сама об этом не узнает.
+        setLocked(*it, it.key(), false);
+    }
     peers.clear();
+}
+
+void AudioWorker::setLocked(Peer& p, quint32 sender, bool locked) {
+    if (p.locked == locked) return;
+    p.locked = locked;
+    emit peerLocked(qint64(sender), locked);
 }
 
 // Каждый join_ok — в т.ч. РЕКОННЕКТ: всё накопленное до обрыва — мусор,
@@ -374,11 +403,13 @@ void AudioWorker::dropPeer(qint64 id) {
     auto it = m_peers.find(key);
     if (it != m_peers.end()) {
         if (it->dec) opus_decoder_destroy(it->dec);
+        setLocked(*it, key, false);
         m_peers.erase(it);
     }
     auto sit = m_scrPeers.find(key);
     if (sit != m_scrPeers.end()) {
         if (sit->dec) opus_decoder_destroy(sit->dec);
+        setLocked(*sit, key, false);
         m_scrPeers.erase(sit);
     }
     forgetPlayhead(key);
@@ -393,11 +424,26 @@ void AudioWorker::onFrame(const QByteArray& d) {
     const bool isScreen = (f.type == Proto::SCREEN_AUDIO);
     if (f.type != Proto::AUDIO_CODED && !isScreen) return;
     if (f.codec != Proto::CODEC_OPUS) return;         // незнакомый кодек — молча мимо
-    if (f.flags & Proto::FLAG_ENCRYPTED) return;      // E2E (M5): тишина честнее каши
     if (!m_out) return;                               // не играем — не тратим CPU
 
     QHash<quint32, Peer>& peers = isScreen ? m_scrPeers : m_peers;
     Peer& p = peers[f.sender];                        // operator[] создаст пустого
+
+    // Сквозное шифрование. Не открылось — у собеседника другой ключ (или его
+    // нет вовсе): три кадра подряд, и об этом говорим наверх, чтобы человек
+    // видел причину тишины, а не гадал. Кадр без флага — просто открытый:
+    // собеседник вещает без шифрования, и «замок» тут ни при чём.
+    if (f.flags & Proto::FLAG_ENCRYPTED) {
+        const QByteArray plain = m_cipher->open(f.type, f.codec, f.payload);
+        if (plain.isEmpty()) {
+            if (++p.cryptoFails >= 3) setLocked(p, f.sender, true);
+            return;
+        }
+        f.payload = plain;
+    }
+    p.cryptoFails = 0;
+    setLocked(p, f.sender, false);
+
     if (!p.dec) {
         int err = 0;
         p.dec = opus_decoder_create(kRate, 1, &err);

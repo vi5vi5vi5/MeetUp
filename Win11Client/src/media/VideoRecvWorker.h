@@ -5,6 +5,7 @@
 #include <QVideoFrame>
 
 class VideoDecoder;
+class E2eCipher;
 class QTimer;
 struct SwsContext;
 struct AVFrame;
@@ -28,8 +29,8 @@ public:
     // codedType/jpegType — типы кадров ЭТОЙ полосы в заголовке v2
     // (VIDEO_CODED/VIDEO_JPEG у камеры, SCREEN_* у демонстрации). Всё
     // остальное воркер пропускает мимо: транспорт вещает обе полосы обоим.
-    explicit VideoRecvWorker(quint8 codedType, quint8 jpegType,
-                             QObject* parent = nullptr);
+    VideoRecvWorker(quint8 codedType, quint8 jpegType, E2eCipher* cipher,
+                    QObject* parent = nullptr);
     ~VideoRecvWorker() override;
 
 public slots:
@@ -53,6 +54,9 @@ signals:
     // флага — по нему плитка при рождении решает, показывать ли аватарку
     // вместо застывшего кадра.
     void awaitKeyChanged(quint32 sender, bool awaiting);
+    // Кадры участника не открываются нашим ключом (или открылись снова).
+    // Только на переходах — см. AudioWorker::peerLocked.
+    void peerLocked(qint64 id, bool locked);
 
 private:
     // Приёмная сторона одного отправителя.
@@ -62,6 +66,8 @@ private:
         bool awaitKey = true;          // дельты без опорного кадра — мусор
         bool wanted = false;           // плитка есть и ждёт кадры
         qint64 lastAt = 0;             // когда декодировали последний кадр
+        int cryptoFails = 0;           // подряд не открывшихся кадров
+        bool locked = false;           // …и вывод: у него другой ключ
     };
 
     void routeCoded(quint32 sender, quint8 flags, quint8 codec, quint64 ts,
@@ -69,11 +75,16 @@ private:
     void emitJpeg(quint32 sender, const QByteArray& jpeg, qint64 tsMs);
     QVideoFrame convert(Peer& p, const AVFrame* f);
     void setAwaitKey(Peer& p, quint32 sender, bool awaiting);
+    void setLocked(Peer& p, quint32 sender, bool locked);
     void dropDecoder(Peer& p);
     void sweep();                      // осиротевшие декодеры — не навсегда
+    // Снять шифрование с payload. false — кадр не наш (чужой ключ): счётчик
+    // подрос, а на трёх подряд плитка получит «замок».
+    bool unseal(Peer& p, quint32 sender, quint8 type, quint8 codec, QByteArray& payload);
 
     quint8 m_codedType;
     quint8 m_jpegType;
+    E2eCipher* m_cipher;               // не владеем: общий на все потоки медиа
     QHash<quint32, Peer> m_peers;      // ключ — sender из заголовка кадра
     QTimer* m_sweepTimer = nullptr;
 };

@@ -14,6 +14,8 @@ Item {
     property bool isSelf: false
     property string sharerName: ""
     property bool live: false    // кадры реально идут
+    // Поток ведущего не открывается нашим ключом (см. LockPlate).
+    property bool locked: false
     property bool expanded: false   // сцена развёрнута на весь экран
 
     // Развернуть/свернуть показ. Разворачивает не плитку, а весь экран — этим
@@ -65,9 +67,19 @@ Item {
             border.color: Theme.border
         }
 
+        // Демонстрация зашифрована чужим ключом. Заслонка обязательна: без неё
+        // сцена просто замирала на последнем открытом кадре, а потом сама
+        // гасла — и вместо причины человек читал «Демонстрация начинается…»,
+        // хотя она уже идёт и начаться для него не может.
+        LockPlate {
+            visible: root.locked
+            anchors.fill: parent
+        }
+
         // Пока кадров нет: ведущий уже закреплён, но опорный кадр ещё в пути.
+        // Под заслонкой это сообщение бессмысленно — там ждать нечего.
         Text {
-            visible: !root.live
+            visible: !root.live && !root.locked
             anchors.centerIn: parent
             text: "Демонстрация начинается…"
             color: Theme.textMuted
@@ -245,6 +257,7 @@ Item {
             root._tok = Media.attachScreen(root.sid, out.videoSink)
             root._boundId = root.sid
             root.live = Media.isScreenLive(root.sid)   // см. VideoTile
+            root.locked = Media.isLocked(root.sid)     // …и по той же причине
         }
     }
     function unbind() {
@@ -255,6 +268,7 @@ Item {
         root._boundId = 0
         root._tok = 0
         root.live = false
+        root.locked = false
     }
 
     onSidChanged: { unbind(); bind() }
@@ -266,6 +280,9 @@ Item {
         target: Media
         function onScreenVideoChanged(id, active) {
             if (!root.isSelf && id === root.sid) root.live = active
+        }
+        function onLockedChanged(id, isLocked) {
+            if (!root.isSelf && id === root.sid) root.locked = isLocked
         }
     }
 }

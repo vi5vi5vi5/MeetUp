@@ -1,6 +1,7 @@
 #include "VideoRecvWorker.h"
 #include "VideoDecoder.h"
 #include "../net/Protocol.h"
+#include "../crypto/E2eCipher.h"
 #include <QVideoFrameFormat>
 #include <QImage>
 #include <QTimer>
@@ -12,8 +13,9 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
-VideoRecvWorker::VideoRecvWorker(quint8 codedType, quint8 jpegType, QObject* parent)
-    : QObject(parent), m_codedType(codedType), m_jpegType(jpegType) {}
+VideoRecvWorker::VideoRecvWorker(quint8 codedType, quint8 jpegType, E2eCipher* cipher,
+                                 QObject* parent)
+    : QObject(parent), m_codedType(codedType), m_jpegType(jpegType), m_cipher(cipher) {}
 
 VideoRecvWorker::~VideoRecvWorker() { shutdown(); }
 
@@ -38,7 +40,12 @@ void VideoRecvWorker::dropDecoder(Peer& p) {
 }
 
 void VideoRecvWorker::reset() {
-    for (Peer& p : m_peers) dropDecoder(p);
+    for (auto it = m_peers.begin(); it != m_peers.end(); ++it) {
+        dropDecoder(*it);
+        // Замок снимаем явно: плитка в интерфейсе переживёт этот сброс и сама
+        // о нём не узнает.
+        setLocked(*it, it.key(), false);
+    }
     m_peers.clear();
 }
 
@@ -46,6 +53,7 @@ void VideoRecvWorker::dropPeer(quint32 sender) {
     auto it = m_peers.find(sender);
     if (it == m_peers.end()) return;
     dropDecoder(*it);
+    setLocked(*it, sender, false);
     m_peers.erase(it);
 }
 
@@ -93,17 +101,48 @@ void VideoRecvWorker::onFrame(const QByteArray& d) {
     if (!Proto::unpack(d, f)) return;              // мусор короче заголовка
 
     if (f.type == m_jpegType) {
-        if (f.flags & Proto::FLAG_ENCRYPTED) return;   // legacy без WebCodecs
+        Peer& p = m_peers[f.sender];
+        if ((f.flags & Proto::FLAG_ENCRYPTED)
+            && !unseal(p, f.sender, f.type, f.codec, f.payload)) return;
         emitJpeg(f.sender, f.payload, qint64(f.ts));
         return;
     }
     if (f.type != m_codedType) return;
-
-    if (f.flags & Proto::FLAG_ENCRYPTED) return;   // E2E — M5
     if (f.codec != Proto::CODEC_H264 && f.codec != Proto::CODEC_VP8 &&
         f.codec != Proto::CODEC_VP9) return;       // незнакомое — молча мимо
 
+    // Расшифровываем ДО декодера: он должен получить те же байты, что вышли из
+    // кодера отправителя, иначе поток для него — мусор.
+    Peer& p = m_peers[f.sender];
+    if ((f.flags & Proto::FLAG_ENCRYPTED)
+        && !unseal(p, f.sender, f.type, f.codec, f.payload)) return;
+
     routeCoded(f.sender, f.flags, f.codec, f.ts, f.payload);
+}
+
+// Кадр не открылся — у собеседника другой ключ или его нет. Один такой кадр
+// ещё ничего не значит (мог прилететь хвост со старым ключом), а три подряд —
+// уже состояние, и о нём нужно сказать человеку.
+bool VideoRecvWorker::unseal(Peer& p, quint32 sender, quint8 type, quint8 codec,
+                             QByteArray& payload) {
+    const QByteArray plain = m_cipher->open(type, codec, payload);
+    if (plain.isEmpty()) {
+        if (++p.cryptoFails >= 3) {
+            setLocked(p, sender, true);
+            setAwaitKey(p, sender, true);   // поток для нас прерван
+        }
+        return false;
+    }
+    p.cryptoFails = 0;
+    setLocked(p, sender, false);
+    payload = plain;
+    return true;
+}
+
+void VideoRecvWorker::setLocked(Peer& p, quint32 sender, bool locked) {
+    if (p.locked == locked) return;
+    p.locked = locked;
+    emit peerLocked(qint64(sender), locked);
 }
 
 void VideoRecvWorker::routeCoded(quint32 sender, quint8 flags, quint8 codec,

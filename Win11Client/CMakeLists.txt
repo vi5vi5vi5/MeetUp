@@ -52,6 +52,8 @@ qt_add_executable(Win11Client
     src/media/ScreenCursor.cpp
     src/media/VideoEngine.cpp
     src/media/MediaStats.cpp
+    src/crypto/E2eCipher.cpp
+    src/crypto/E2eController.cpp
     # Значок приложения. В qrc он НЕ нужен: ресурс Windows и ресурс Qt — разные
     # механизмы, класть .ico в оба означало бы носить его дважды.
     resources/app.rc
@@ -90,6 +92,7 @@ qt_add_qml_module(Win11Client
         qml/LinkBar.qml
         qml/AuthScaffold.qml
         qml/VideoTile.qml
+        qml/LockPlate.qml
         qml/ChatMessage.qml
         qml/ControlDock.qml
         qml/SettingsModal.qml
@@ -177,8 +180,10 @@ if(WIN32)
     # dwmapi — проверка «окно скрыто композитором» (свёрнутые UWP-призраки);
     # user32/gdi32 — PrintWindow и DIB для миниатюр окон;
     # mmdevapi/ole32 — ActivateAudioInterfaceAsync и COM для захвата звука
-    # приложений (process loopback, см. ScreenAudioCapture).
-    target_link_libraries(Win11Client PRIVATE dwmapi user32 gdi32 mmdevapi ole32)
+    # приложений (process loopback, см. ScreenAudioCapture);
+    # bcrypt — AES-256-GCM и PBKDF2 для сквозного шифрования (CNG есть в самой
+    # Windows, поэтому OpenSSL в дистрибутив не едет, см. src/crypto).
+    target_link_libraries(Win11Client PRIVATE dwmapi user32 gdi32 mmdevapi ole32 bcrypt)
 endif()
 
 # FFmpeg из vcpkg не даёт CMake-целей — только переменные Find-модуля.

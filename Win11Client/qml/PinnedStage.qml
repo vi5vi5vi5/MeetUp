@@ -17,6 +17,8 @@ Item {
     property bool isSelf: false
     property bool cam: true
     property bool live: false
+    // Поток участника не открывается нашим ключом (см. LockPlate).
+    property bool locked: false
 
     signal clicked()
 
@@ -71,13 +73,20 @@ Item {
             size: Math.max(72, Math.min(168, parent.width * 0.20))
         }
         Text {
-            visible: !root.videoShown && root.avatar === ""
+            // Под заслонкой это сообщение только путало бы: камера тут ни при
+            // чём, и «подключаем» ничего не подключит.
+            visible: !root.videoShown && root.avatar === "" && !root.locked
             anchors.centerIn: parent
             text: root.cam && !root.isSelf ? "Подключаем камеру…" : "Камера выключена"
             color: Theme.textMuted
             font.family: Theme.uiFont
             font.pixelSize: Theme.textSm
             font.weight: Font.Medium
+        }
+
+        LockPlate {
+            visible: root.locked
+            anchors.fill: parent
         }
 
         // Рамка — поверх видео (дети рисуются над отрисовкой самого Rectangle).
@@ -132,6 +141,7 @@ Item {
             _pid = pid
             _tok = Media.attach(pid, out.videoSink)
             live = Media.isLive(pid)   // см. VideoTile: сигнал даёт только переход
+            locked = Media.isLocked(pid)
         }
     }
     Component.onDestruction: {
@@ -141,12 +151,20 @@ Item {
     }
 
     HoverHandler { cursorShape: Qt.PointingHandCursor }
-    TapHandler { onTapped: root.clicked() }
+    // Исключительный захват — см. VideoTile: без него клики по модалке
+    // настроек доходили бы до сцены под ней.
+    TapHandler {
+        gesturePolicy: TapHandler.ReleaseWithinBounds
+        onTapped: root.clicked()
+    }
 
     Connections {
         target: Media
         function onVideoChanged(id, active) {
             if (!root.isSelf && id === root.pid) root.live = active
+        }
+        function onLockedChanged(id, isLocked) {
+            if (!root.isSelf && id === root.pid) root.locked = isLocked
         }
     }
 }

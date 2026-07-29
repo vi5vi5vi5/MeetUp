@@ -21,6 +21,8 @@
 #include "media/AudioEngine.h"
 #include "media/VideoEngine.h"
 #include "media/MediaStats.h"
+#include "crypto/E2eCipher.h"
+#include "crypto/E2eController.h"
 
 int main(int argc, char *argv[])
 {
@@ -46,7 +48,10 @@ int main(int argc, char *argv[])
     ApiClient api;
     AuthController auth(&api);
     RoomController rooms(&api);
-    SignalingClient conf(&api);
+    // Ключ комнаты. Объявлен раньше всех, кто шифрует: один на приложение и
+    // потокобезопасен — им пользуются сразу пять потоков медиа.
+    E2eCipher cipher;
+    SignalingClient conf(&api, &cipher);
     PersonalRoomController myRoom(&api);   // тот же api -> та же сессия
     SysBridge sys(&api);                   // буфер обмена + ссылки
     // Ссылка-приглашение целиком: код комнаты, ключ E2E и смена сервера.
@@ -57,8 +62,10 @@ int main(int argc, char *argv[])
     ScreenSources screens;                 // мониторы и окна для демонстрации
     GlobalHotkeys hotkeys(&av);            // системные бинды (работают вне фокуса)
     MediaStats stats(&conf);               // счётчики для раздела «Диагностика»
-    AudioEngine audio(&conf, &av, &stats);
-    VideoEngine video(&conf, &av, &screens, &audio, &stats);   // audio даёт часы звука
+    AudioEngine audio(&conf, &av, &stats, &cipher);
+    // audio даёт часы звука (синхронизация губ) и «замки» голосовой полосы
+    VideoEngine video(&conf, &av, &screens, &audio, &stats, &cipher);
+    E2eController crypto(&cipher, &conf, &link, &sys);   // ключ: фраза и ссылка
 
     // Движок QML объявлен ПОСЛЕ screens: провайдер миниатюр принадлежит
     // движку и держит указатель на screens, а разрушается движок первым.
@@ -82,6 +89,8 @@ int main(int argc, char *argv[])
     // Числа для раздела «Диагностика» — Stats.
     engine.rootContext()->setContextProperty("Stats", &stats);
     engine.rootContext()->setContextProperty("Hotkeys", &hotkeys);
+    // Сквозное шифрование: фраза-ключ, ссылка с ключом — Crypto.
+    engine.rootContext()->setContextProperty("Crypto", &crypto);
 
     
 

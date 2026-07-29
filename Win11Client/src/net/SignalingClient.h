@@ -6,6 +6,7 @@
 
 class ApiClient;
 class SignalingLink;
+class E2eCipher;
 class QThread;
 class QTimer;
 
@@ -35,10 +36,16 @@ class SignalingClient : public QObject {
         // Время до сервера и обратно, мс. -1 — ещё не мерили (или связи нет).
         Q_PROPERTY(int          ping         READ ping         NOTIFY pingChanged)
 public:
-    explicit SignalingClient(ApiClient* api, QObject* parent = nullptr);
+    SignalingClient(ApiClient* api, E2eCipher* cipher, QObject* parent = nullptr);
     ~SignalingClient() override;
 
     QString phase() const { return m_phase; }
+    // Код комнаты — соль ключа E2E (см. E2eCipher::deriveKey).
+    QString roomCode() const { return m_roomCode; }
+    // Перечитать ленту чата новым ключом: сообщения хранятся как пришли, и
+    // введённая посреди разговора фраза обязана расшифровать уже показанное —
+    // иначе половина переписки навсегда останется замочками.
+    void reReadMessages();
     QString errorText() const { return m_errorText; }
     QString roomTitle() const { return m_roomTitle; }
     bool reconnecting() const { return m_reconnecting; }
@@ -121,12 +128,14 @@ private:
     void sweepSpeaking();               // снять подсветку с отговоривших
     QVariantMap makeMessage(qint64 senderId, const QString& senderName,
         const QString& text, qint64 tsMs);
+    void renderBody(QVariantMap& m) const;   // raw -> text/locked текущим ключом
     void setPhase(const QString& p);
     void setError(const QString& t);
     void fatal(const QString& t);
 
 
     ApiClient* m_api;
+    E2eCipher* m_cipher;                // не владеем: общий на всё приложение
     QThread* m_netThread = nullptr;     // поток транспорта
     SignalingLink* m_link = nullptr;    // живёт на m_netThread
     QTimer* m_reconnectTimer = nullptr;

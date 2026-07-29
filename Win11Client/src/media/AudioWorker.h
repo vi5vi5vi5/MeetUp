@@ -11,6 +11,7 @@ class QAudioSource;
 class QIODevice;
 class QTimer;
 class ScreenAudioCapture;
+class E2eCipher;
 struct OpusEncoder;   // C-структуры из opus.h — вперёд объявляются как struct
 struct OpusDecoder;
 
@@ -31,7 +32,9 @@ struct OpusDecoder;
 class AudioWorker : public QObject {
     Q_OBJECT
 public:
-    explicit AudioWorker(QObject* parent = nullptr);
+    // cipher — общий на всё приложение и потокобезопасен; пустой ключ означает
+    // «шифрование выключено», и тракт работает как раньше.
+    explicit AudioWorker(E2eCipher* cipher, QObject* parent = nullptr);
     ~AudioWorker() override;
 
     // Где сейчас «играющий» звук участника в шкале часов ОТПРАВИТЕЛЯ (мс):
@@ -68,6 +71,9 @@ signals:
     void speaking(qint64 id);                    // говорит участник
     void screenLive(bool on);                    // звук демонстрации идёт
     void screenFailed(const QString& text);      // захват звука машины не поднялся
+    // Кадры участника не открываются нашим ключом (или открылись снова).
+    // Сигнал только на переходах: на каждый кадр будить GUI незачем.
+    void peerLocked(qint64 id, bool locked);
 
 private:
     // Приёмная сторона одного участника: декодер + джиттер-буфер.
@@ -84,6 +90,8 @@ private:
         int prebuf = 3;             // кадров копим перед стартом (60 мс)
         int plcRun = 0;             // подряд синтезированных кадров (PLC)
         qint64 calmSince = 0;       // играем без провалов с этого момента
+        int cryptoFails = 0;        // подряд не открывшихся кадров
+        bool locked = false;        // …и вывод: у него другой ключ
     };
 
     // Часы звука наружу: то, что VideoEngine читает с GUI-потока.
@@ -109,7 +117,9 @@ private:
     void forgetPlayhead(quint32 id);
     void setScreenLive(bool on);
     void destroyPeers(QHash<quint32, Peer>& peers);
+    void setLocked(Peer& p, quint32 sender, bool locked);
 
+    E2eCipher* m_cipher;                // не владеем: общий на все потоки медиа
     QAudioDevice m_inDev, m_outDev;
     bool m_comReady = false;            // COM на этом потоке подняли мы
     bool m_wantCapture = false, m_wantPlayback = false, m_wantScreenAudio = false;

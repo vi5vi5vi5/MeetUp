@@ -32,7 +32,7 @@ static const qint64 kMaxBufferedScreen = 350000;
 
 VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
                          ScreenSources* sources, AudioEngine* audio,
-                         MediaStats* stats, QObject* parent)
+                         MediaStats* stats, E2eCipher* cipher, QObject* parent)
     : QObject(parent), m_conf(conf), m_settings(settings), m_sources(sources),
       m_audio(audio), m_stats(stats)
 {
@@ -45,8 +45,8 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
     m_recvThread->setObjectName("video-decode");
     m_scrRecvThread = new QThread(this);
     m_scrRecvThread->setObjectName("screen-decode");
-    m_recv = new VideoRecvWorker(Proto::VIDEO_CODED, Proto::VIDEO_JPEG);
-    m_scrRecv = new VideoRecvWorker(Proto::SCREEN_CODED, Proto::SCREEN_JPEG);
+    m_recv = new VideoRecvWorker(Proto::VIDEO_CODED, Proto::VIDEO_JPEG, cipher);
+    m_scrRecv = new VideoRecvWorker(Proto::SCREEN_CODED, Proto::SCREEN_JPEG, cipher);
     m_recv->moveToThread(m_recvThread);
     m_scrRecv->moveToThread(m_scrRecvThread);
     connect(m_recvThread, &QThread::finished, m_recv, &QObject::deleteLater);
@@ -71,6 +71,14 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
             [this](quint32 sender, bool awaiting) { m_peers[sender].awaitKey = awaiting; });
     connect(m_scrRecv, &VideoRecvWorker::awaitKeyChanged, this,
             [this](quint32 sender, bool awaiting) { m_screenPeers[sender].awaitKey = awaiting; });
+    // «Замок» участника один на все его полосы: сводим сюда голос и картинку.
+    connect(m_recv, &VideoRecvWorker::peerLocked, this,
+            [this](qint64 id, bool locked) { noteLocked(id, locked, false); });
+    connect(m_scrRecv, &VideoRecvWorker::peerLocked, this,
+            [this](qint64 id, bool locked) { noteLocked(id, locked, false); });
+    if (audio)
+        connect(audio, &AudioEngine::peerLocked, this,
+                [this](qint64 id, bool locked) { noteLocked(id, locked, true); });
     m_recvThread->start();
     m_scrRecvThread->start();
     QMetaObject::invokeMethod(m_recv, &VideoRecvWorker::init, Qt::QueuedConnection);
@@ -108,8 +116,8 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
     m_encThread->setObjectName("video-encode");
     m_scrThread = new QThread(this);
     m_scrThread->setObjectName("screen-encode");
-    m_worker = new VideoSendWorker(Proto::VIDEO_CODED);   // без parent: свой поток
-    m_scrWorker = new VideoSendWorker(Proto::SCREEN_CODED);
+    m_worker = new VideoSendWorker(Proto::VIDEO_CODED, cipher);   // без parent: свой поток
+    m_scrWorker = new VideoSendWorker(Proto::SCREEN_CODED, cipher);
     m_worker->moveToThread(m_encThread);
     m_scrWorker->moveToThread(m_scrThread);
     connect(m_encThread, &QThread::finished, m_worker, &QObject::deleteLater);
@@ -244,6 +252,21 @@ bool VideoEngine::isLive(qint64 id) const {
 bool VideoEngine::isScreenLive(qint64 id) const {
     const auto it = m_screenPeers.constFind(quint32(id));
     return it != m_screenPeers.constEnd() && it->active;
+}
+
+bool VideoEngine::isLocked(qint64 id) const {
+    return m_lockedAudio.contains(id) || m_lockedVideo.contains(id);
+}
+
+// Заперт участник или нет — вопрос про человека, а не про полосу: сигнал
+// наружу уходит, только когда меняется общий ответ.
+void VideoEngine::noteLocked(qint64 id, bool locked, bool fromAudio) {
+    QSet<qint64>& set = fromAudio ? m_lockedAudio : m_lockedVideo;
+    const bool was = isLocked(id);
+    if (locked) set.insert(id);
+    else        set.remove(id);
+    const bool now = isLocked(id);
+    if (was != now) emit lockedChanged(id, now);
 }
 
 int VideoEngine::attachPreview(QVideoSink* sink) {

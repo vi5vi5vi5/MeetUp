@@ -5,6 +5,7 @@ class SignalingClient;
 class MediaSettings;
 class MediaStats;
 class AudioWorker;
+class E2eCipher;
 class QThread;
 
 // Аудиодвижок конференции: микрофон -> Opus -> пакеты и приём (декодеры,
@@ -28,8 +29,8 @@ class AudioEngine : public QObject {
     // не управляет, — это обещание звука, которого нет.
     Q_PROPERTY(bool screenAudioLive READ screenAudioLive NOTIFY screenAudioLiveChanged)
 public:
-    explicit AudioEngine(SignalingClient* conf, MediaSettings* settings,
-                         MediaStats* stats, QObject* parent = nullptr);
+    AudioEngine(SignalingClient* conf, MediaSettings* settings, MediaStats* stats,
+                E2eCipher* cipher, QObject* parent = nullptr);
     ~AudioEngine() override;
 
     bool outputMuted() const { return m_outputMuted; }
@@ -46,6 +47,9 @@ signals:
     void screenAudioLiveChanged();
     // Захват звука демонстрации не поднялся — QML показывает тост.
     void screenAudioError(const QString& text);
+    // Голос участника не открывается нашим ключом (или открылся снова).
+    // Слушает VideoEngine: «замок» на плитке один на все полосы участника.
+    void peerLocked(qint64 id, bool locked);
 
 private:
     void onPhase();                     // фаза сменилась: live <-> остальные

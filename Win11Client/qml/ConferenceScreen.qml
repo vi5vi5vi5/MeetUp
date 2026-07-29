@@ -40,10 +40,36 @@ Item {
     property bool camOn: false
     property int activeTab: 0   // 0 = chat, 1 = participants
 
+    // Микрофон, который мы сняли вместе со звуком. Вернём его, когда звук
+    // вернут, — но только если человек не распорядился микрофоном сам.
+    property bool _micBeforeDeafen: false
+
     // Локальные тумблеры в одном месте — их дёргают и док, и горячие клавиши.
-    function toggleMic()   { micOn = !micOn; Conf.setLocalState(micOn, camOn) }
+    function toggleMic() {
+        micOn = !micOn
+        // Человек тронул микрофон сам — восстанавливать за него больше нечего.
+        // toggleSound() ставит флаг ПОСЛЕ вызова этой функции, поэтому её
+        // собственное выключение микрофона флаг не затирает.
+        _micBeforeDeafen = false
+        Conf.setLocalState(micOn, camOn)
+    }
     function toggleCam()   { camOn = !camOn; Conf.setLocalState(micOn, camOn) }
-    function toggleSound()  { Audio.outputMuted = !Audio.outputMuted }
+    // «Не слышу вас» почти всегда значит и «не говорю»: выключая звук
+    // конференции, снимаем и микрофон, а возвращая — включаем обратно, но
+    // только если он был включён до этого. Само по себе выключение звука
+    // микрофон не включает никогда.
+    function toggleSound() {
+        var deafen = !Audio.outputMuted
+        if (deafen) {
+            var had = micOn
+            if (micOn) toggleMic()
+            _micBeforeDeafen = had
+        } else {
+            if (_micBeforeDeafen && !micOn) toggleMic()
+            _micBeforeDeafen = false
+        }
+        Audio.outputMuted = deafen
+    }
     function toggleShare()  {
         if (sharing) Conf.setScreenShare(false)
         else if (screenActive)
@@ -291,10 +317,24 @@ Item {
                     text: modelData.text
                     time: modelData.time
                     self: modelData.self
+                    locked: modelData.locked === true
                 }
-                // держим ленту прокрученной вниз при новом сообщении/истории
-                onCountChanged: positionViewAtEnd()
-                Component.onCompleted: positionViewAtEnd()
+                // Лента живёт на QVariantList, и любое изменение подменяет
+                // модель ЦЕЛИКОМ — ListView при этом сбрасывает прокрутку в
+                // начало. Отсюда два бывших бага: onCountChanged срабатывал
+                // ещё до раскладки делегатов, и positionViewAtEnd отсчитывал
+                // от нулевой высоты (лента уезжала вверх); а перечитывание
+                // теми же сообщениями (сменили ключ E2E) счётчик не меняло —
+                // и лента просто оставалась наверху.
+                //
+                // Поэтому: слушаем саму модель, а не количество, и позицию
+                // выставляем отложенно — после того, как делегаты разложены.
+                function toEnd() { Qt.callLater(positionViewAtEnd) }
+                Connections {
+                    target: Conf
+                    function onMessagesChanged() { chatList.toEnd() }
+                }
+                Component.onCompleted: toEnd()
             }
 
             Rectangle {

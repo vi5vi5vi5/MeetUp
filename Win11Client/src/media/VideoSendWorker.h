@@ -5,6 +5,7 @@
 #include <QVideoFrame>
 
 class VideoEncoder;
+class E2eCipher;
 struct SwsContext;
 struct AVFrame;
 
@@ -19,7 +20,7 @@ public:
     // msgType — тип кадра в заголовке v2: VIDEO_CODED (камера) или
     // SCREEN_CODED (демонстрация экрана). Всё остальное у полос одинаково,
     // поэтому воркеров просто два — со своими энкодерами и своей каденцией.
-    explicit VideoSendWorker(quint8 msgType, QObject* parent = nullptr);
+    VideoSendWorker(quint8 msgType, E2eCipher* cipher, QObject* parent = nullptr);
     ~VideoSendWorker() override;
 
 public slots:
@@ -64,6 +65,7 @@ private:
     void blendCursor(AVFrame* dst, int tw, int th);
 
     quint8 m_msgType;
+    E2eCipher* m_cipher;           // не владеем: общий на все потоки медиа
     int m_keyEvery;                // каденс опорных кадров, кадров
     VideoEncoder* m_enc = nullptr;
     SwsContext* m_sws = nullptr;

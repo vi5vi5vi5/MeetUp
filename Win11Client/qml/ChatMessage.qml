@@ -10,6 +10,10 @@ Item {
     property string text: ""
     property string time: ""
     property bool self: false
+    // Сообщение зашифровано ключом, которого у нас нет. Показать шифротекст
+    // было бы враньём, промолчать — потерей сообщения: показываем, что оно
+    // было, и почему его не видно.
+    property bool locked: false
 
     readonly property real _maxContent: width * 0.82 - 24
     readonly property color _linkColor: root.self ? Theme.accentFg : Theme.accent
@@ -78,8 +82,44 @@ Item {
             }
         }
 
+        // Заглушка вместо пузыря: замок и объяснение. Пунктирная рамка вместо
+        // заливки — чтобы её не приняли за пришедший текст.
+        Rectangle {
+            visible: root.locked
+            x: root.self ? parent.width - width : 0
+            width: lockRow.implicitWidth + 24
+            height: lockRow.implicitHeight + 16
+            color: "transparent"
+            radius: Theme.radiusSm
+            border.width: 1
+            border.color: Theme.border
+
+            Row {
+                id: lockRow
+                anchors.centerIn: parent
+                spacing: 8
+                AppIcon {
+                    anchors.verticalCenter: parent.verticalCenter
+                    name: "lock"
+                    size: 13
+                    color: Theme.textFaint
+                }
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    // Две разные ситуации и два разных действия — см. LockPlate.
+                    text: Crypto.active ? "Зашифровано другим ключом"
+                                        : "Зашифровано, нужен ключ"
+                    color: Theme.textMuted
+                    font.family: Theme.uiFont
+                    font.pixelSize: Theme.textSm
+                    font.italic: true
+                }
+            }
+        }
+
         Rectangle {
             id: bubble
+            visible: !root.locked
             x: root.self ? parent.width - width : 0
             width: msg.width + 24
             height: msg.implicitHeight + 16

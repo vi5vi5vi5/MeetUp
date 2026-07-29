@@ -2,6 +2,7 @@
 #include "VideoEncoder.h"
 #include "ScreenCursor.h"
 #include "../net/Protocol.h"
+#include "../crypto/E2eCipher.h"
 #include <QVideoFrameFormat>
 #include <QImage>
 #include <QtMath>
@@ -41,8 +42,8 @@ static AVPixelFormat toAvPixFmt(QVideoFrameFormat::PixelFormat f) {
     }
 }
 
-VideoSendWorker::VideoSendWorker(quint8 msgType, QObject* parent)
-    : QObject(parent), m_msgType(msgType),
+VideoSendWorker::VideoSendWorker(quint8 msgType, E2eCipher* cipher, QObject* parent)
+    : QObject(parent), m_msgType(msgType), m_cipher(cipher),
       // Камера — опорный кадр раз в ~3 с (72 кадра при 24 к/с), как у веба.
       // Экран — вчетверо реже: его опорный кадр в разы тяжелее (крупная
       // статичная картинка), и частые всплески забивают сокет, задерживая
@@ -235,11 +236,22 @@ void VideoSendWorker::encodeFrame(const QVideoFrame& frame, int maxW, int maxH,
     if (m_sendStartMs == 0) m_sendStartMs = tsMs;
     const auto packets = m_enc->encode(key, tsMs - m_sendStartMs);
     for (const VideoEncoder::Packet& p : packets) {
+        // Сквозное шифрование: наружу уходит только запечатанный payload,
+        // заголовок остаётся открытым — по нему сервер релеит полосу. Не
+        // смогли запечатать — кадр не уходит вовсе: отдать картинку открытой
+        // при включённом ключе хуже, чем пропустить кадр.
+        quint8 flags = p.key ? Proto::FLAG_KEYFRAME : 0;
+        QByteArray body = p.data;
+        if (m_cipher->active()) {
+            body = m_cipher->seal(m_msgType, m_enc->protoCodec(), body);
+            if (body.isEmpty()) continue;
+            flags |= Proto::FLAG_ENCRYPTED;
+        }
         emit packetReady(Proto::pack(
             m_msgType,
-            p.key ? Proto::FLAG_KEYFRAME : 0,
+            flags,
             m_enc->protoCodec(),
             quint64(tsMs),
-            p.data));
+            body));
     }
 }

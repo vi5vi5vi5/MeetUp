@@ -7,13 +7,13 @@
 #include <QThread>
 
 AudioEngine::AudioEngine(SignalingClient* conf, MediaSettings* settings,
-                         MediaStats* stats, QObject* parent)
+                         MediaStats* stats, E2eCipher* cipher, QObject* parent)
     : QObject(parent), m_conf(conf), m_settings(settings), m_stats(stats)
 {
     // ---- поток звука ----
     m_thread = new QThread(this);
     m_thread->setObjectName("audio");
-    m_worker = new AudioWorker;              // без parent: переезжает на свой поток
+    m_worker = new AudioWorker(cipher);      // без parent: переезжает на свой поток
     m_worker->moveToThread(m_thread);
     connect(m_thread, &QThread::finished, m_worker, &QObject::deleteLater);
 
@@ -38,6 +38,7 @@ AudioEngine::AudioEngine(SignalingClient* conf, MediaSettings* settings,
         m_conf->markSpeaking(id);
         });
     connect(m_worker, &AudioWorker::screenLive, this, &AudioEngine::setScreenLive);
+    connect(m_worker, &AudioWorker::peerLocked, this, &AudioEngine::peerLocked);
     connect(m_worker, &AudioWorker::screenFailed, this, [this](const QString& t) {
         m_settings->setScreenAudio(false);   // не оставляем тумблер обманкой
         emit screenAudioError(t);
