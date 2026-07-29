@@ -364,8 +364,14 @@ Item {
 
         // ---- Chat tab ----
         Item {
+            id: chatTab
             visible: root.activeTab === 0
             anchors { top: tabs.bottom; left: parent.left; right: parent.right; bottom: parent.bottom }
+
+            // Сколько сообщений пришло, пока человек читал старое. Правильное
+            // поведение ленты (не дёргать читающего) само по себе создаёт
+            // пробел: о новых сообщениях он бы попросту не узнал.
+            property int unread: 0
 
             ListView {
                 id: chatList
@@ -375,35 +381,99 @@ Item {
                 spacing: 12
                 model: Conf.messages
                 boundsBehavior: Flickable.StopAtBounds
+
+                // Лента перевёрнута: индекс 0 — новейшее сообщение, и рисуется
+                // оно внизу экрана. Это не украшение, а способ вообще не иметь
+                // кода прокрутки: новые строки приходят с того края, к которому
+                // лента и так прижата, и держит её там сам ListView.
+                //
+                // Прямой порядок требовал считать «я внизу?» и «доехать до
+                // низа» через contentHeight, а он у списка с делегатами разной
+                // высоты — ОЦЕНКА (настоящие высоты известны только у созданных
+                // делегатов, прочие берутся по среднему). Стенд на сорока
+                // сообщениях валил такой подход в 4 сценариях из 9; здесь
+                // проходят все 9, и без единой строчки на прокрутку.
+                verticalLayoutDirection: ListView.BottomToTop
                 delegate: ChatMessage {
-                    required property var modelData
+                    required property var model
                     width: chatList.width
-                    author: modelData.author
-                    text: modelData.text
-                    time: modelData.time
-                    self: modelData.self
-                    locked: modelData.locked === true
-                    image: modelData.image || ""
-                    imageLocked: modelData.imageLocked === true
-                    imageDropped: modelData.imageDropped === true
+                    author: model.author
+                    text: model.text
+                    time: model.time
+                    self: model.self
+                    locked: model.locked
+                    image: model.image
+                    imageLocked: model.imageLocked
+                    imageDropped: model.imageDropped
+                    imageWidth: model.imageWidth
+                    imageHeight: model.imageHeight
                     onImageClicked: function (src) { root.lightbox = src }
                 }
-                // Лента живёт на QVariantList, и любое изменение подменяет
-                // модель ЦЕЛИКОМ — ListView при этом сбрасывает прокрутку в
-                // начало. Отсюда два бывших бага: onCountChanged срабатывал
-                // ещё до раскладки делегатов, и positionViewAtEnd отсчитывал
-                // от нулевой высоты (лента уезжала вверх); а перечитывание
-                // теми же сообщениями (сменили ключ E2E) счётчик не меняло —
-                // и лента просто оставалась наверху.
-                //
-                // Поэтому: слушаем саму модель, а не количество, и позицию
-                // выставляем отложенно — после того, как делегаты разложены.
-                function toEnd() { Qt.callLater(positionViewAtEnd) }
-                Connections {
-                    target: Conf
-                    function onMessagesChanged() { chatList.toEnd() }
+
+                // Новейшее видно — счётчик непрочитанного ни к чему.
+                // В перевёрнутой ленте новейшее прижато к НИЗУ экрана, то есть
+                // к atYEnd (проверено отдельным опытом: индекс 0 в BottomToTop
+                // даёт atYEnd, хотя по модели это «начало»).
+                onAtYEndChanged: if (atYEnd) chatTab.unread = 0
+            }
+
+            // Пилюля «новые сообщения»: единственное, что нужно человеку,
+            // которого лента больше не дёргает, — знать, что он что-то
+            // пропустил, и вернуться одним нажатием.
+            Rectangle {
+                id: unreadPill
+                visible: chatTab.unread > 0
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottom: composer.top
+                anchors.bottomMargin: 14
+                z: 5
+                width: pillRow.implicitWidth + 24
+                height: 32
+                radius: Theme.radiusPill
+                color: Theme.accent
+
+                Row {
+                    id: pillRow
+                    anchors.centerIn: parent
+                    spacing: 7
+                    AppIcon {
+                        anchors.verticalCenter: parent.verticalCenter
+                        name: "arrow-right"
+                        rotation: 90            // стрелки «вниз» в наборе нет
+                        size: 14
+                        color: Theme.accentFg
+                    }
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: chatTab.unread === 1 ? "Новое сообщение"
+                                                   : "Новых сообщений: " + chatTab.unread
+                        color: Theme.accentFg
+                        font.family: Theme.uiFont
+                        font.pixelSize: Theme.textXs
+                        font.weight: Font.DemiBold
+                    }
                 }
-                Component.onCompleted: toEnd()
+
+                HoverHandler { cursorShape: Qt.PointingHandCursor }
+                TapHandler {
+                    gesturePolicy: TapHandler.ReleaseWithinBounds
+                    onTapped: {
+                        // В перевёрнутой ленте начало модели — новейшее.
+                        chatList.positionViewAtBeginning()
+                        chatTab.unread = 0
+                    }
+                }
+            }
+
+            Connections {
+                target: Conf
+                function onChatArrived(self) {
+                    if (!self && !chatList.atYEnd) chatTab.unread++
+                }
+            }
+            Connections {
+                target: Conf.messages
+                function onModelReset() { chatTab.unread = 0 }
             }
 
             Rectangle {

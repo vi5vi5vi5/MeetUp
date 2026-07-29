@@ -112,7 +112,7 @@ void SignalingClient::open(const QString& roomCode, const QString& name) {
     emit participantsChanged();
     // Лента прошлой комнаты: join_ok пересоберёт её заново, но до его прихода
     // в новой комнате висела бы чужая переписка.
-    if (!m_messages.isEmpty()) { m_messages.clear(); emit messagesChanged(); }
+    m_chat.reset();
     m_images->clear();      // и её картинки: держать их дальше незачем
     // Остатки прошлой конференции: заголовок личной комнаты и флаг реконнекта.
     if (!m_roomTitle.isEmpty()) { m_roomTitle.clear(); emit roomTitleChanged(); }
@@ -205,20 +205,25 @@ void SignalingClient::onJson(const QJsonObject& msg) {
         m_pingTimer->start();
         // История чата: пересобираем ленту из join_ok (и на реконнекте — тоже,
         // чтобы не задвоить уже показанные сообщения).
-        m_messages.clear();
         m_images->clear();     // ленту собираем заново — старые id больше не нужны
-        const QJsonArray history = msg.value("history").toArray();
-        for (const QJsonValue& v : history) {
-            const QJsonObject h = v.toObject();
-            m_messages.append(makeMessage(
-                static_cast<qint64>(h.value("sender_id").toDouble()),
-                h.value("sender_name").toString(),
-                h.value("text").toString(),
-                h.value("image").toString(),
-                h.value("image_dropped").toBool(),
-                static_cast<qint64>(h.value("timestamp_ms").toDouble())));
+        {
+            // Сервер отдаёт историю от старых к новым, лента хранит наоборот
+            // (новейшее в индексе 0, см. ChatModel) — поэтому разворачиваем.
+            const QJsonArray history = msg.value("history").toArray();
+            QList<ChatModel::Row> rows;
+            rows.reserve(history.size());
+            for (int i = history.size() - 1; i >= 0; --i) {
+                const QJsonObject h = history.at(i).toObject();
+                rows.append(makeMessage(
+                    static_cast<qint64>(h.value("sender_id").toDouble()),
+                    h.value("sender_name").toString(),
+                    h.value("text").toString(),
+                    h.value("image").toString(),
+                    h.value("image_dropped").toBool(),
+                    static_cast<qint64>(h.value("timestamp_ms").toDouble())));
+            }
+            m_chat.setAll(std::move(rows));
         }
-        emit messagesChanged();
         return;
     }
 
@@ -291,14 +296,13 @@ void SignalingClient::onJson(const QJsonObject& msg) {
 
     if (type == "chat") {
         const qint64 from = static_cast<qint64>(msg.value("sender_id").toDouble());
-        m_messages.append(makeMessage(
+        m_chat.prepend(makeMessage(
             from,
             msg.value("sender_name").toString(),
             msg.value("text").toString(),
             msg.value("image").toString(),
             false,                        // живое сообщение вытеснить ещё не успели
             static_cast<qint64>(msg.value("timestamp_ms").toDouble())));
-        emit messagesChanged();
         emit chatArrived(from == m_myId);   // сервер возвращает и наши сообщения
         return;
     }
@@ -565,74 +569,72 @@ void SignalingClient::sendImageB64(const QByteArray& b64) {
     sendJson({ {"type", "chat"}, {"image", payload} });
 }
 
-QVariantMap SignalingClient::makeMessage(qint64 senderId, const QString& senderName,
+QAbstractListModel* SignalingClient::messages() { return &m_chat; }
+
+ChatModel::Row SignalingClient::makeMessage(qint64 senderId, const QString& senderName,
     const QString& text, const QString& image, bool imageDropped, qint64 tsMs) {
-    QVariantMap m;
-    m["author"] = senderName.isEmpty() ? ("Участник " + QString::number(senderId))
+    ChatModel::Row r;
+    r.author = senderName.isEmpty() ? ("Участник " + QString::number(senderId))
         : senderName;
     // Храним строки как пришли: ключ могут ввести уже после этого сообщения,
     // и тогда ленту перечитают (см. reReadMessages).
-    m["raw"] = text;
-    m["rawImage"] = image;
+    r.raw = text;
+    r.rawImage = image;
     // Картинка была, но сервер вытеснил её из истории (держит 24 свежие).
     // Отличать от «картинки не было» обязательно: иначе сообщение выглядит
     // пустым и человек решит, что потерялось всё.
-    m["imageDropped"] = imageDropped;
-    m["time"] = QDateTime::fromMSecsSinceEpoch(tsMs).toString("HH:mm");
-    m["self"] = (senderId == m_myId);
-    renderBody(m);
-    return m;
+    r.imageDropped = imageDropped;
+    r.time = QDateTime::fromMSecsSinceEpoch(tsMs).toString("HH:mm");
+    r.self = (senderId == m_myId);
+    renderBody(r);
+    return r;
 }
 
 // Как показать пришедшее: обычный текст — как есть, "🔒e2e:…" —
 // расшифрованный. Ключа нет или он чужой — честная заглушка вместо текста:
 // показать шифротекст было бы враньём, а промолчать — потерей сообщения.
 // С картинкой ровно та же развилка, только заглушку рисует QML.
-void SignalingClient::renderBody(QVariantMap& m) const {
-    const QString raw = m.value("raw").toString();
+void SignalingClient::renderBody(ChatModel::Row& r) const {
     QString plain;
-    if (!E2eCipher::isSealedText(raw)) {
-        m["text"] = raw;
-        m["locked"] = false;
-    } else if (m_cipher->openText(raw, plain)) {
-        m["text"] = plain;
-        m["locked"] = false;
+    if (!E2eCipher::isSealedText(r.raw)) {
+        r.text = r.raw;
+        r.locked = false;
+    } else if (m_cipher->openText(r.raw, plain)) {
+        r.text = plain;
+        r.locked = false;
     } else {
-        m["text"] = QString();
-        m["locked"] = true;
+        r.text.clear();
+        r.locked = true;
     }
 
-    const QString rawImage = m.value("rawImage").toString();
-    m["image"] = QString();
-    m["imageLocked"] = false;
-    if (rawImage.isEmpty()) return;
+    r.image.clear();
+    r.imageLocked = false;
+    if (r.rawImage.isEmpty()) return;
 
     QByteArray jpeg;
-    if (!E2eCipher::isSealedText(rawImage)) {
-        jpeg = QByteArray::fromBase64(rawImage.toLatin1());
-    } else if (!m_cipher->openImage(rawImage, jpeg)) {
-        m["imageLocked"] = true;
+    if (!E2eCipher::isSealedText(r.rawImage)) {
+        jpeg = QByteArray::fromBase64(r.rawImage.toLatin1());
+    } else if (!m_cipher->openImage(r.rawImage, jpeg)) {
+        r.imageLocked = true;
         return;
     }
-    if (jpeg.isEmpty()) { m["imageLocked"] = true; return; }
+    if (jpeg.isEmpty()) { r.imageLocked = true; return; }
     // put() каждый раз выдаёт новый id — это и нужно: при перечитывании ленты
     // новым ключом у картинки обязан смениться URL, иначе QML возьмёт из кеша
     // прежний результат (то есть пустоту, ведь до ключа её не было).
-    m["image"] = "image://chatimg/" + m_images->put(jpeg);
+    QSize size;
+    r.image = "image://chatimg/" + m_images->put(jpeg, &size);
+    r.imageW = size.width();
+    r.imageH = size.height();
 }
 
 void SignalingClient::reReadMessages() {
-    if (m_messages.isEmpty()) return;
+    if (m_chat.isEmpty()) return;
     // Перечитываем всё подряд, поэтому старые id картинок сразу выбрасываем:
     // renderBody выдаст каждой новый, а иначе они копились бы при каждой
     // смене ключа.
     m_images->clear();
-    for (QVariant& v : m_messages) {
-        QVariantMap m = v.toMap();
-        renderBody(m);
-        v = m;
-    }
-    emit messagesChanged();
+    m_chat.reRead([this](ChatModel::Row& r) { renderBody(r); });
 }
 
 // Кадры от видеодвижка (он живёт на GUI-потоке). Звук сюда не заходит: у

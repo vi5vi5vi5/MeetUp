@@ -41,6 +41,7 @@ qt_add_executable(Win11Client
     src/net/SignalingClient.cpp
     src/net/SignalingLink.cpp
     src/net/ChatImages.cpp
+    src/net/ChatModel.cpp
     src/net/PersonalRoomController.cpp
     src/net/LinkController.cpp
     src/media/AudioEngine.cpp

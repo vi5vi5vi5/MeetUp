@@ -3,6 +3,7 @@
 #include <QString>
 #include <QVariantList>
 #include <QHash>
+#include "ChatModel.h"
 
 class ApiClient;
 class ChatImages;
@@ -26,7 +27,10 @@ class SignalingClient : public QObject {
         Q_PROPERTY(QString      roomTitle    READ roomTitle    NOTIFY roomTitleChanged)
         Q_PROPERTY(bool         reconnecting READ reconnecting NOTIFY reconnectingChanged)
         Q_PROPERTY(QVariantList participants READ participants NOTIFY participantsChanged)
-        Q_PROPERTY(QVariantList messages     READ messages     NOTIFY messagesChanged)
+        // Модель, а не список: подмена списка целиком сбрасывала прокрутку
+        // ленты в начало на каждом сообщении (см. ChatModel). Объект живёт
+        // столько же, сколько мы, — отсюда CONSTANT.
+        Q_PROPERTY(QAbstractListModel* messages READ messages CONSTANT)
         // Кто сейчас говорит. ОТДЕЛЬНОЕ свойство, а не поле в participants:
         // подсветка меняется каждые пол-секунды, и трогать participants значило
         // бы пересоздавать плитки Repeater'ом — видео моргало бы.
@@ -53,7 +57,7 @@ public:
     QString roomTitle() const { return m_roomTitle; }
     bool reconnecting() const { return m_reconnecting; }
     QVariantList participants() const { return m_participants; }
-    QVariantList messages() const { return m_messages; }
+    QAbstractListModel* messages();
     QVariantList speakingIds() const { return m_speakingIds; }
     qint64 myId() const { return m_myId; }
     qint64 screenId() const { return m_screenId; }
@@ -111,7 +115,6 @@ signals:
     void screenBusy();       // слот занят другим — показать уведомление
     // Первый успешный вход в комнату (не реконнект) — для локальной истории.
     void joinedRoom(const QString& code, const QString& title);
-    void messagesChanged();
 
     // Сырой кадр v2 от сервера — всё, кроме звука: полосу звука транспорт
     // уводит прямо на аудиопоток, сюда она не заходит (см. mediaLink()).
@@ -145,10 +148,10 @@ private:
     void sendJson(const QJsonObject& msg);
     void rebuildSpeaking();             // m_speakingUntil -> m_speakingIds
     void sweepSpeaking();               // снять подсветку с отговоривших
-    QVariantMap makeMessage(qint64 senderId, const QString& senderName,
+    ChatModel::Row makeMessage(qint64 senderId, const QString& senderName,
         const QString& text, const QString& image, bool imageDropped, qint64 tsMs);
     // raw/rawImage -> text/locked/image текущим ключом.
-    void renderBody(QVariantMap& m) const;
+    void renderBody(ChatModel::Row& r) const;
     void sendImageB64(const QByteArray& b64);   // общий хвост обоих источников
     void setPhase(const QString& p);
     void setError(const QString& t);
@@ -179,7 +182,7 @@ private:
     bool    m_reconnecting = false;
     QVariantList m_participants;             // список {id,name,mic,cam,isSelf,speaking,avatarUrl}
 
-    QVariantList m_messages;   // список {author, text, time, self}
+    ChatModel m_chat;          // лента: строки вставляются, а не подменяются
 
     QHash<qint64, qint64> m_speakingUntil;   // id -> до какого мс подсвечен
     QVariantList m_speakingIds;              // те же id для QML

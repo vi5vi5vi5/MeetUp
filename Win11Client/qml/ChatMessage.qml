@@ -19,6 +19,11 @@ Item {
     property string image: ""
     property bool imageLocked: false     // зашифрована, ключа нет
     property bool imageDropped: false    // была, но вытеснена из истории сервера
+    // Размеры картинки в пикселях, известные ДО загрузки (их приносит модель,
+    // C++ читает их из заголовка JPEG). По ним отводится место, и пузырь не
+    // прыгает с нулевой высоты, когда картинка приезжает.
+    property int imageWidth: 0
+    property int imageHeight: 0
     signal imageClicked(string source)
 
     readonly property real _maxContent: width * 0.82 - 24
@@ -139,12 +144,19 @@ Item {
                 id: shot
                 visible: root.image !== ""
                 source: root.image
+                // Коробка считается по ИЗВЕСТНЫМ размерам, а не по implicit-
+                // размерам самой картинки: те появляются только после загрузки,
+                // и пузырь вставлялся бы нулевой высоты, а потом подпрыгивал.
+                width: root.imageWidth > 0
+                       ? Math.min(root._maxContent, root.imageWidth)
+                       : root._maxContent
+                height: root.imageWidth > 0
+                        ? width * root.imageHeight / root.imageWidth
+                        : 0
                 // Просим ровно тот размер, в котором показываем: провайдер
                 // отдаст уменьшенную копию, а не полный кадр (см. ChatImages).
-                sourceSize.width: Math.round(root._maxContent)
+                sourceSize.width: Math.round(width)
                 fillMode: Image.PreserveAspectFit
-                width: Math.min(root._maxContent, implicitWidth)
-                height: implicitWidth > 0 ? width * (implicitHeight / implicitWidth) : 0
                 smooth: true
                 asynchronous: true
 

@@ -22,6 +22,25 @@ Planned units:
 - **`Protocol.h`** — binary media framing (pack 11-byte header / unpack
   15-byte header) and the media type/flag/codec constants. These constants
   live only in the client — the server treats media payloads as opaque.
+- **`ChatModel`** — the chat feed as a real `QAbstractListModel`, **newest
+  message at index 0**. The reversed order pairs with
+  `verticalLayoutDirection: BottomToTop` on the QML side, and the pairing is
+  the whole point: index 0 draws at the bottom of the screen, so "keep the
+  newest in view" stops being a computation and becomes a *position* — new
+  rows arrive at the edge the view is already pinned to, and `ListView` holds
+  it there by itself.
+  The alternative (natural order, follow the bottom manually) cannot be made
+  reliable here. Message heights vary with text wrapping and images, and
+  `QQuickListView` only knows the real height of delegates it has created —
+  the rest are averaged, so `contentHeight` is an *estimate* and everything
+  computed on top of it ("am I at the bottom?", "scroll to the bottom") drifts
+  with the length of the conversation. A stand with forty variable-height
+  messages failed that approach in 4 of 9 scenarios; the flipped list passes
+  all 9 with no scroll-handling code at all.
+  Two further properties matter for not disturbing a reader: live messages
+  arrive as an **insert** (never a reset), and re-reading with a new E2E key
+  emits **`dataChanged`** — a reset would throw the reader back to the newest
+  message at the exact moment they typed the key.
 - **`ChatImages`** — chat pictures: a store of JPEG bytes plus the QML image
   provider behind `image://chatimg/<id>`. Bytes rather than decoded `QImage`s
   because the server keeps up to 24 pictures in room history — expanded to

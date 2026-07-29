@@ -2,10 +2,20 @@
 
 #include <QBuffer>
 #include <QImage>
+#include <QImageReader>
 #include <QImageWriter>
 #include <QPainter>
 
-QString ChatImages::put(const QByteArray& jpeg) {
+QString ChatImages::put(const QByteArray& jpeg, QSize* size) {
+    if (size) {
+        // Только заголовок: QImageReader::size() не разворачивает пиксели, и
+        // на два десятка картинок истории это разница между миллисекундами и
+        // сотнями миллисекунд на GUI-потоке.
+        QBuffer buf;
+        buf.setData(jpeg);
+        buf.open(QIODevice::ReadOnly);
+        *size = QImageReader(&buf, "JPEG").size();
+    }
     QMutexLocker lock(&m_lock);
     const QString id = QString::number(++m_seq);
     m_jpeg.insert(id, jpeg);
