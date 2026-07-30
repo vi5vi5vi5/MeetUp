@@ -4,8 +4,12 @@ import MeetUp
 
 // Тематизированный выпадающий список настроек. Жил внутри SettingsModal как
 // вложенный component — теперь разделов восемь, и он нужен каждому.
-// Модель — [{id, label}]; выбор отдаётся сигналом picked, а не двусторонней
-// привязкой: источник правды — свойство в AV, а не индекс комбо.
+// Модель — [{id, label, soon}]; выбор отдаётся сигналом picked, а не
+// двусторонней привязкой: источник правды — свойство в AV, а не индекс комбо.
+// soon=true помечает вариант, который сейчас недоступен: он остаётся в списке,
+// но приглушён и не выбирается — как soon у SegmentedControl. Убирать такой
+// вариант из списка нельзя: тогда человек ищет пропавшую настройку и не
+// понимает, была она или ему померещилось.
 ComboBox {
     id: combo
 
@@ -55,15 +59,31 @@ ComboBox {
         id: row
         required property var modelData
         required property int index
+        readonly property bool isSoon: modelData.soon === true
         width: combo.width - 12
         height: 34
-        contentItem: Text {
-            verticalAlignment: Text.AlignVCenter
-            text: row.modelData.label
-            elide: Text.ElideRight
-            color: Theme.text
-            font.family: Theme.uiFont
-            font.pixelSize: Theme.textSm
+        // Недоступный вариант не нажимается и не подсвечивается наведением:
+        // ItemDelegate с enabled=false игнорирует и щелчок, и hover.
+        enabled: !row.isSoon
+        opacity: row.isSoon ? 0.5 : 1
+        contentItem: Item {
+            Text {
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                width: parent.width - (row.isSoon ? chip.width + 8 : 0)
+                verticalAlignment: Text.AlignVCenter
+                text: row.modelData.label
+                elide: Text.ElideRight
+                color: Theme.text
+                font.family: Theme.uiFont
+                font.pixelSize: Theme.textSm
+            }
+            SoonChip {
+                id: chip
+                visible: row.isSoon
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+            }
         }
         background: Rectangle {
             radius: Theme.radiusXs

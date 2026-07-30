@@ -21,6 +21,48 @@ The media pipeline (see `docs/ROADMAP.md`).
   dimensions, keyframe every ~72 frames + forced on `KEYFRAME_REQ` /
   `participant_joined` → v2 packets, with backpressure (drop video frames above
   1.5 MB queued in the socket). Self tile gets the raw camera preview.
+
+  **The screen band encodes on the GPU**, via `h264_mf` (Media Foundation) with
+  `scenario=display_remoting`, `rate_control=cbr`, `hw_encoding=1`; on this
+  machine's AMD card that is 2.5 ms per 1080p frame against libopenh264's 13.4 ms
+  average and 48 ms worst case — the worst case being what actually broke a
+  60 fps budget. Three things about it are load-bearing, and all three were
+  established by probe rather than by reading docs:
+  - **NV12 is mandatory.** `h264_mf` advertises `yuv420p` in its pixel-format
+    list and then fails `avcodec_open2` with it. So `VideoEncoder::pixFmt()`
+    exists and both `sws_scale` and the cursor blend handle either layout.
+  - **The pipeline is two frames deep**, so a packet leaving `encode()` belongs
+    to the frame fed two calls earlier. `Packet::ptsMs` carries the real one;
+    stamping the header with the current frame's time would put a timestamp two
+    frames into the future on every packet.
+  - **The camera deliberately stays on libopenh264** (`allowHardware` is set
+    only for `SCREEN_CODED`). Those two frames of pipeline are ~66 ms at 30 fps,
+    which for a face goes straight into lip-sync drift, and there is nothing to
+    win: 720p on the CPU already encodes in 3–5 ms.
+  `hw_encoding=1` means the open *fails* without a GPU encoder and the candidate
+  list falls through to libopenh264 — deliberate, since MF's own software
+  encoder is slower than openh264, and getting it silently would be worse than
+  not getting MF at all. Candidate de-duplication is therefore **by encoder
+  name**, not by `Proto::CODEC_*`: hardware and software H.264 share a protocol
+  codec byte, and de-duplicating by that would have dropped the fallback.
+
+  Two invariants hold on the send path, and both exist because breaking them
+  cost the screen band half its frames:
+  **(1) no media payload crosses the GUI thread.** Encoded packets go from the
+  encode thread straight to the socket thread (`packetReady` →
+  `SignalingLink::sendBinary`); only byte counts visit the GUI thread, for
+  `MediaStats`. **(2) the engine learns that a worker is free by reading an
+  atomic** (`VideoSendWorker::busy()`), not by waiting for a signal — the GUI
+  thread blocks while Qt Quick syncs with the render thread, and a worker that
+  reported its freedom through that queue sat idle for the duration.
+  Also on this path: `sws_scale` is built by hand rather than through
+  `sws_getCachedContext` (the latter takes no thread count, and BGRA 4K →
+  YUV420P is 12–20 ms single-threaded, more than a whole 60 fps frame budget),
+  it uses area averaging when downscaling (bilinear samples 2×2 regardless of
+  ratio, which turns shrunken text to mush), and the encoder is opened with the
+  **achieved** frame rate, not the preset's wish — rate control divides the
+  bitrate by the rate it was told, so claiming 60 while delivering 20 gave every
+  real frame a third of the bits it had coming.
 - **M8 Settings** (`../MediaSettings`) — device selection (mic/cam/speakers),
   playback volume and mic sensitivity (0–200 %), send-quality presets
   (low/med/high for camera resolution+bitrate+fps and Opus bitrate), persisted

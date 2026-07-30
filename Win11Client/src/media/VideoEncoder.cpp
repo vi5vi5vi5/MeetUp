@@ -11,9 +11,9 @@ extern "C" {
 
 VideoEncoder::~VideoEncoder() { close(); }
 
-bool VideoEncoder::tryOpen(const char* encoderName, quint8 protoCodec,
+bool VideoEncoder::tryOpen(const Candidate& cand,
                            int width, int height, int fps, int bitrate) {
-    const AVCodec* codec = avcodec_find_encoder_by_name(encoderName);
+    const AVCodec* codec = avcodec_find_encoder_by_name(cand.name);
     if (!codec) return false;
 
     m_ctx = avcodec_alloc_context3(codec);
@@ -21,7 +21,7 @@ bool VideoEncoder::tryOpen(const char* encoderName, quint8 protoCodec,
 
     m_ctx->width = width;
     m_ctx->height = height;
-    m_ctx->pix_fmt = AV_PIX_FMT_YUV420P;
+    m_ctx->pix_fmt = AVPixelFormat(cand.pixFmt);
     m_ctx->time_base = { 1, 1000 };          // PTS в миллисекундах
     m_ctx->framerate = { fps, 1 };
     m_ctx->bit_rate = bitrate;
@@ -35,7 +35,30 @@ bool VideoEncoder::tryOpen(const char* encoderName, quint8 protoCodec,
     // (веб-декодер настроен на Annex B без отдельной extradata — §6.1).
 
     AVDictionary* opts = nullptr;
-    if (protoCodec == Proto::CODEC_H264) {
+    if (cand.hardware) {
+        // Media Foundation. Своих опций у обёртки ровно четыре (проверено
+        // пробой: profile/level/low_latency она не знает вовсе и молча
+        // игнорирует — уровень она считает сама по размеру кадра и частоте,
+        // и считает верно: 4.0 на 720p60, 4.2 на 1080p60, 5.1 на 4К30).
+        //   scenario=display_remoting — режим «удалённый рабочий стол»: именно
+        //     под экранный контент, а не под говорящую голову.
+        //   rate_control=pc_vbr — VBR с ограничением пика. Здесь был cbr, и это
+        //     была ошибка: CBR добивает поток до целевого битрейта независимо от
+        //     содержимого, а демонстрация экрана почти всегда неподвижна. На
+        //     статичной картинке 1080p замер дал 3414 кбит/с против 714 у
+        //     pc_vbr — впятеро больше ни за что. Режим quality на статике ещё
+        //     скромнее (570), но на движении вылетает за лимит (3961 при цели
+        //     3500), а превышение — это ровно то, что пробивает порог затора в
+        //     сокете и оборачивается замиранием. pc_vbr держит и то и другое:
+        //     714 на статике, 3614 на движении.
+        //   hw_encoding=1 — только видеокарта. Если её кодировщика нет,
+        //     открытие ПРОВАЛИТСЯ, и мы уйдём на libopenh264 ниже. Так и надо:
+        //     программный кодировщик внутри MF медленнее openh264, и получить
+        //     его молча было бы хуже, чем не получить MF вовсе.
+        av_dict_set(&opts, "scenario", "display_remoting", 0);
+        av_dict_set(&opts, "rate_control", "pc_vbr", 0);
+        av_dict_set(&opts, "hw_encoding", "1", 0);
+    } else if (cand.proto == Proto::CODEC_H264) {
         // openh264: реалтайм по своей природе. Baseline — как avc1.42E01F у веба.
         av_dict_set(&opts, "profile", "constrained_baseline", 0);
         av_dict_set(&opts, "rc_mode", "bitrate", 0);
@@ -46,7 +69,7 @@ bool VideoEncoder::tryOpen(const char* encoderName, quint8 protoCodec,
         av_dict_set(&opts, "cpu-used", "8", 0);
         av_dict_set(&opts, "lag-in-frames", "0", 0);
         av_dict_set(&opts, "error-resilient", "1", 0);
-        if (protoCodec == Proto::CODEC_VP9) {
+        if (cand.proto == Proto::CODEC_VP9) {
             // VP9 заметно тяжелее VP8: без распараллеливания по строкам и
             // колонкам тайлов он на 1080p не укладывается в кадр.
             av_dict_set(&opts, "row-mt", "1", 0);
@@ -64,51 +87,64 @@ bool VideoEncoder::tryOpen(const char* encoderName, quint8 protoCodec,
     m_frame = av_frame_alloc();
     m_pkt = av_packet_alloc();
     if (!m_frame || !m_pkt) { close(); return false; }
-    m_frame->format = AV_PIX_FMT_YUV420P;
+    m_frame->format = cand.pixFmt;
     m_frame->width = width;
     m_frame->height = height;
     if (av_frame_get_buffer(m_frame, 0) < 0) { close(); return false; }
 
-    m_protoCodec = protoCodec;
+    m_protoCodec = cand.proto;
+    m_pixFmt = cand.pixFmt;
+    m_hardware = cand.hardware;
     m_width = width;
     m_height = height;
-    qInfo() << "VideoEncoder:" << encoderName << width << "x" << height
-            << fps << "fps" << bitrate << "bps";
+    qInfo() << "VideoEncoder:" << cand.name << width << "x" << height
+            << fps << "fps" << bitrate << "bps"
+            << (cand.hardware ? "(hardware)" : "(software)");
     return true;
 }
 
-bool VideoEncoder::open(int width, int height, int fps, int bitrate, quint8 preferred) {
+bool VideoEncoder::open(int width, int height, int fps, int bitrate,
+                        quint8 preferred, bool allowHardware) {
     close();
     width &= ~1;                             // чётные размеры — правило §5.5
     height &= ~1;
     if (width < 2 || height < 2) return false;
 
-    struct Candidate { const char* name; quint8 proto; };
-    // Порядок по умолчанию — как у веба: H.264 (аппаратный декод почти у всех
-    // приёмников), затем VP8. Оба уходят одним и тем же протоколом v2.
-    static const Candidate kFallback[] = {
-        { "libopenh264", Proto::CODEC_H264 },
-        { "libvpx",      Proto::CODEC_VP8  },
-    };
-    // VP9 в запасные не входит: он дороже по процессору, и получить его
-    // случайно, не выбирая, никто не должен.
-    static const Candidate kAll[] = {
-        { "libopenh264", Proto::CODEC_H264 },
-        { "libvpx",      Proto::CODEC_VP8  },
-        { "libvpx-vp9",  Proto::CODEC_VP9  },
-    };
+    // Аппаратный H.264 и программный H.264 — ДВА кандидата с одним и тем же
+    // кодеком протокола. Поэтому отбор дальше идёт по имени кодировщика: будь
+    // он по Proto::CODEC_*, второй H.264 отбрасывался бы как дубликат — то
+    // есть запасного пути у аппаратного не осталось бы вовсе.
+    static const Candidate kH264Hw{ "h264_mf",     Proto::CODEC_H264, AV_PIX_FMT_NV12,    true };
+    static const Candidate kH264Sw{ "libopenh264", Proto::CODEC_H264, AV_PIX_FMT_YUV420P, false };
+    static const Candidate kVp8   { "libvpx",      Proto::CODEC_VP8,  AV_PIX_FMT_YUV420P, false };
+    static const Candidate kVp9   { "libvpx-vp9",  Proto::CODEC_VP9,  AV_PIX_FMT_YUV420P, false };
 
     QList<Candidate> order;
     const auto add = [&order](const Candidate& c) {
-        for (const Candidate& x : order) if (x.proto == c.proto) return;
+        for (const Candidate& x : order) if (qstrcmp(x.name, c.name) == 0) return;
         order.append(c);
     };
-    if (preferred)
-        for (const Candidate& c : kAll) if (c.proto == preferred) add(c);
-    for (const Candidate& c : kFallback) add(c);
+
+    // Сначала — выбор пользователя. Для H.264 это значит «сперва видеокарта,
+    // потом процессор»: и то и другое для приёмника один и тот же H.264.
+    if (preferred == Proto::CODEC_H264) {
+        if (allowHardware) add(kH264Hw);
+        add(kH264Sw);
+    } else if (preferred == Proto::CODEC_VP8) {
+        add(kVp8);
+    } else if (preferred == Proto::CODEC_VP9) {
+        // VP9 в запасные не входит: он дороже по процессору, и получить его
+        // случайно, не выбирая, никто не должен.
+        add(kVp9);
+    }
+    // Дальше — порядок по умолчанию, как у веба: H.264 (аппаратный декод почти
+    // у всех приёмников), затем VP8. Все уходят одним протоколом v2.
+    if (allowHardware) add(kH264Hw);
+    add(kH264Sw);
+    add(kVp8);
 
     for (const Candidate& c : order)
-        if (tryOpen(c.name, c.proto, width, height, fps, bitrate)) return true;
+        if (tryOpen(c, width, height, fps, bitrate)) return true;
 
     qWarning() << "VideoEncoder: в сборке FFmpeg нет ни одного пригодного энкодера";
     return false;
@@ -120,6 +156,8 @@ void VideoEncoder::close() {
     if (m_ctx) avcodec_free_context(&m_ctx);
     m_protoCodec = 0;
     m_width = m_height = 0;
+    m_pixFmt = 0;
+    m_hardware = false;
 }
 
 AVFrame* VideoEncoder::frame() {
@@ -143,6 +181,12 @@ QList<VideoEncoder::Packet> VideoEncoder::encode(bool keyframe, qint64 ptsMs) {
         Packet p;
         p.data = QByteArray(reinterpret_cast<const char*>(m_pkt->data), m_pkt->size);
         p.key = (m_pkt->flags & AV_PKT_FLAG_KEY) != 0;
+        // Метка ИМЕННО этого пакета. Аппаратный кодировщик держит конвейер на
+        // два кадра, и без неё пакет уходил бы в сеть со временем кадра, что
+        // сейчас положили на вход, — то есть на два кадра новее собственной
+        // картинки. Программные кодеры отдают pts обратно как есть, так что
+        // путь для них не меняется; NOPTS не отдаёт никто, но подстрахуемся.
+        p.ptsMs = (m_pkt->pts == AV_NOPTS_VALUE) ? ptsMs : m_pkt->pts;
         out.append(p);
         av_packet_unref(m_pkt);
     }

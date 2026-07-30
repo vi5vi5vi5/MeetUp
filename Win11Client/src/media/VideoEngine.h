@@ -169,10 +169,16 @@ private:
     void failScreen(const QString& text);   // сорвалось: отпустить слот и сказать
     void setScreenPreviewActive(bool on);
     void applyCursorSetting();         // включить/выключить дорисовку курсора
+    // Регулятор качества демонстрации. Возвращает битрейт, с которым кодировать
+    // ЭТОТ кадр, и попутно двигает ступень качества по состоянию очереди в
+    // сокете. Заодно отдаёт наружу бюджет очереди — по нему решается, ронять ли
+    // кадр (queueBudget), чтобы порог и битрейт считались из одного места.
+    int screenBitrate(int presetBitrate, qint64 nowMs, qint64* queueBudget);
+    void resetScreenRate();            // новая демонстрация — начинаем с полного
     void applyCodecPrefs();            // выбор кодека -> обоим воркерам
     void noteCodecFallback(bool screen, int requested, int actual);
     // Кодировщик полосы открылся: какой кодек и какой кадр — в «Диагностику».
-    void noteEncoderOpened(bool screen, int codec, int width, int height);
+    void noteEncoderOpened(bool screen, int codec, int width, int height, bool hardware);
 
     SignalingClient* m_conf;           // не владеем
     MediaSettings* m_settings;         // не владеем
@@ -215,7 +221,6 @@ private:
     int m_previewExtraToken = 0;
     QThread* m_encThread = nullptr;    // поток кодирования камеры
     VideoSendWorker* m_worker = nullptr;   // живёт на m_encThread
-    int m_encInFlight = 0;             // кадров, отданных воркеру и не отработанных
     bool m_live = false;               // phase == "live"
     bool m_camOn = false;              // тумблер камеры (по умолчанию выкл.)
     bool m_previewActive = false;
@@ -240,8 +245,20 @@ private:
     // приезжал бы получателю уже просроченным — с этого и разъезжались губы.
     QThread* m_scrThread = nullptr;
     VideoSendWorker* m_scrWorker = nullptr;         // живёт на m_scrThread
-    int m_scrInFlight = 0;
     bool m_screenPreviewActive = false;
     bool m_scrKeyNext = false;
     qint64 m_scrNextDueMs = 0;         // см. m_nextDueMs
+    // Срок следующего кадра ПРЕВЬЮ своей демонстрации. Раньше превью писалось
+    // до гейта частоты, то есть на каждый кадр захвата: при настройке «5 к/с»
+    // в VideoOutput всё равно уезжали все 60 кадров монитора 4К. Это грузило
+    // GUI- и render-поток ровно в тот момент, когда они нужны конвейеру
+    // кодирования, — сама демонстрация от собственного превью и задыхалась.
+    qint64 m_scrPreviewDueMs = 0;
+    // Регулятор качества (см. screenBitrate). Ступень — индекс множителя
+    // пресетного битрейта; счётчики — сколько подряд полусекундных проб видели
+    // затор и сколько видели чистую очередь.
+    int m_scrRateLevel = 0;
+    int m_scrBusySamples = 0;
+    int m_scrCleanSamples = 0;
+    qint64 m_scrRateSampleMs = 0;
 };

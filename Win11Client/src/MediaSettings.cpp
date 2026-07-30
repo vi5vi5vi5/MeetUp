@@ -26,8 +26,21 @@ MediaSettings::MediaSettings(QObject* parent) : QObject(parent) {
     const QStringList resList{"360", "480", "720", "1080", "src"};
     m_screenRes = s.value("screenRes", "720").toString();
     if (!resList.contains(m_screenRes)) m_screenRes = "720";
+    // 60 к/с временно недоступны (см. модель в SettingsShare.qml). Сохранённое
+    // значение НАДО перевести на 30, а не оставить как есть: в интерфейсе вариант
+    // приглушён, и человек считал бы, что 60 у него выключены, — а полоса
+    // продолжала бы считать битрейт с полуторным коэффициентом.
+    //
+    // ЗАМЕТКА НА БУДУЩЕЕ: частота «Источник», по образцу разрешения. Свой
+    // захват (ScreenCapturer) отдаёт кадры с частотой обновления монитора, а не
+    // по таймеру, — значит на мониторе 144 или 240 Гц он честно даст столько же.
+    // Само по себе это красиво, но включать такое вслепую нельзя: битрейт уйдёт
+    // на уровень облачного гейминга, а приёмник (особенно веб) столько кадров в
+    // секунду не разберёт. Делать вместе с этим: потолок частоты по возможностям
+    // приёмников и предупреждение в интерфейсе, что это режим «для своих».
+    // Пункт из разряда «когда всё остальное готово».
     m_screenFps = s.value("screenFps", 30).toInt();
-    if (m_screenFps != 15 && m_screenFps != 30 && m_screenFps != 60) m_screenFps = 30;
+    if (m_screenFps != 15 && m_screenFps != 30) m_screenFps = 30;
     m_screenCursor = s.value("screenCursor", true).toBool();
     const QStringList codecs{"auto", "h264", "vp8", "vp9"};
     m_camCodec = s.value("camCodec", "auto").toString();
@@ -133,7 +146,7 @@ void MediaSettings::setScreenRes(const QString& r) {
 }
 void MediaSettings::setScreenFps(int fps) {
     if (m_screenFps == fps) return;
-    if (fps != 15 && fps != 30 && fps != 60) return;
+    if (fps != 15 && fps != 30) return;      // 60 пока не принимаем, см. конструктор
     m_screenFps = fps;
     save("screenFps", fps);
     emit screenFpsChanged();

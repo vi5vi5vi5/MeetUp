@@ -14,8 +14,10 @@ set(CMAKE_AUTOMOC ON)
 
 # MultimediaPrivate — отдельный компонент: цель Qt6::MultimediaPrivate сама по
 # себе не появляется от Multimedia, её нужно запросить явно (см. ScreenSources).
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Network WebSockets
-                                         Multimedia MultimediaPrivate)
+# GuiPrivate — ради HMONITOR экрана: публичного способа узнать, какому монитору
+# Windows соответствует QScreen, нет вовсе (см. src/media/ScreenCursor.cpp).
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui GuiPrivate Qml Quick QuickControls2
+                                         Network WebSockets Multimedia MultimediaPrivate)
 
 find_package(Opus CONFIG REQUIRED)
 
@@ -52,6 +54,7 @@ qt_add_executable(Win11Client
     src/media/VideoSendWorker.cpp
     src/media/VideoRecvWorker.cpp
     src/media/ScreenCursor.cpp
+    src/media/ScreenCapturer.cpp
     src/media/VideoEngine.cpp
     src/media/MediaStats.cpp
     src/media/UiSounds.cpp
@@ -190,6 +193,10 @@ target_link_libraries(Win11Client PRIVATE
     # хендлу перечисленного окна нет, а без него нельзя ни отсеять «призраки»
     # системы из списка, ни снять предпросмотр (см. src/ScreenSources.cpp).
     Qt6::MultimediaPrivate
+    # …и ради QPlatformNativeInterface: HMONITOR у QScreen лежит только внутри
+    # платформенного плагина, а без точного соответствия «экран Qt <-> монитор
+    # Windows» на двух мониторах разъезжается курсор в демонстрации.
+    Qt6::GuiPrivate
     Opus::opus
 )
 
@@ -199,8 +206,12 @@ if(WIN32)
     # mmdevapi/ole32 — ActivateAudioInterfaceAsync и COM для захвата звука
     # приложений (process loopback, см. ScreenAudioCapture);
     # bcrypt — AES-256-GCM и PBKDF2 для сквозного шифрования (CNG есть в самой
-    # Windows, поэтому OpenSSL в дистрибутив не едет, см. src/crypto).
-    target_link_libraries(Win11Client PRIVATE dwmapi user32 gdi32 mmdevapi ole32 bcrypt)
+    # Windows, поэтому OpenSSL в дистрибутив не едет, см. src/crypto);
+    # windowsapp/d3d11/dxgi — Windows.Graphics.Capture: свой захват экрана и
+    # окон (см. src/media/ScreenCapturer.cpp). Всё это части Windows SDK,
+    # внешних зависимостей захват не добавляет вовсе.
+    target_link_libraries(Win11Client PRIVATE dwmapi user32 gdi32 mmdevapi ole32 bcrypt
+                                              windowsapp d3d11 dxgi)
 endif()
 
 # FFmpeg из vcpkg не даёт CMake-целей — только переменные Find-модуля.

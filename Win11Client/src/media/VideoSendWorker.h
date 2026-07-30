@@ -3,6 +3,7 @@
 #include <QByteArray>
 #include <QRect>
 #include <QVideoFrame>
+#include <atomic>
 
 class VideoEncoder;
 class E2eCipher;
@@ -22,6 +23,17 @@ public:
     // поэтому воркеров просто два — со своими энкодерами и своей каденцией.
     VideoSendWorker(quint8 msgType, E2eCipher* cipher, QObject* parent = nullptr);
     ~VideoSendWorker() override;
+
+    // ---- читается с ЛЮБОГО потока (движок спрашивает с GUI) ----
+    // Занят ли воркер незакрытым кадром. Раньше о своей свободе он сообщал
+    // сигналом frameDone на GUI-поток — и пока тот стоял на синхронизации с
+    // отрисовкой QML, воркер простаивал уже свободным. Частота отправки
+    // упиралась не в скорость кодирования, а в занятость интерфейса; на
+    // демонстрации 4К это стоило половины кадров. Атомик снимает хоп целиком.
+    bool busy() const { return m_inFlight.load(std::memory_order_acquire) > 0; }
+    // Кадр отдан воркеру: считаем его до того, как уйдёт queued-вызов, иначе
+    // между emit и началом encode() движок успел бы отправить второй.
+    void noteQueued() { m_inFlight.fetch_add(1, std::memory_order_release); }
 
 public slots:
     // Один кадр камеры -> пакеты. maxW/maxH/fps/bitrate — пресет качества;
@@ -43,35 +55,60 @@ public slots:
     void setCodecPreference(int protoCodec);
 
 signals:
-    // Готовый пакет v2 (уже упакован Proto::pack) — GUI-поток отправит в сокет.
+    // Готовый пакет v2 (уже упакован Proto::pack). Уходит ПРЯМО на поток
+    // сокета (SignalingLink::sendBinary), минуя GUI: тому в медиапути делать
+    // нечего, а лишний хоп добавлял к каждому кадру задержку планировщика и
+    // копию буфера в очереди событий интерфейса.
     void packetReady(const QByteArray& frame);
+    // …а вот числа для «Диагностики» — на GUI-поток, где живёт MediaStats.
+    // Отдельным сигналом, чтобы полезная нагрузка туда не ездила вовсе.
+    void packetSent(int bytes);
     // Выбранный кодек открыть не удалось, вещаем запасным. Наружу — чтобы
     // сказать об этом человеку: молчаливая подмена выглядит как «настройка
     // не работает».
     void codecFallback(int requested, int actual);
     // Кодировщик открыт: чем и в каком размере вещаем на самом деле. Настройки
     // этого не знают — там «Авто» и потолок разрешения, а кадр может выйти
-    // меньше, если камера столько не даёт.
-    void encoderOpened(int protoCodec, int width, int height);
-    // Кадр отработан (в том числе пропущен). По этому сигналу движок понимает,
-    // что воркер свободен, и не наваливает ему очередь: кадры в очереди
-    // стареют, и картинка начинает отставать от звука.
-    void frameDone();
+    // меньше, если камера столько не даёт. hardware — видеокарта или процессор:
+    // в настройках этого выбора нет (аппаратный путь пробуется сам), а знать
+    // человеку полезно — от него зависит, чего вообще ждать от машины.
+    void encoderOpened(int protoCodec, int width, int height, bool hardware);
 
 private:
     void encodeFrame(const QVideoFrame& frame, int maxW, int maxH, int fps,
                      int bitrate, bool forceKey, qint64 tsMs);
-    // Врисовать курсор в уже отмасштабированный кадр YUV420P.
-    void blendCursor(AVFrame* dst, int tw, int th);
+    // Врисовать курсор в уже отмасштабированный кадр. pixFmt — YUV420P (цветность
+    // двумя отдельными плоскостями) или NV12 (одна, U и V через байт).
+    void blendCursor(AVFrame* dst, int tw, int th, int pixFmt);
+    // Пересоздать масштабатор, если поменялись размеры или форматы.
+    bool ensureSws(int sw, int sh, int srcFmt, int tw, int th, int dstFmt);
+    // Сколько кадров в секунду мы РЕАЛЬНО отдаём — по интервалам между
+    // вызовами encodeFrame. Кодировщику важно знать это, а не пресетное
+    // пожелание: битрейт он делит на объявленную частоту.
+    int achievedFps(int requestedFps) const;
+    void noteInterval(qint64 tsMs, int requestedFps);
 
     quint8 m_msgType;
     E2eCipher* m_cipher;           // не владеем: общий на все потоки медиа
     int m_keyEvery;                // каденс опорных кадров, кадров
     VideoEncoder* m_enc = nullptr;
     SwsContext* m_sws = nullptr;
+    // Параметры, под которые собран m_sws. Раньше их сторожил
+    // sws_getCachedContext, но через него нельзя задать число потоков —
+    // приходится собирать контекст руками и сравнивать самим.
+    int m_swsSrcW = 0, m_swsSrcH = 0, m_swsSrcFmt = -1;
+    int m_swsDstW = 0, m_swsDstH = 0, m_swsDstFmt = -1;
     int m_frames = 0;
     bool m_keyNext = true;
     qint64 m_sendStartMs = 0;      // база внутренней PTS-шкалы кодера
     QRect m_cursorSrc;             // пусто — курсор не рисуем
     quint8 m_codecPref = 0;        // 0 — авто (H.264, при неудаче VP8)
+    std::atomic<int> m_inFlight{ 0 };   // см. busy()
+    // Измерение реальной частоты (см. achievedFps).
+    qint64 m_lastEncodeMs = 0;
+    double m_ivlEmaMs = 0;         // среднее время между кадрами, мс
+    int m_ratedFrames = 0;         // сколько интервалов легло в среднее
+    int m_openedFps = 0;           // с какой частотой открыт текущий кодировщик
+    int m_openedBitrate = 0;       // …и с каким битрейтом
+    qint64 m_openedAtMs = 0;
 };

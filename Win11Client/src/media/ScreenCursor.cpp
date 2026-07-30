@@ -4,6 +4,8 @@
 #include <QString>
 #include <QList>
 #include <QScreen>
+#include <QGuiApplication>
+#include <qpa/qplatformnativeinterface.h>
 
 #ifdef Q_OS_WIN
 #  define WIN32_LEAN_AND_MEAN
@@ -160,37 +162,48 @@ ScreenCursor ScreenCursor::grab() {
     return out;
 }
 
-// Физический прямоугольник монитора. Имя QScreen на Windows — это дружелюбное
-// название из EDID («TV-Station»), а вовсе не \\.\DISPLAY1, поэтому сходу
-// сопоставить его с монитором Windows нельзя (проверено пробой). Сначала
-// пробуем имя — вдруг совпадёт, — потом единственный монитор, потом
-// подбираем по размеру и положению.
+// Физический прямоугольник монитора, на котором живёт этот QScreen.
+//
+// Раньше здесь СРАВНИВАЛИСЬ ИМЕНА, а при неудаче монитор подбирался «похожий»
+// по размеру и положению. На одном мониторе это работало случайно — там ответ
+// один и угадывать нечего. На двух ошибка вылезала целиком: имя QScreen на
+// Windows — дружелюбное название из EDID, а не \\.\DISPLAY1, совпасть оно не
+// может, и дальше выбирался монитор, чей размер ближе. При наборе «FHD + 4К»
+// это давало прямоугольник 1920×1080 для телевизора 3840×2160 — то есть
+// вдвое заниженный масштаб, отчего курсор в демонстрации рисовался ВДВОЕ
+// КРУПНЕЕ настоящего и не на своём месте.
+//
+// Угадывать не нужно: платформенный плагин Qt хранит HMONITOR каждого экрана.
+// Публичного доступа к нему нет, поэтому берём через QPlatformNativeInterface —
+// как и хендл окна в ScreenSources, по той же причине и с тем же риском
+// (мы собираемся против конкретной версии Qt).
 QRect ScreenCursor::monitorRect(const QScreen* screen) {
     if (!screen) return {};
+
+    if (QPlatformNativeInterface* ni = QGuiApplication::platformNativeInterface()) {
+        // const_cast: интерфейс просит неконстантный QScreen, хотя ничего в нём
+        // не меняет — читает хендл из платформенных данных.
+        void* h = ni->nativeResourceForScreen(QByteArrayLiteral("handle"),
+                                              const_cast<QScreen*>(screen));
+        MONITORINFO mi{};
+        mi.cbSize = sizeof(mi);
+        if (h && GetMonitorInfoW(static_cast<HMONITOR>(h), &mi))
+            return QRect(mi.rcMonitor.left, mi.rcMonitor.top,
+                         mi.rcMonitor.right - mi.rcMonitor.left,
+                         mi.rcMonitor.bottom - mi.rcMonitor.top);
+    }
+
+    // Резерв на случай, если Qt однажды перестанет отдавать хендл: единственный
+    // монитор — единственный ответ. Подбирать «похожий» из нескольких мы больше
+    // НЕ пытаемся: неверный масштаб курсора выглядит как поломка, а пустой
+    // прямоугольник просто отключает его дорисовку — это честнее.
     QList<MonitorInfo> monitors;
     EnumDisplayMonitors(nullptr, nullptr, collectMonitors,
                         reinterpret_cast<LPARAM>(&monitors));
-    if (monitors.isEmpty()) return {};
     if (monitors.size() == 1) return monitors.first().rect;
-
     for (const MonitorInfo& m : monitors)
         if (m.device == screen->name()) return m.rect;
-
-    const qreal dpr = screen->devicePixelRatio();
-    const QRect want(QPoint(qRound(screen->geometry().x() * dpr),
-                            qRound(screen->geometry().y() * dpr)),
-                     QSize(qRound(screen->geometry().width() * dpr),
-                           qRound(screen->geometry().height() * dpr)));
-    QRect best;
-    qint64 bestScore = -1;
-    for (const MonitorInfo& m : monitors) {
-        const qint64 score = qAbs(m.rect.width() - want.width())
-                           + qAbs(m.rect.height() - want.height())
-                           + qAbs(m.rect.x() - want.x()) / 4
-                           + qAbs(m.rect.y() - want.y()) / 4;
-        if (bestScore < 0 || score < bestScore) { bestScore = score; best = m.rect; }
-    }
-    return best;
+    return {};
 }
 
 #else  // не Windows

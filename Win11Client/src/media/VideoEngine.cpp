@@ -23,12 +23,20 @@
 #include <QTimer>
 #include <QDebug>
 
-// Затор в сокете, после которого видеокадры пропускаются (§5.5).
+// Затор в сокете, после которого кадры КАМЕРЫ пропускаются (§5.5).
 static const qint64 kMaxBuffered = 1500000;
-// Для экрана порог НАМНОГО ниже: лицо к пропаже кадра чувствительнее, чем
-// слайд, а кадры экрана — самые тяжёлые в сокете. Роняя их первыми, мы
-// освобождаем очередь для голоса и камеры, и губы не разъезжаются.
-static const qint64 kMaxBufferedScreen = 350000;
+
+// Ступени качества демонстрации — множители пресетного битрейта.
+//
+// Ступени дискретные, а не плавная регулировка, и вот почему: сменить битрейт
+// у открытого кодировщика нельзя, его надо переоткрыть, а переоткрытие стоит
+// опорного кадра — то есть всплеска в том самом сокете, который мы пытаемся
+// разгрузить. Плавный регулятор устраивал бы такой всплеск каждые несколько
+// секунд. Пять ступеней с шагом около 30 % покрывают путь от 3.5 Мбит/с почти
+// до 900 кбит/с и переключаются редко.
+static const double kScreenRateLevels[] = { 1.0, 0.7, 0.5, 0.35, 0.25 };
+static const int kScreenRateLevelCount =
+    int(sizeof(kScreenRateLevels) / sizeof(kScreenRateLevels[0]));
 
 VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
                          ScreenSources* sources, AudioEngine* audio,
@@ -124,29 +132,26 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
     connect(m_scrThread, &QThread::finished, m_scrWorker, &QObject::deleteLater);
     connect(this, &VideoEngine::frameToEncode, m_worker, &VideoSendWorker::encode);
     connect(this, &VideoEngine::screenFrameToEncode, m_scrWorker, &VideoSendWorker::encode);
-    // Готовый пакет возвращается на GUI-поток и уходит в сокет (queued).
-    connect(m_worker, &VideoSendWorker::packetReady, this,
-            [this](const QByteArray& frame) {
-                m_conf->sendBinary(frame);
-                m_stats->noteTxVideo(false, frame.size());
-            });
-    connect(m_scrWorker, &VideoSendWorker::packetReady, this,
-            [this](const QByteArray& frame) {
-                m_conf->sendBinary(frame);
-                m_stats->noteTxVideo(true, frame.size());
-            });
+    // Готовый пакет уходит с потока кодирования ПРЯМО на поток сокета. Раньше
+    // он делал крюк через GUI-поток (packetReady -> лямбда -> invokeMethod на
+    // link), и каждый кадр ждал, пока интерфейс освободится, — а тот стоит на
+    // синхронизации с отрисовкой. В медиапути GUI-потоку делать нечего.
+    connect(m_worker, &VideoSendWorker::packetReady, link, &SignalingLink::sendBinary);
+    connect(m_scrWorker, &VideoSendWorker::packetReady, link, &SignalingLink::sendBinary);
+    // …а числа для «Диагностики» — сюда: MediaStats живёт на GUI-потоке.
+    connect(m_worker, &VideoSendWorker::packetSent, this,
+            [this](int bytes) { m_stats->noteTxVideo(false, bytes); });
+    connect(m_scrWorker, &VideoSendWorker::packetSent, this,
+            [this](int bytes) { m_stats->noteTxVideo(true, bytes); });
     // Кодировщик открылся: кодек и размер кадра — в «Диагностику». Спрашивать
     // об этом настройки нельзя: там «Авто», а кадр может быть меньше пресета,
     // если камера столько не даёт.
     connect(m_worker, &VideoSendWorker::encoderOpened, this,
-            [this](int c, int w, int h) { noteEncoderOpened(false, c, w, h); });
+            [this](int c, int w, int h, bool hw) { noteEncoderOpened(false, c, w, h, hw); });
     connect(m_scrWorker, &VideoSendWorker::encoderOpened, this,
-            [this](int c, int w, int h) { noteEncoderOpened(true, c, w, h); });
-    // Учёт занятости воркеров: пока кадр не отработан, следующий не шлём.
-    connect(m_worker, &VideoSendWorker::frameDone, this,
-            [this] { if (m_encInFlight > 0) --m_encInFlight; });
-    connect(m_scrWorker, &VideoSendWorker::frameDone, this,
-            [this] { if (m_scrInFlight > 0) --m_scrInFlight; });
+            [this](int c, int w, int h, bool hw) { noteEncoderOpened(true, c, w, h, hw); });
+    // Занятость воркеров движок спрашивает напрямую (VideoSendWorker::busy) —
+    // сигнала об освобождении больше нет, см. комментарий там.
     // Выбранного кодека в сборке не оказалось — сказать человеку, а не менять
     // молча. Полосу называем: у камеры и экрана настройки разные.
     connect(m_worker, &VideoSendWorker::codecFallback, this,
@@ -619,7 +624,7 @@ void VideoEngine::onCamFrame(const QVideoFrame& frame) {
     // Воркер ещё не отработал прошлый кадр: очередь копить нельзя — кадры в
     // ней стареют, а метка времени у них с момента съёмки, и получатель
     // увидит картинку позже звука. Лучше пропустить кадр, чем отстать.
-    if (m_encInFlight > 0) { m_stats->noteTxDrop(false); return; }
+    if (m_worker->busy()) { m_stats->noteTxDrop(false); return; }
     // Сдвигаем срок ровно на период — так частота держится ровной. Но если
     // источник молчал дольше периода, догонять пропущенное нельзя: иначе после
     // паузы разом проскочит пачка кадров.
@@ -629,7 +634,7 @@ void VideoEngine::onCamFrame(const QVideoFrame& frame) {
     // копия дешёвая, буфер общий; воркер маппит его read-only у себя.
     const bool forceKey = m_keyNext;
     m_keyNext = false;
-    ++m_encInFlight;
+    m_worker->noteQueued();
     emit frameToEncode(frame, q.width, q.height, q.fps, q.bitrate, forceKey, now);
 }
 
@@ -679,11 +684,15 @@ void VideoEngine::startScreenCapture() {
         // кадр без курсора (у захвата ОКНА он есть — там другой механизм).
         // Значит для монитора рисуем сами; воркеру нужен физический
         // прямоугольник монитора, чтобы перевести координаты курсора в кадр.
-        QRect physical = ScreenCursor::monitorRect(scr);
-        if (physical.isEmpty())            // имя не совпало — считаем по Qt
-            physical = QRect(scr->geometry().topLeft() * scr->devicePixelRatio(),
-                             scr->geometry().size() * scr->devicePixelRatio());
-        m_scrCursorRect = physical;
+        // Пусто — монитор сопоставить не удалось. Раньше здесь считался
+        // «примерный» прямоугольник как geometry * devicePixelRatio, и это
+        // ошибка: при разных масштабах у мониторов (FHD 125 % + телевизор)
+        // координаты Qt и физические координаты Windows связаны не одним
+        // множителем, так что получался неверный и масштаб, и сдвиг. Лучше не
+        // рисовать курсор вовсе, чем рисовать его вдвое крупнее и мимо места.
+        m_scrCursorRect = ScreenCursor::monitorRect(scr);
+        if (m_scrCursorRect.isEmpty())
+            qWarning() << "VideoEngine: монитор не сопоставлен, курсор не рисуем";
         applyCursorSetting();              // …если пользователь курсор не выключил
 
         m_scrScreen = new QScreenCapture(this);
@@ -700,6 +709,8 @@ void VideoEngine::startScreenCapture() {
 
     m_scrKeyNext = true;
     m_scrNextDueMs = 0;
+    m_scrPreviewDueMs = 0;             // первый кадр — сразу на сцену
+    resetScreenRate();                 // новая демонстрация начинается с полного качества
 }
 
 void VideoEngine::stopScreenCapture() {
@@ -764,8 +775,14 @@ void VideoEngine::applyCodecPrefs() {
                                   Q_ARG(int, protoOfCodec(m_settings->screenCodec())));
 }
 
-void VideoEngine::noteEncoderOpened(bool screen, int codec, int width, int height) {
-    m_stats->noteEncoder(screen, codecName(codec), width, height);
+void VideoEngine::noteEncoderOpened(bool screen, int codec, int width, int height,
+                                    bool hardware) {
+    // Пометка идёт только у аппаратного: «H.264» без уточнения и так означает
+    // процессор, а строка в «Диагностике» и без того длинная.
+    const QString name = hardware
+        ? QStringLiteral("%1 (аппаратный)").arg(codecName(codec))
+        : codecName(codec);
+    m_stats->noteEncoder(screen, name, width, height);
 }
 
 void VideoEngine::noteCodecFallback(bool screen, int requested, int actual) {
@@ -785,6 +802,60 @@ void VideoEngine::applyCursorSetting() {
                               Q_ARG(QRect, r));
 }
 
+void VideoEngine::resetScreenRate() {
+    m_scrRateLevel = 0;
+    m_scrBusySamples = 0;
+    m_scrCleanSamples = 0;
+    m_scrRateSampleMs = 0;
+}
+
+// Что делать, когда канал не вмещает то, что мы производим.
+//
+// Раньше ответ был один: выбросить кадр, как только в сокете накопилось больше
+// 350 000 байт. Это плохо с двух сторон. Порог фиксированный: при 3.5 Мбит/с
+// один опорный кадр 1080p (до 250 КБ) пробивал его сам, после чего выбрасывалось
+// ВСЁ, пока сокет не разгрузится, — отсюда замирания на полсекунды. А реакция
+// одна и та же независимо от причины: узкий канал лечился не снижением
+// качества, а выбрасыванием кадров, то есть рывками вместо мягкой картинки.
+//
+// Теперь качество снижается ступенями, а кадры роняются только если очередь
+// всё равно не рассасывается. Порог считается из ТЕКУЩЕГО битрейта — полсекунды
+// того, что мы сами производим, — поэтому после снижения качества он опускается
+// вместе с потоком, а не остаётся прежним.
+int VideoEngine::screenBitrate(int presetBitrate, qint64 nowMs, qint64* queueBudget) {
+    const int target = int(presetBitrate * kScreenRateLevels[m_scrRateLevel]);
+    // Бюджет очереди: полсекунды текущего потока, но не меньше 128 КБ — иначе
+    // на низких ступенях в него не влезал бы даже один опорный кадр.
+    const qint64 budget = qBound(qint64(128000), qint64(target) / 8 / 2, qint64(1500000));
+    if (queueBudget) *queueBudget = budget;
+
+    // Пробы раз в 500 мс: ступень должна двигаться по устойчивой картине, а не
+    // по одному всплеску (всплеск как раз и бывает от опорного кадра).
+    if (nowMs - m_scrRateSampleMs < 500) return target;
+    m_scrRateSampleMs = nowMs;
+
+    const qint64 queued = m_conf->bufferedBytes();
+    if (queued > budget)            { ++m_scrBusySamples;  m_scrCleanSamples = 0; }
+    else if (queued < budget / 4)   { ++m_scrCleanSamples; m_scrBusySamples = 0; }
+
+    // Несимметрично намеренно: вниз — после 1.5 с затора, вверх — только после
+    // 10 с чистой очереди. Ронять качество надо быстро, поднимать осторожно,
+    // иначе на канале, который еле держит текущую ступень, получаются качели:
+    // поднялись, захлебнулись, упали, поднялись.
+    if (m_scrBusySamples >= 3 && m_scrRateLevel < kScreenRateLevelCount - 1) {
+        ++m_scrRateLevel;
+        m_scrBusySamples = 0;
+        qInfo() << "VideoEngine: демонстрация -> ступень" << m_scrRateLevel
+                << "битрейт" << int(presetBitrate * kScreenRateLevels[m_scrRateLevel]);
+    } else if (m_scrCleanSamples >= 20 && m_scrRateLevel > 0) {
+        --m_scrRateLevel;
+        m_scrCleanSamples = 0;
+        qInfo() << "VideoEngine: демонстрация -> ступень" << m_scrRateLevel
+                << "битрейт" << int(presetBitrate * kScreenRateLevels[m_scrRateLevel]);
+    }
+    return target;
+}
+
 void VideoEngine::setScreenPreviewActive(bool on) {
     if (m_screenPreviewActive == on) return;
     m_screenPreviewActive = on;
@@ -794,27 +865,44 @@ void VideoEngine::setScreenPreviewActive(bool on) {
 void VideoEngine::onScreenCapFrame(const QVideoFrame& frame) {
     if (!frame.isValid()) return;
 
-    // Своя сцена — сразу и без кодека (как превью камеры): видеть, что именно
-    // ты показываешь, нужно немедленно.
-    if (m_scrPreview) m_scrPreview->setVideoFrame(frame);
-    setScreenPreviewActive(true);
-
-    if (!m_live) return;
     const MediaSettings::CamPreset q = m_settings->screenPreset();
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     const qint64 period = qMax<qint64>(1, 1000 / q.fps);
+
+    // Своя сцена — сразу и без кодека (как превью камеры): видеть, что именно
+    // ты показываешь, нужно немедленно. Но НЕ на каждый кадр захвата: кадр
+    // монитора 4К — это ~33 МБ загрузки текстуры, и шестьдесят таких в секунду
+    // занимают render-поток целиком, а вместе с ним и GUI-поток, который на
+    // него синхронизируется. Быстрее шестнадцатой доли секунды глаз всё равно
+    // не просит, а чаще, чем уходит в эфир, показывать попросту незачем.
+    const qint64 previewPeriod = qMax<qint64>(66, period);
+    if (now >= m_scrPreviewDueMs) {
+        m_scrPreviewDueMs = now + previewPeriod;
+        if (m_scrPreview) m_scrPreview->setVideoFrame(frame);
+    }
+    setScreenPreviewActive(true);
+
+    if (!m_live) return;
     if (now < m_scrNextDueMs) return;                           // ещё рано
     m_stats->noteTxAttempt(true);
-    if (m_conf->bufferedBytes() > kMaxBufferedScreen) {         // экран уступает дорогу
+
+    // Ступень качества и бюджет очереди считаются вместе — см. screenBitrate.
+    qint64 budget = 0;
+    const int bitrate = screenBitrate(q.bitrate, now, &budget);
+
+    // Очередь не рассасывается даже после снижения качества — только теперь
+    // роняем кадр. Экран уступает дорогу голосу и камере первым: лицо к
+    // пропаже кадра чувствительнее, чем слайд, а кадры экрана самые тяжёлые.
+    if (m_conf->bufferedBytes() > budget) {
         m_stats->noteTxDrop(true);
         return;
     }
-    if (m_scrInFlight > 0) { m_stats->noteTxDrop(true); return; }   // см. onCamFrame
+    if (m_scrWorker->busy()) { m_stats->noteTxDrop(true); return; }   // см. onCamFrame
     m_scrNextDueMs = (m_scrNextDueMs < now - period) ? now + period
                                                     : m_scrNextDueMs + period;
 
     const bool forceKey = m_scrKeyNext;
     m_scrKeyNext = false;
-    ++m_scrInFlight;
-    emit screenFrameToEncode(frame, q.width, q.height, q.fps, q.bitrate, forceKey, now);
+    m_scrWorker->noteQueued();
+    emit screenFrameToEncode(frame, q.width, q.height, q.fps, bitrate, forceKey, now);
 }
