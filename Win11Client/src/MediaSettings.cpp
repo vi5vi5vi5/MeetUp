@@ -10,6 +10,30 @@ static QString devId(const QByteArray& id) { return QString::fromLatin1(id.toBas
 
 static const char* kGroup = "av";
 
+// Потолок битрейта демонстрации: "auto" либо кбит/с строкой. Список закрытый —
+// значение приходит из выпадающего списка, а из чужого файла настроек может
+// прийти что угодно.
+static bool knownScreenBitrate(const QString& b) {
+    static const QStringList kAll{ "auto", "2000", "5000", "10000",
+                                   "20000", "40000", "80000" };
+    return kAll.contains(b);
+}
+
+// Наборы кодеков у камеры и демонстрации теперь РАЗНЫЕ, и это не недосмотр.
+//
+// У демонстрации выбор сведён к трём осмысленным задачам: «видно всем»,
+// «дёшево по нагрузке», «дёшево по каналу». У камеры выбора по сути нет:
+// аппаратный путь ей закрыт намеренно (два кадра конвейера идут прямо в
+// расхождение с голосом), а на 720p24 выигрывать нечем — там всё быстро.
+// Пока список камеры оставлен как был, чтобы не менять её поведение заодно.
+static bool knownCamCodec(const QString& c) {
+    return c == "auto" || c == "h264" || c == "vp8" || c == "vp9";
+}
+
+static bool knownScreenCodec(const QString& c) {
+    return c == "auto" || c == "hevc" || c == "av1";
+}
+
 MediaSettings::MediaSettings(QObject* parent) : QObject(parent) {
     QSettings s;
     s.beginGroup(kGroup);
@@ -36,12 +60,18 @@ MediaSettings::MediaSettings(QObject* parent) : QObject(parent) {
     // Пункт из разряда «когда всё остальное готово».
     m_screenFps = s.value("screenFps", 30).toInt();
     if (m_screenFps != 15 && m_screenFps != 30 && m_screenFps != 60) m_screenFps = 30;
+    m_screenBitrate = s.value("screenBitrate", "auto").toString();
+    if (!knownScreenBitrate(m_screenBitrate)) m_screenBitrate = "auto";
     m_screenCursor = s.value("screenCursor", true).toBool();
-    const QStringList codecs{"auto", "h264", "vp8", "vp9"};
     m_camCodec = s.value("camCodec", "auto").toString();
-    if (!codecs.contains(m_camCodec)) m_camCodec = "auto";
+    if (!knownCamCodec(m_camCodec)) m_camCodec = "auto";
+    // Из выбора демонстрации ушли h264 (делал ровно то же, что «Авто»), vp8
+    // (запасной путь, а не выбор) и vp9 (не успевает на большом экране). Раз
+    // выбрать их больше нельзя, сохранённое значение НАДО перенести на «Авто»:
+    // иначе настройка молча продолжала бы действовать, а в интерфейсе её не
+    // было бы видно — человек искал бы причину не там.
     m_screenCodec = s.value("screenCodec", "auto").toString();
-    if (!codecs.contains(m_screenCodec)) m_screenCodec = "auto";
+    if (!knownScreenCodec(m_screenCodec)) m_screenCodec = "auto";
     m_screenAudio = s.value("screenAudio", false).toBool();
     m_screenVolume = qBound(0, s.value("screenVolume", 100).toInt(), 200);
     m_uiSounds = s.value("uiSounds", true).toBool();
@@ -147,6 +177,13 @@ void MediaSettings::setScreenFps(int fps) {
     emit screenFpsChanged();
 }
 
+void MediaSettings::setScreenBitrate(const QString& b) {
+    if (m_screenBitrate == b || !knownScreenBitrate(b)) return;
+    m_screenBitrate = b;
+    save("screenBitrate", b);
+    emit screenBitrateChanged();
+}
+
 void MediaSettings::setScreenCursor(bool on) {
     if (m_screenCursor == on) return;
     m_screenCursor = on;
@@ -163,19 +200,15 @@ void MediaSettings::setUiSounds(bool on) {
 
 // Кодек: "auto" | "h264" | "vp8" | "vp9". Чужое значение молча игнорируем —
 // в настройках оно взяться не может, а из чужого файла настроек может.
-static bool knownCodec(const QString& c) {
-    return c == "auto" || c == "h264" || c == "vp8" || c == "vp9";
-}
-
 void MediaSettings::setCamCodec(const QString& c) {
-    if (m_camCodec == c || !knownCodec(c)) return;
+    if (m_camCodec == c || !knownCamCodec(c)) return;
     m_camCodec = c;
     save("camCodec", c);
     emit camCodecChanged();
 }
 
 void MediaSettings::setScreenCodec(const QString& c) {
-    if (m_screenCodec == c || !knownCodec(c)) return;
+    if (m_screenCodec == c || !knownScreenCodec(c)) return;
     m_screenCodec = c;
     save("screenCodec", c);
     emit screenCodecChanged();
@@ -274,7 +307,19 @@ MediaSettings::CamPreset MediaSettings::screenPreset() const {
     // Битрейт от частоты: вдвое больше кадров — далеко не вдвое больше данных
     // (на экране меняется малая часть картинки), поэтому коэффициенты пологие.
     const double k = m_screenFps <= 15 ? 0.7 : (m_screenFps >= 60 ? 1.6 : 1.0);
-    return { w, h, m_screenFps, int(base * k) };
+    int bitrate = int(base * k);
+
+    // Явно выбранный потолок отменяет весь расчёт выше. Смысл настройки именно
+    // в этом: расчёт исходит из «канал дорог, экономим», а у того, кто поднял
+    // сервер себе домой, канал как раз дешёвый — и разумнее отдать биты, чем
+    // смотреть на замыленный текст. Регулятор качества всё равно опустится
+    // ниже этого потолка, если канал вдруг не потянет.
+    if (m_screenBitrate != "auto") {
+        bool ok = false;
+        const int kbps = m_screenBitrate.toInt(&ok);
+        if (ok && kbps > 0) bitrate = kbps * 1000;
+    }
+    return { w, h, m_screenFps, bitrate };
 }
 
 int MediaSettings::audioBitrate() const {

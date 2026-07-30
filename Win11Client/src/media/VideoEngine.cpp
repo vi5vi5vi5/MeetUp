@@ -106,6 +106,15 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
             this, &VideoEngine::restartScreenCapture);
     connect(settings, &MediaSettings::screenFpsChanged,
             this, &VideoEngine::restartScreenCapture);
+    // Битрейт — не повод перезапускать захват: он не влияет ни на то, что мы
+    // снимаем, ни на размер кадра. Достаточно уронить кодировщик, он откроется
+    // на следующем кадре уже с новым потолком. Иначе смена настройки ждала бы
+    // выдержку переоткрытия (4 с) и выглядела бы как «не сработало».
+    connect(settings, &MediaSettings::screenBitrateChanged, this, [this] {
+        resetScreenRate();             // новый потолок — снова с полного качества
+        if (m_scrWorker)
+            QMetaObject::invokeMethod(m_scrWorker, "reset", Qt::QueuedConnection);
+    });
     // А вот курсор — просто флаг для воркера: перезапускать поток незачем.
     connect(settings, &MediaSettings::screenCursorChanged,
             this, &VideoEngine::applyCursorSetting);
@@ -703,10 +712,18 @@ void VideoEngine::startScreenCapture() {
 
     const bool wantWindow = m_sources->isWindow();
     const bool cursor = m_settings->screenCursor();
+    // Уменьшение и перевод в NV12 отдаём видеокарте: она сделает это до того,
+    // как кадр попадёт в обычную память, и вместо 33 МБ на 4К обратно поедет 3.
+    // Воркеру достанется кадр уже нужного размера, и его sws_scale выродится в
+    // копию. Рамка — та же, что у пресета; «Источник» даёт рамку заведомо
+    // больше любого экрана, то есть уменьшать нечего.
+    const MediaSettings::CamPreset preset = m_settings->screenPreset();
+    const QSize box(preset.width, preset.height);
     bool started = false;
     // Захватчик живёт на потоке кодирования: WGC требует апартамента COM = MTA,
     // а GUI-поток Qt — STA. Заодно там уже есть цикл событий для его сторожа.
-    QMetaObject::invokeMethod(m_scrCapture, [this, handle, wantWindow, cursor, &started] {
+    QMetaObject::invokeMethod(m_scrCapture, [this, handle, wantWindow, cursor, box, &started] {
+        m_scrCapture->setTargetBox(box);
         started = wantWindow ? m_scrCapture->startWindow(handle, cursor)
                              : m_scrCapture->startMonitor(handle, cursor);
     }, Qt::BlockingQueuedConnection);
@@ -764,6 +781,10 @@ static quint8 protoOfCodec(const QString& id) {
     if (id == "h264") return Proto::CODEC_H264;
     if (id == "vp8")  return Proto::CODEC_VP8;
     if (id == "vp9")  return Proto::CODEC_VP9;
+    // "hevc" и "av1" сюда пока не попадают: в настройках демонстрации они
+    // приглушены, и выбрать их нельзя. Своих байтов в протоколе у них тоже
+    // ещё нет — появятся вместе с обратной связью «не понимаю такой кодек»,
+    // без которой выпускать их нельзя (см. SettingsShare.qml).
     return 0;
 }
 

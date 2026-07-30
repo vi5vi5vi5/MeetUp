@@ -32,6 +32,11 @@ class MediaSettings : public QObject {
     // screenRes: "360" | "480" | "720" | "1080" | "src" (без масштабирования).
     Q_PROPERTY(QString screenRes READ screenRes WRITE setScreenRes NOTIFY screenResChanged)
     Q_PROPERTY(int screenFps READ screenFps WRITE setScreenFps NOTIFY screenFpsChanged)
+    // screenBitrate: "auto" (считается от разрешения и частоты) либо потолок в
+    // кбит/с строкой — "2000", "5000", … Это именно ПОТОЛОК: регулятор качества
+    // (VideoEngine::screenBitrate) вправе опуститься ниже, если канал не тянет.
+    Q_PROPERTY(QString screenBitrate READ screenBitrate WRITE setScreenBitrate
+               NOTIFY screenBitrateChanged)
     // Дорисовывать ли курсор при показе монитора. Захват окна курсор рисует сам
     // (другой механизм), поэтому настройка влияет только на показ монитора.
     Q_PROPERTY(bool screenCursor READ screenCursor WRITE setScreenCursor NOTIFY screenCursorChanged)
@@ -73,6 +78,7 @@ public:
     QString audioQuality() const { return m_audioQuality; }
     QString screenRes() const { return m_screenRes; }
     int screenFps() const { return m_screenFps; }
+    QString screenBitrate() const { return m_screenBitrate; }
     bool screenCursor() const { return m_screenCursor; }
     QString camCodec() const { return m_camCodec; }
     QString screenCodec() const { return m_screenCodec; }
@@ -93,6 +99,7 @@ public:
     void setAudioQuality(const QString& q);
     void setScreenRes(const QString& r);
     void setScreenFps(int fps);
+    void setScreenBitrate(const QString& b);
     void setScreenCursor(bool on);
     void setCamCodec(const QString& c);
     void setScreenCodec(const QString& c);
@@ -143,6 +150,7 @@ signals:
     void audioQualityChanged();
     void screenResChanged();
     void screenFpsChanged();
+    void screenBitrateChanged();
     void screenCursorChanged();
     void camCodecChanged();
     void screenCodecChanged();
@@ -164,6 +172,7 @@ private:
     QString m_camQuality = "med", m_audioQuality = "med";
     QString m_screenRes = "720";
     int m_screenFps = 30;
+    QString m_screenBitrate = "auto";
     bool m_screenCursor = true;
     QString m_camCodec = "auto", m_screenCodec = "auto";
     bool m_screenAudio = false;

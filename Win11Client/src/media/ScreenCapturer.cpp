@@ -28,6 +28,7 @@
 #include <QMutex>
 #include <QVideoFrameFormat>
 #include <atomic>
+#include <chrono>
 
 namespace WGC = winrt::Windows::Graphics::Capture;
 namespace WGDX = winrt::Windows::Graphics::DirectX;
@@ -59,9 +60,28 @@ struct ScreenCapturer::Impl {
     QSize stagingSize;
     QSize poolSize;
 
+    // ---- путь через видеокарту (см. setTargetBox) ----
+    winrt::com_ptr<ID3D11VideoDevice> vdev;
+    winrt::com_ptr<ID3D11VideoContext> vctx;
+    winrt::com_ptr<ID3D11VideoProcessorEnumerator> vpEnum;
+    winrt::com_ptr<ID3D11VideoProcessor> vp;
+    winrt::com_ptr<ID3D11Texture2D> nv12;              // выход процессора
+    winrt::com_ptr<ID3D11VideoProcessorOutputView> nv12View;
+    winrt::com_ptr<ID3D11Texture2D> nv12Staging;       // он же для чтения ЦП
+    // Кадры приходят из пула WGC по кругу (их там два), а представление входа
+    // привязано к конкретной текстуре — держим готовые, чтобы не создавать их
+    // заново на каждый кадр.
+    QHash<void*, winrt::com_ptr<ID3D11VideoProcessorInputView>> inViews;
+    QSize vpSrc, vpDst;
+    QSize targetBox;                                   // пусто — не уменьшать
+    // Гасится при первой же неудаче: остаться без демонстрации хуже, чем
+    // отдать её медленным путём через процессор.
+    bool gpuPath = true;
+
     HWND hwnd = nullptr;                 // непусто только при захвате окна
     std::atomic<bool> suspended{ false };
     std::atomic<bool> closed{ false };
+    std::atomic<qint64> copyUs{ 0 };     // см. lastCopyMicros()
     // Держим на время выдачи кадра и на время разбора: кадр приезжает с потока
     // пула WGC, а stop() зовут с нашего — без замка разбор мог бы освободить
     // устройство под работающим CopyResource.
@@ -109,6 +129,10 @@ bool ScreenCapturer::isRunning() const {
     return d->session != nullptr;
 }
 
+qint64 ScreenCapturer::lastCopyMicros() const {
+    return d->copyUs.load(std::memory_order_relaxed);
+}
+
 // ---------------------------------------------------------------------------
 
 static bool ensureDevice(ScreenCapturer::Impl* d) {
@@ -134,6 +158,181 @@ static bool ensureDevice(ScreenCapturer::Impl* d) {
     return d->rtDevice != nullptr;
 }
 
+// Целевой размер: вписать исходный кадр в рамку, сохранив пропорции. Чётный —
+// того же требуют и кодеки (§5.5), и формат NV12 с его половинной цветностью.
+static QSize fitInto(const QSize& src, const QSize& box) {
+    if (box.isEmpty() || src.isEmpty()) return src;
+    const double k = qMin(1.0, qMin(double(box.width()) / src.width(),
+                                    double(box.height()) / src.height()));
+    return QSize(qMax(2, int(src.width() * k) & ~1),
+                 qMax(2, int(src.height() * k) & ~1));
+}
+
+// Собрать (или пересобрать) процессор видеокарты под пару размеров.
+// Возвращает false, если чего-то не хватает — тогда работаем по-старому.
+static bool ensureProcessor(ScreenCapturer::Impl* d, const QSize& src, const QSize& dst) {
+    if (d->vp && d->vpSrc == src && d->vpDst == dst) return true;
+
+    d->inViews.clear();
+    d->nv12View = nullptr;
+    d->nv12 = nullptr;
+    d->nv12Staging = nullptr;
+    d->vp = nullptr;
+    d->vpEnum = nullptr;
+
+    if (!d->vdev) d->vdev = d->device.try_as<ID3D11VideoDevice>();
+    if (!d->vctx) d->vctx = d->ctx.try_as<ID3D11VideoContext>();
+    if (!d->vdev || !d->vctx) return false;
+
+    D3D11_VIDEO_PROCESSOR_CONTENT_DESC cd{};
+    cd.InputFrameFormat = D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE;
+    cd.InputWidth = UINT(src.width());
+    cd.InputHeight = UINT(src.height());
+    cd.OutputWidth = UINT(dst.width());
+    cd.OutputHeight = UINT(dst.height());
+    cd.InputFrameRate = { 60, 1 };
+    cd.OutputFrameRate = { 60, 1 };
+    cd.Usage = D3D11_VIDEO_USAGE_PLAYBACK_NORMAL;
+    if (FAILED(d->vdev->CreateVideoProcessorEnumerator(&cd, d->vpEnum.put()))) return false;
+    if (FAILED(d->vdev->CreateVideoProcessor(d->vpEnum.get(), 0, d->vp.put()))) return false;
+
+    // Выход процессора: NV12 нужного размера. BIND_RENDER_TARGET обязателен —
+    // без него не создать представление выхода.
+    D3D11_TEXTURE2D_DESC td{};
+    td.Width = UINT(dst.width());
+    td.Height = UINT(dst.height());
+    td.MipLevels = 1;
+    td.ArraySize = 1;
+    td.Format = DXGI_FORMAT_NV12;
+    td.SampleDesc.Count = 1;
+    td.Usage = D3D11_USAGE_DEFAULT;
+    td.BindFlags = D3D11_BIND_RENDER_TARGET;
+    if (FAILED(d->device->CreateTexture2D(&td, nullptr, d->nv12.put()))) return false;
+
+    D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC ovd{};
+    ovd.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
+    if (FAILED(d->vdev->CreateVideoProcessorOutputView(d->nv12.get(), d->vpEnum.get(),
+                                                       &ovd, d->nv12View.put())))
+        return false;
+
+    td.BindFlags = 0;
+    td.Usage = D3D11_USAGE_STAGING;
+    td.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    if (FAILED(d->device->CreateTexture2D(&td, nullptr, d->nv12Staging.put()))) return false;
+
+    // Цветовые пространства задаём явно, чтобы картинка не поехала по сравнению
+    // с прежним путём: на входе RGB полного диапазона, на выходе BT.601 с
+    // урезанным (16–235) — ровно то, что по умолчанию делал sws_scale.
+    D3D11_VIDEO_PROCESSOR_COLOR_SPACE inCs{};
+    inCs.RGB_Range = 0;                       // 0-255
+    d->vctx->VideoProcessorSetStreamColorSpace(d->vp.get(), 0, &inCs);
+    D3D11_VIDEO_PROCESSOR_COLOR_SPACE outCs{};
+    outCs.YCbCr_Matrix = 0;                   // BT.601
+    outCs.Nominal_Range = D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_16_235;
+    d->vctx->VideoProcessorSetOutputColorSpace(d->vp.get(), &outCs);
+
+    const RECT srcRect{ 0, 0, src.width(), src.height() };
+    const RECT dstRect{ 0, 0, dst.width(), dst.height() };
+    d->vctx->VideoProcessorSetStreamSourceRect(d->vp.get(), 0, TRUE, &srcRect);
+    d->vctx->VideoProcessorSetStreamDestRect(d->vp.get(), 0, TRUE, &dstRect);
+    d->vctx->VideoProcessorSetOutputTargetRect(d->vp.get(), TRUE, &dstRect);
+
+    d->vpSrc = src;
+    d->vpDst = dst;
+    qInfo() << "ScreenCapturer: видеокарта готовит кадр" << src.width() << "x" << src.height()
+            << "->" << dst.width() << "x" << dst.height() << "NV12";
+    return true;
+}
+
+// Кадр -> NV12 нужного размера силами видеокарты, затем чтение маленького
+// результата. false — не получилось, зовущий уходит на прежний путь.
+static bool gpuConvert(ScreenCapturer::Impl* d, ID3D11Texture2D* src,
+                       const QSize& srcSize, const QSize& dstSize, QVideoFrame* out) {
+    if (!ensureProcessor(d, srcSize, dstSize)) return false;
+
+    // Представление входа кэшируем по адресу текстуры: пул WGC гоняет по кругу
+    // два буфера, и пересоздавать их каждый кадр незачем.
+    winrt::com_ptr<ID3D11VideoProcessorInputView>& iv = d->inViews[src];
+    if (!iv) {
+        D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC ivd{};
+        ivd.FourCC = 0;
+        ivd.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
+        ivd.Texture2D.MipSlice = 0;
+        ivd.Texture2D.ArraySlice = 0;
+        const HRESULT hr = d->vdev->CreateVideoProcessorInputView(src, d->vpEnum.get(),
+                                                                  &ivd, iv.put());
+        if (FAILED(hr)) {
+            d->inViews.remove(src);
+            qWarning("ScreenCapturer: CreateVideoProcessorInputView = 0x%08lX",
+                     static_cast<unsigned long>(hr));
+            return false;
+        }
+    }
+
+    D3D11_VIDEO_PROCESSOR_STREAM stream{};
+    stream.Enable = TRUE;
+    stream.pInputSurface = iv.get();
+    const HRESULT hrBlt = d->vctx->VideoProcessorBlt(d->vp.get(), d->nv12View.get(), 0, 1, &stream);
+    if (FAILED(hrBlt)) {
+        qWarning("ScreenCapturer: VideoProcessorBlt = 0x%08lX",
+                 static_cast<unsigned long>(hrBlt));
+        return false;
+    }
+
+    d->ctx->CopyResource(d->nv12Staging.get(), d->nv12.get());
+
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    const HRESULT hrMap = d->ctx->Map(d->nv12Staging.get(), 0, D3D11_MAP_READ, 0, &mapped);
+    if (FAILED(hrMap)) {
+        qWarning("ScreenCapturer: Map(NV12) = 0x%08lX", static_cast<unsigned long>(hrMap));
+        return false;
+    }
+
+    // Раскладка NV12 в отображённой текстуре: плоскость яркости высотой H, за
+    // ней цветность высотой H/2, обе с одинаковым шагом строки. Это контракт
+    // D3D11, на него и опираемся.
+    //
+    // А вот DepthPitch проверять как «полтора кадра» НЕЛЬЗЯ, хотя и хочется:
+    // драйвер AMD сообщает здесь 8294400 при RowPitch 3840 и высоте 2160, то
+    // есть ровно размер ОДНОЙ плоскости яркости. Цветность при этом лежит сразу
+    // за ней, как и положено. Строгая проверка забраковала бы совершенно
+    // правильный кадр и увела весь захват на медленный путь — что она и делала.
+    const int h = dstSize.height();
+    const bool layoutOk = mapped.pData && mapped.RowPitch > 0
+        && (mapped.DepthPitch == 0 || mapped.DepthPitch >= mapped.RowPitch * UINT(h));
+    if (!layoutOk)
+        qWarning("ScreenCapturer: раскладка NV12 не та: pData=%p RowPitch=%u DepthPitch=%u h=%d",
+                 mapped.pData, mapped.RowPitch, mapped.DepthPitch, h);
+    QVideoFrame vf;
+    if (layoutOk) {
+        vf = QVideoFrame(QVideoFrameFormat(dstSize, QVideoFrameFormat::Format_NV12));
+        if (!vf.map(QVideoFrame::WriteOnly))
+            qWarning("ScreenCapturer: QVideoFrame(NV12) не отображается на запись");
+        else if (vf.planeCount() < 2)
+            qWarning("ScreenCapturer: QVideoFrame(NV12) отдал %d плоскостей", vf.planeCount());
+        if (vf.isMapped() && vf.planeCount() >= 2) {
+            const uchar* srcY = static_cast<const uchar*>(mapped.pData);
+            const uchar* srcUV = srcY + qsizetype(mapped.RowPitch) * h;
+            for (int y = 0; y < h; ++y)
+                memcpy(vf.bits(0) + qsizetype(y) * vf.bytesPerLine(0),
+                       srcY + qsizetype(y) * mapped.RowPitch,
+                       size_t(qMin(vf.bytesPerLine(0), int(mapped.RowPitch))));
+            for (int y = 0; y < h / 2; ++y)
+                memcpy(vf.bits(1) + qsizetype(y) * vf.bytesPerLine(1),
+                       srcUV + qsizetype(y) * mapped.RowPitch,
+                       size_t(qMin(vf.bytesPerLine(1), int(mapped.RowPitch))));
+            vf.unmap();
+        } else {
+            vf = QVideoFrame();
+        }
+    }
+    d->ctx->Unmap(d->nv12Staging.get(), 0);
+
+    if (!vf.isValid()) return false;
+    *out = vf;
+    return true;
+}
+
 // Кадр из пула -> QVideoFrame. Исполняется на потоке пула WGC.
 static void deliverFrame(ScreenCapturer* self, ScreenCapturer::Impl* d,
                          const WGC::Direct3D11CaptureFramePool& pool) {
@@ -149,6 +348,33 @@ static void deliverFrame(ScreenCapturer* self, ScreenCapturer::Impl* d,
 
     auto src = dxgiFrom<ID3D11Texture2D>(frame.Surface());
     if (!src) return;
+
+    // Основной путь: уменьшение и перевод в NV12 делает видеокарта, а обратно
+    // читается уже маленький кадр. На 4К это разница между 33 МБ и 3 МБ на
+    // кадр — и между 29 мс и парой миллисекунд.
+    if (d->gpuPath) {
+        const QSize dst = fitInto(size, d->targetBox);
+        const auto copyStart = std::chrono::steady_clock::now();
+        QVideoFrame vf;
+        if (gpuConvert(d, src.get(), size, dst, &vf)) {
+            d->copyUs.store(std::chrono::duration_cast<std::chrono::microseconds>(
+                                std::chrono::steady_clock::now() - copyStart).count(),
+                            std::memory_order_relaxed);
+            if (size != d->poolSize) {
+                d->poolSize = size;
+                d->inViews.clear();          // пул пересоберёт свои текстуры
+                pool.Recreate(d->rtDevice, WGDX::DirectXPixelFormat::B8G8R8A8UIntNormalized, 2,
+                              { size.width(), size.height() });
+            }
+            if (d->suspended.exchange(false))
+                emit self->suspendedChanged(false);
+            emit self->frameReady(vf);
+            return;
+        }
+        // Не сложилось — дальше по-старому, и больше не пробуем.
+        qWarning() << "ScreenCapturer: видеокарта не справилась, переходим на путь через ЦП";
+        d->gpuPath = false;
+    }
 
     // Промежуточная текстура для чтения процессором. Пересоздаём только при
     // смене размера — размер меняется, когда окно тянут за край.
@@ -169,6 +395,7 @@ static void deliverFrame(ScreenCapturer* self, ScreenCapturer::Impl* d,
 
     // Копируем именно область содержимого: текстура пула бывает крупнее кадра
     // (пул не пересоздают на каждый пиксель изменения размера).
+    const auto copyStart = std::chrono::steady_clock::now();
     D3D11_BOX box{ 0, 0, 0, UINT(size.width()), UINT(size.height()), 1 };
     d->ctx->CopySubresourceRegion(d->staging.get(), 0, 0, 0, 0, src.get(), 0, &box);
 
@@ -187,6 +414,9 @@ static void deliverFrame(ScreenCapturer* self, ScreenCapturer::Impl* d,
         vf.unmap();
     }
     d->ctx->Unmap(d->staging.get(), 0);
+    d->copyUs.store(std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - copyStart).count(),
+                    std::memory_order_relaxed);
 
     // Размер содержимого разошёлся с пулом — пересобрать пул, иначе следующие
     // кадры будут приезжать в старом размере.
@@ -315,6 +545,13 @@ bool ScreenCapturer::startWindow(void* hwnd, bool drawCursor) {
     return startItem(drawCursor, QStringLiteral("окно"));
 }
 
+void ScreenCapturer::setTargetBox(const QSize& box) {
+    QMutexLocker guard(&d->lock);
+    if (d->targetBox == box) return;
+    d->targetBox = box;
+    d->vpSrc = QSize();                // заставит пересобрать процессор
+}
+
 void ScreenCapturer::setCursorEnabled(bool on) {
     if (!d->session) return;
     // Курсор рисует система — это и есть причина, по которой своя дорисовка
@@ -341,6 +578,9 @@ void ScreenCapturer::stop() {
         d->item = nullptr;
         d->staging = nullptr;
         d->stagingSize = QSize();
+        // Представления входа держат текстуры пула — отпускаем их вместе с ним.
+        d->inViews.clear();
+        d->vpSrc = QSize();
         d->poolSize = QSize();
         d->hwnd = nullptr;
         d->suspended = false;
