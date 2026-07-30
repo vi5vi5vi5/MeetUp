@@ -43,6 +43,10 @@ public:
     // ЗВАТЬ ТОЛЬКО С ПОТОКА, ГДЕ АПАРТАМЕНТ COM = MTA. На GUI-потоке Qt (он
     // всегда STA) Media Foundation откажет, и мы получили бы ложное «нет».
     static bool hardwareHevcAvailable();
+    // То же для AV1. Он безроялтийный, поэтому единственный, кого не жалко
+    // однажды поставить по умолчанию, — но только когда его научатся
+    // принимать все, включая веб.
+    static bool hardwareAv1Available();
 
     bool isOpen() const { return m_ctx != nullptr; }
     quint8 protoCodec() const { return m_protoCodec; }   // Proto::CODEC_H264 | VP8 | VP9

@@ -24,7 +24,14 @@
   // Камера и демонстрация экрана — независимые потоки: у экрана свои типы,
   // чтобы приёмник держал два декодера и рисовал их в разные места.
   const MSG = { VIDEO_JPEG: 1, AUDIO_PCM: 2, VIDEO_CODED: 3, AUDIO_CODED: 4,
-                SCREEN_CODED: 5, KEYFRAME_REQ: 6, SCREEN_JPEG: 7 };
+                SCREEN_CODED: 5, KEYFRAME_REQ: 6, SCREEN_JPEG: 7,
+                // «Не понимаю такой кодек» — шлём мы, когда кадр пришёл с
+                // кодеком, которого браузер не открывает. Отправитель по нему
+                // сам вернётся на H.264. Без этого ответа он не узнает, что
+                // часть участников его не видит: у нас пусто, а у него всё
+                // хорошо. Раскладка: codec — непонятый байт, payload — один
+                // байт с типом полосы (VIDEO_CODED или SCREEN_CODED).
+                CODEC_UNSUPPORTED: 9 };
   const FLAG_KEYFRAME = 1;
   const FLAG_ENCRYPTED = 2;
   const CHAT_AAD_TYPE = 250;              // «тип» для шифрования текста чата
@@ -699,8 +706,19 @@
     }
 
     // sub — peer.cam или peer.scr: у камеры и экрана свои декодеры и синки.
+    // Пожаловаться отправителю на кодек, которого мы не понимаем. Не чаще
+    // раза в две секунды: кадры идут потоком, а сообщение нужно одно.
+    function complainCodec(codecId, isScreen) {
+      const now = Date.now();
+      if (now - (st.lastCodecComplaintAt || 0) < 2000) return;
+      st.lastCodecComplaintAt = now;
+      opts.send(packV2(MSG.CODEC_UNSUPPORTED, 0, codecId, 0n,
+                       new Uint8Array([isScreen ? MSG.SCREEN_CODED : MSG.VIDEO_CODED])));
+    }
+
     function decodeVideo(peer, sub, sinks, isScreen, sender, flags, codecId, ts, body) {
-      if (!CODEC_BY_ID[codecId]) return;
+      // Кодек нам вовсе неизвестен (HEVC, AV1 — их в CODEC_BY_ID нет).
+      if (!CODEC_BY_ID[codecId]) { complainCodec(codecId, isScreen); return; }
       if (!sub.dec || sub.codec !== codecId) {
         if (sub.dec) { try { sub.dec.close(); } catch (e) {} }
         if (typeof VideoDecoder === "undefined") return;
@@ -708,8 +726,10 @@
           output: (frame) => paintFrame(peer, sinks, isScreen, sender, frame),
           error: () => { sub.dec = null; sub.awaitKey = true; requestKeyframe(); },
         });
+        // Кодек знаком, но браузер его не открывает — например, нет
+        // аппаратного декодера. Для отправителя это то же самое.
         try { sub.dec.configure({ codec: CODEC_BY_ID[codecId], optimizeForLatency: true }); }
-        catch (e) { sub.dec = null; return; }
+        catch (e) { sub.dec = null; complainCodec(codecId, isScreen); return; }
         sub.codec = codecId;
         sub.awaitKey = true;
       }

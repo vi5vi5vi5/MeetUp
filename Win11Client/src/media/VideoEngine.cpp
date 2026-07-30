@@ -32,12 +32,12 @@ static const qint64 kMaxBuffered = 1500000;
 // разгрузить. Плавный регулятор устраивал бы такой всплеск каждые несколько
 // секунд. Пять ступеней с шагом около 30 % покрывают путь от 3.5 Мбит/с почти
 // до 900 кбит/с и переключаются редко.
-// Человекочитаемое имя кодека — определение ниже, рядом с разбором настроек.
-static QString codecName(int proto);
-
 static const double kScreenRateLevels[] = { 1.0, 0.7, 0.5, 0.35, 0.25 };
 static const int kScreenRateLevelCount =
     int(sizeof(kScreenRateLevels) / sizeof(kScreenRateLevels[0]));
+
+// Человекочитаемое имя кодека — определение ниже, рядом с разбором настроек.
+static QString codecName(int proto);
 
 VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
                          ScreenSources* sources, AudioEngine* audio,
@@ -190,11 +190,11 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
     // а окно к этому моменту уже должно рисоваться. Настройки узнают ответ по
     // сигналу — до него пункт HEVC просто выглядит недоступным.
     QMetaObject::invokeMethod(m_scrWorker, [this] {
-        const bool ok = VideoEncoder::hardwareHevcAvailable();
-        QMetaObject::invokeMethod(this, [this, ok] {
-            if (m_hevcAvailable == ok) return;
-            m_hevcAvailable = ok;
-            emit hevcAvailableChanged();
+        const bool hevc = VideoEncoder::hardwareHevcAvailable();
+        const bool av1  = VideoEncoder::hardwareAv1Available();
+        QMetaObject::invokeMethod(this, [this, hevc, av1] {
+            if (m_hevcAvailable != hevc) { m_hevcAvailable = hevc; emit hevcAvailableChanged(); }
+            if (m_av1Available  != av1)  { m_av1Available  = av1;  emit av1AvailableChanged(); }
         }, Qt::QueuedConnection);
     }, Qt::QueuedConnection);
     // Кадр приезжает с потока пула WGC — сюда queued, потому что дальше идут
@@ -849,8 +849,7 @@ static quint8 protoOfCodec(const QString& id) {
     if (id == "vp8")  return Proto::CODEC_VP8;
     if (id == "vp9")  return Proto::CODEC_VP9;
     if (id == "hevc") return Proto::CODEC_HEVC;
-    // "av1" сюда пока не попадает: в настройках он приглушён, своего байта в
-    // протоколе у него ещё нет.
+    if (id == "av1")  return Proto::CODEC_AV1;
     return 0;
 }
 
@@ -860,6 +859,7 @@ static QString codecName(int proto) {
     case Proto::CODEC_VP8:  return QStringLiteral("VP8");
     case Proto::CODEC_VP9:  return QStringLiteral("VP9");
     case Proto::CODEC_HEVC: return QStringLiteral("HEVC");
+    case Proto::CODEC_AV1:  return QStringLiteral("AV1");
     default:                return QStringLiteral("другой кодек");
     }
 }

@@ -109,7 +109,8 @@ void VideoRecvWorker::onFrame(const QByteArray& d) {
     }
     if (f.type != m_codedType) return;
     if (f.codec != Proto::CODEC_H264 && f.codec != Proto::CODEC_VP8 &&
-        f.codec != Proto::CODEC_VP9 && f.codec != Proto::CODEC_HEVC) {
+        f.codec != Proto::CODEC_VP9 && f.codec != Proto::CODEC_HEVC &&
+        f.codec != Proto::CODEC_AV1) {
         // Раньше такой кадр отбрасывался молча, и это было худшим из
         // возможных поведений: у нас пусто, а отправитель уверен, что всё
         // хорошо. Теперь жалуемся — движок передаст жалобу ему, и он вернётся
@@ -206,6 +207,30 @@ void VideoRecvWorker::routeCoded(quint32 sender, quint8 flags, quint8 codec,
 // и т.п.) — честная конверсия. YUV→RGB на экране делает GPU при отрисовке —
 // CPU в цвета не лезет.
 QVideoFrame VideoRecvWorker::convert(Peer& p, const AVFrame* f) {
+    // Кадр от видеокарты приходит в NV12, и QVideoFrame его понимает как есть.
+    // Гнать его через sws в YUV420P значило бы добавить полный проход по кадру
+    // (на 4К это 12 МБ) ровно затем, чтобы переложить цветность из одной
+    // плоскости в две, — а рисует их всё равно видеокарта при отрисовке.
+    if (f->format == AV_PIX_FMT_NV12) {
+        QVideoFrame vf(QVideoFrameFormat(QSize(f->width, f->height),
+                                         QVideoFrameFormat::Format_NV12));
+        if (!vf.map(QVideoFrame::WriteOnly)) return {};
+        if (vf.planeCount() >= 2) {
+            for (int y = 0; y < f->height; ++y)
+                memcpy(vf.bits(0) + qsizetype(y) * vf.bytesPerLine(0),
+                       f->data[0] + qsizetype(y) * f->linesize[0],
+                       size_t(qMin(vf.bytesPerLine(0), f->linesize[0])));
+            for (int y = 0; y < f->height / 2; ++y)
+                memcpy(vf.bits(1) + qsizetype(y) * vf.bytesPerLine(1),
+                       f->data[1] + qsizetype(y) * f->linesize[1],
+                       size_t(qMin(vf.bytesPerLine(1), f->linesize[1])));
+            vf.unmap();
+            return vf;
+        }
+        vf.unmap();
+        return {};
+    }
+
     QVideoFrameFormat fmt(QSize(f->width, f->height),
                           QVideoFrameFormat::Format_YUV420P);
     QVideoFrame vf(fmt);

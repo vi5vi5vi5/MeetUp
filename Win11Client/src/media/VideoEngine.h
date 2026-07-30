@@ -44,6 +44,9 @@ class VideoEngine : public QObject {
     // потоке экрана, потому что Media Foundation не работает на STA-потоке,
     // а GUI-поток Qt всегда STA.
     Q_PROPERTY(bool hevcAvailable READ hevcAvailable NOTIFY hevcAvailableChanged)
+    // …и то же для AV1: у него свой аппаратный блок, и есть он далеко не
+    // на всех картах, где есть HEVC.
+    Q_PROPERTY(bool av1Available READ av1Available NOTIFY av1AvailableChanged)
 public:
     VideoEngine(SignalingClient* conf, MediaSettings* settings,
                 ScreenSources* sources, AudioEngine* audio, MediaStats* stats,
@@ -90,6 +93,7 @@ public:
     bool previewActive() const { return m_previewActive; }
     bool screenPreviewActive() const { return m_screenPreviewActive; }
     bool hevcAvailable() const { return m_hevcAvailable; }
+    bool av1Available() const { return m_av1Available; }
 
 signals:
     void videoChanged(qint64 id, bool active);  // картинка появилась/пропала
@@ -101,6 +105,7 @@ signals:
     void previewActiveChanged();
     void screenPreviewActiveChanged();
     void hevcAvailableChanged();
+    void av1AvailableChanged();
     // Захват экрана не поднялся или окно закрыли — QML показывает уведомление.
     void screenError(const QString& text);
     // Выбранный кодек не открылся, вещаем запасным — тот же тост.
@@ -260,6 +265,7 @@ private:
     // подмена снимается в новой комнате (onJoinOk), где участники уже другие.
     bool m_scrForceAuto = false;
     bool m_hevcAvailable = false;                   // см. hevcAvailable()
+    bool m_av1Available = false;
     bool m_scrSuspended = false;                    // окно свёрнуто — кадров нет
     // Последний снятый кадр: WGC присылает кадр только на изменение картинки,
     // а поток в сеть должен идти ровно (см. onScreenRepeat).

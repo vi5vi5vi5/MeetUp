@@ -26,12 +26,20 @@ public:
     bool   isOpen() const { return m_ctx != nullptr; }
     bool   failed() const { return m_failed; }
     quint8 codec()  const { return m_codec; }
+    // Разбирает ли поток видеокарта. Узнаётся по первому кадру: до него
+    // неизвестно — драйвер вправе отказаться уже на разборе заголовков.
+    bool   isHardware() const { return m_hardware; }
 
 private:
     AVCodecContext* m_ctx = nullptr;
     AVFrame*  m_frame = nullptr;   // приёмник одного receive_frame
     AVFrame*  m_ready = nullptr;   // последний готовый кадр (см. decode())
+    // Кадр в системной памяти. При аппаратном разборе кадр приходит текстурой
+    // в видеопамяти, и наружу мы отдаём уже перенесённую копию — рисовать её
+    // всё равно через QVideoSink, а он ждёт обычную память.
+    AVFrame*  m_sw    = nullptr;
     AVPacket* m_pkt   = nullptr;
     quint8 m_codec  = 0;
     bool   m_failed = false;
+    bool   m_hardware = false;
 };

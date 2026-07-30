@@ -14,8 +14,8 @@ static const char* kGroup = "av";
 // значение приходит из выпадающего списка, а из чужого файла настроек может
 // прийти что угодно.
 static bool knownScreenBitrate(const QString& b) {
-    static const QStringList kAll{ "auto", "2000", "5000", "10000",
-                                   "20000", "40000", "80000" };
+    static const QStringList kAll{ "auto", "500", "1000", "2000", "5000",
+                                   "10000", "20000", "40000", "80000" };
     return kAll.contains(b);
 }
 
