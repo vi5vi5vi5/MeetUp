@@ -40,9 +40,8 @@ class MediaSettings : public QObject {
     // Дорисовывать ли курсор при показе монитора. Захват окна курсор рисует сам
     // (другой механизм), поэтому настройка влияет только на показ монитора.
     Q_PROPERTY(bool screenCursor READ screenCursor WRITE setScreenCursor NOTIFY screenCursorChanged)
-    // Кодек отправки: "auto" | "h264" | "vp8" | "vp9". У камеры и демонстрации
-    // он свой — на лицах и на тексте кодеки ведут себя по-разному.
-    Q_PROPERTY(QString camCodec READ camCodec WRITE setCamCodec NOTIFY camCodecChanged)
+    // Кодек демонстрации: "auto" | "hevc" | "av1". У камеры выбора нет вовсе —
+    // там он был бы выбором из одного правильного ответа (см. SettingsVideo.qml).
     Q_PROPERTY(QString screenCodec READ screenCodec WRITE setScreenCodec NOTIFY screenCodecChanged)
     // Передавать ли вместе с картинкой звук компьютера. По умолчанию выключено:
     // делиться звуком машины — осознанное решение, а не то, что включается само.
@@ -80,7 +79,6 @@ public:
     int screenFps() const { return m_screenFps; }
     QString screenBitrate() const { return m_screenBitrate; }
     bool screenCursor() const { return m_screenCursor; }
-    QString camCodec() const { return m_camCodec; }
     QString screenCodec() const { return m_screenCodec; }
     bool screenAudio() const { return m_screenAudio; }
     int screenVolume() const { return m_screenVolume; }
@@ -101,7 +99,6 @@ public:
     void setScreenFps(int fps);
     void setScreenBitrate(const QString& b);
     void setScreenCursor(bool on);
-    void setCamCodec(const QString& c);
     void setScreenCodec(const QString& c);
     void setScreenAudio(bool on);
     void setScreenVolume(int v);
@@ -152,7 +149,6 @@ signals:
     void screenFpsChanged();
     void screenBitrateChanged();
     void screenCursorChanged();
-    void camCodecChanged();
     void screenCodecChanged();
     void screenAudioChanged();
     void screenVolumeChanged();
@@ -174,7 +170,7 @@ private:
     int m_screenFps = 30;
     QString m_screenBitrate = "auto";
     bool m_screenCursor = true;
-    QString m_camCodec = "auto", m_screenCodec = "auto";
+    QString m_screenCodec = "auto";
     bool m_screenAudio = false;
     int m_screenVolume = 100;
     bool m_uiSounds = true;

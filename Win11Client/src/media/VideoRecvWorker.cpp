@@ -109,7 +109,19 @@ void VideoRecvWorker::onFrame(const QByteArray& d) {
     }
     if (f.type != m_codedType) return;
     if (f.codec != Proto::CODEC_H264 && f.codec != Proto::CODEC_VP8 &&
-        f.codec != Proto::CODEC_VP9) return;       // незнакомое — молча мимо
+        f.codec != Proto::CODEC_VP9 && f.codec != Proto::CODEC_HEVC) {
+        // Раньше такой кадр отбрасывался молча, и это было худшим из
+        // возможных поведений: у нас пусто, а отправитель уверен, что всё
+        // хорошо. Теперь жалуемся — движок передаст жалобу ему, и он вернётся
+        // на кодек, который понимают все. Не чаще раза в две секунды: кадры
+        // идут потоком, а сообщение нужно одно.
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if (now - m_lastCodecComplaintMs > 2000) {
+            m_lastCodecComplaintMs = now;
+            emit codecUnsupported(f.codec);
+        }
+        return;
+    }
 
     // Расшифровываем ДО декодера: он должен получить те же байты, что вышли из
     // кодера отправителя, иначе поток для него — мусор.

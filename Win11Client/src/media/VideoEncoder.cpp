@@ -11,6 +11,39 @@ extern "C" {
 
 VideoEncoder::~VideoEncoder() { close(); }
 
+bool VideoEncoder::hardwareHevcAvailable() {
+    static int cached = -1;                  // -1 ещё не спрашивали
+    if (cached >= 0) return cached != 0;
+    cached = 0;
+
+    if (const AVCodec* c = avcodec_find_encoder_by_name("hevc_mf")) {
+        AVCodecContext* ctx = avcodec_alloc_context3(c);
+        if (ctx) {
+            // Размер маленький намеренно: проверяем наличие железа, а не его
+            // производительность, и платить за это созданием кадра 4К незачем.
+            ctx->width = 640;
+            ctx->height = 360;
+            ctx->pix_fmt = AV_PIX_FMT_NV12;
+            ctx->time_base = { 1, 1000 };
+            ctx->framerate = { 30, 1 };
+            ctx->bit_rate = 1000000;
+            AVDictionary* opts = nullptr;
+            av_dict_set(&opts, "hw_encoding", "1", 0);
+            const int rc = avcodec_open2(ctx, c, &opts);
+            av_dict_free(&opts);
+            cached = (rc >= 0) ? 1 : 0;
+            avcodec_free_context(&ctx);
+        }
+    }
+    // Уметь кодировать мало: если наш же декодер HEVC не соберётся, два наших
+    // клиента друг друга не увидят. Предлагать такой выбор нечестно.
+    if (cached && !avcodec_find_decoder(AV_CODEC_ID_HEVC)) cached = 0;
+
+    qInfo() << "VideoEncoder: аппаратный HEVC"
+            << (cached ? "доступен" : "недоступен");
+    return cached != 0;
+}
+
 bool VideoEncoder::tryOpen(const Candidate& cand,
                            int width, int height, int fps, int bitrate) {
     const AVCodec* codec = avcodec_find_encoder_by_name(cand.name);
@@ -115,6 +148,7 @@ bool VideoEncoder::open(int width, int height, int fps, int bitrate,
     // он по Proto::CODEC_*, второй H.264 отбрасывался бы как дубликат — то
     // есть запасного пути у аппаратного не осталось бы вовсе.
     static const Candidate kH264Hw{ "h264_mf",     Proto::CODEC_H264, AV_PIX_FMT_NV12,    true };
+    static const Candidate kHevcHw{ "hevc_mf",     Proto::CODEC_HEVC, AV_PIX_FMT_NV12,    true };
     static const Candidate kH264Sw{ "libopenh264", Proto::CODEC_H264, AV_PIX_FMT_YUV420P, false };
     static const Candidate kVp8   { "libvpx",      Proto::CODEC_VP8,  AV_PIX_FMT_YUV420P, false };
     static const Candidate kVp9   { "libvpx-vp9",  Proto::CODEC_VP9,  AV_PIX_FMT_YUV420P, false };
@@ -130,6 +164,12 @@ bool VideoEncoder::open(int width, int height, int fps, int bitrate,
     if (preferred == Proto::CODEC_H264) {
         if (allowHardware) add(kH264Hw);
         add(kH264Sw);
+    } else if (preferred == Proto::CODEC_HEVC) {
+        // Только аппаратный и только по явной просьбе. В запасные HEVC не
+        // попадает НИКОГДА: получить патентованный кодек случайно, не выбирая
+        // его, не должен никто. Если железа нет — уйдём на H.264 ниже, и
+        // человек об этом узнает (codecFallback).
+        if (allowHardware) add(kHevcHw);
     } else if (preferred == Proto::CODEC_VP8) {
         add(kVp8);
     } else if (preferred == Proto::CODEC_VP9) {

@@ -273,9 +273,11 @@ Column {
                      + (Stats.txScrAudio ? " (со звуком)" : "")
                      + " · пропуск " + Stats.scrDropPercent + "%"))
         lines.push("Подстройка губ: " + Stats.syncHoldMs + " мс")
-        lines.push("Настройки: камера " + AV.camQuality + "/" + AV.camCodec
+        lines.push("Настройки: камера " + AV.camQuality
                    + ", экран " + (AV.screenRes === "src" ? "источник" : AV.screenRes + "p")
                    + "/" + AV.screenFps + "к/с/" + AV.screenCodec
+                   + "/" + (AV.screenBitrate === "auto" ? "битрейт авто"
+                                                        : (AV.screenBitrate / 1000) + " Мбит/с")
                    + ", звук демонстрации " + (AV.screenAudio ? "вкл" : "выкл")
                    + ", громкость демонстрации " + AV.screenVolume + "%")
         return lines.join("\n")

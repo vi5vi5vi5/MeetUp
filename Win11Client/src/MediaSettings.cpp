@@ -19,17 +19,9 @@ static bool knownScreenBitrate(const QString& b) {
     return kAll.contains(b);
 }
 
-// Наборы кодеков у камеры и демонстрации теперь РАЗНЫЕ, и это не недосмотр.
-//
-// У демонстрации выбор сведён к трём осмысленным задачам: «видно всем»,
-// «дёшево по нагрузке», «дёшево по каналу». У камеры выбора по сути нет:
-// аппаратный путь ей закрыт намеренно (два кадра конвейера идут прямо в
-// расхождение с голосом), а на 720p24 выигрывать нечем — там всё быстро.
-// Пока список камеры оставлен как был, чтобы не менять её поведение заодно.
-static bool knownCamCodec(const QString& c) {
-    return c == "auto" || c == "h264" || c == "vp8" || c == "vp9";
-}
-
+// Выбор кодека остался только у демонстрации и сведён к трём осмысленным
+// задачам: «видно всем», «дёшево по нагрузке», «дёшево по каналу».
+// У камеры выбора нет вовсе — см. SettingsVideo.qml.
 static bool knownScreenCodec(const QString& c) {
     return c == "auto" || c == "hevc" || c == "av1";
 }
@@ -63,8 +55,6 @@ MediaSettings::MediaSettings(QObject* parent) : QObject(parent) {
     m_screenBitrate = s.value("screenBitrate", "auto").toString();
     if (!knownScreenBitrate(m_screenBitrate)) m_screenBitrate = "auto";
     m_screenCursor = s.value("screenCursor", true).toBool();
-    m_camCodec = s.value("camCodec", "auto").toString();
-    if (!knownCamCodec(m_camCodec)) m_camCodec = "auto";
     // Из выбора демонстрации ушли h264 (делал ровно то же, что «Авто»), vp8
     // (запасной путь, а не выбор) и vp9 (не успевает на большом экране). Раз
     // выбрать их больше нельзя, сохранённое значение НАДО перенести на «Авто»:
@@ -200,13 +190,6 @@ void MediaSettings::setUiSounds(bool on) {
 
 // Кодек: "auto" | "h264" | "vp8" | "vp9". Чужое значение молча игнорируем —
 // в настройках оно взяться не может, а из чужого файла настроек может.
-void MediaSettings::setCamCodec(const QString& c) {
-    if (m_camCodec == c || !knownCamCodec(c)) return;
-    m_camCodec = c;
-    save("camCodec", c);
-    emit camCodecChanged();
-}
-
 void MediaSettings::setScreenCodec(const QString& c) {
     if (m_screenCodec == c || !knownScreenCodec(c)) return;
     m_screenCodec = c;

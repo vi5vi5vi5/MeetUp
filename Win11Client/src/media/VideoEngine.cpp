@@ -1,6 +1,7 @@
 #include "VideoEngine.h"
 #include "VideoSendWorker.h"
 #include "VideoRecvWorker.h"
+#include "VideoEncoder.h"          // проверка доступности аппаратного HEVC
 #include "ScreenCapturer.h"
 #include "AudioEngine.h"
 #include "MediaStats.h"
@@ -31,6 +32,9 @@ static const qint64 kMaxBuffered = 1500000;
 // разгрузить. Плавный регулятор устраивал бы такой всплеск каждые несколько
 // секунд. Пять ступеней с шагом около 30 % покрывают путь от 3.5 Мбит/с почти
 // до 900 кбит/с и переключаются редко.
+// Человекочитаемое имя кодека — определение ниже, рядом с разбором настроек.
+static QString codecName(int proto);
+
 static const double kScreenRateLevels[] = { 1.0, 0.7, 0.5, 0.35, 0.25 };
 static const int kScreenRateLevelCount =
     int(sizeof(kScreenRateLevels) / sizeof(kScreenRateLevels[0]));
@@ -72,6 +76,12 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
     // поэтому просят они через нас, а не сами.
     connect(m_recv, &VideoRecvWorker::keyframeNeeded, this, &VideoEngine::requestKeyframe);
     connect(m_scrRecv, &VideoRecvWorker::keyframeNeeded, this, &VideoEngine::requestKeyframe);
+    // Не поняли чужой кодек — говорим об этом вслух: сервер разошлёт жалобу
+    // всем, и вещающий сам вернётся на понятный всем H.264.
+    connect(m_recv, &VideoRecvWorker::codecUnsupported, this,
+            [this](quint8 c) { complainCodec(Proto::VIDEO_CODED, c); });
+    connect(m_scrRecv, &VideoRecvWorker::codecUnsupported, this,
+            [this](quint8 c) { complainCodec(Proto::SCREEN_CODED, c); });
     connect(m_recv, &VideoRecvWorker::awaitKeyChanged, this,
             [this](quint32 sender, bool awaiting) { m_peers[sender].awaitKey = awaiting; });
     connect(m_scrRecv, &VideoRecvWorker::awaitKeyChanged, this,
@@ -173,6 +183,20 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
     QMetaObject::invokeMethod(m_scrWorker, [this] {
         m_scrCapture = new ScreenCapturer;
     }, Qt::BlockingQueuedConnection);
+
+    // Есть ли аппаратный HEVC — спрашиваем ЗДЕСЬ ЖЕ и по той же причине:
+    // Media Foundation откажет на STA-потоке, и на GUI мы получили бы ложное
+    // «нет». Не блокирующим вызовом: создание MFT занимает десятки миллисекунд,
+    // а окно к этому моменту уже должно рисоваться. Настройки узнают ответ по
+    // сигналу — до него пункт HEVC просто выглядит недоступным.
+    QMetaObject::invokeMethod(m_scrWorker, [this] {
+        const bool ok = VideoEncoder::hardwareHevcAvailable();
+        QMetaObject::invokeMethod(this, [this, ok] {
+            if (m_hevcAvailable == ok) return;
+            m_hevcAvailable = ok;
+            emit hevcAvailableChanged();
+        }, Qt::QueuedConnection);
+    }, Qt::QueuedConnection);
     // Кадр приезжает с потока пула WGC — сюда queued, потому что дальше идут
     // превью (только GUI-поток) и пейсер.
     connect(m_scrCapture, &ScreenCapturer::frameReady,
@@ -187,7 +211,6 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
     connect(m_scrRepeatTimer, &QTimer::timeout, this, &VideoEngine::onScreenRepeat);
 
     // Выбор кодека: воркеру он нужен до первого кадра, дальше — по изменению.
-    connect(settings, &MediaSettings::camCodecChanged, this, &VideoEngine::applyCodecPrefs);
     connect(settings, &MediaSettings::screenCodecChanged, this, &VideoEngine::applyCodecPrefs);
     applyCodecPrefs();
 
@@ -406,6 +429,12 @@ void VideoEngine::onJoinOk() {
     resetPeers();
     m_keyNext = true;
     m_scrKeyNext = true;
+    // Новая комната — новые участники: запрет на выбранный кодек мог быть
+    // нужен там, а здесь его понимают все. Пробуем выбор человека заново.
+    if (m_scrForceAuto) {
+        m_scrForceAuto = false;
+        applyCodecPrefs();
+    }
 }
 
 void VideoEngine::onLeft() {
@@ -475,7 +504,45 @@ void VideoEngine::requestKeyframe() {
 void VideoEngine::onBinaryFrame(const QByteArray& d) {
     Proto::FrameV2 f;
     if (!Proto::unpack(d, f)) return;
-    if (f.type == Proto::KEYFRAME_REQ) forceKeyframe();   // просят опорный кадр
+    if (f.type == Proto::KEYFRAME_REQ) { forceKeyframe(); return; }
+    if (f.type == Proto::CODEC_UNSUPPORTED) {
+        const quint8 band = f.payload.isEmpty() ? quint8(Proto::VIDEO_CODED)
+                                                : quint8(f.payload.at(0));
+        onCodecUnsupported(band, f.codec);
+    }
+}
+
+// Кто-то из участников не понимает кодек, которым мы вещаем.
+//
+// Молчать нельзя: у него пусто, а мы об этом не знаем. Меняем кодек на «Авто»
+// (H.264 — его понимают все) и говорим человеку, что и почему поменялось.
+//
+// Сохранённую настройку при этом НЕ трогаем: человек выбрал AV1 осознанно, и
+// переписывать его выбор из-за одного участника — воровство решения. Действует
+// только эта сессия; в новой комнате (onJoinOk) подмена снимается, потому что
+// там другие участники и запрет может быть уже не нужен.
+void VideoEngine::onCodecUnsupported(quint8 band, quint8 codec) {
+    // Камера и так идёт «Авто» (H.264 -> VP8), понижать её некуда.
+    if (band != Proto::SCREEN_CODED) return;
+    // Жалоба на полосу, которой мы не вещаем, — не наша: её прислали соседу.
+    if (!m_scrCapturing) return;
+    if (m_scrForceAuto) return;                  // уже вернулись, второй раз незачем
+
+    m_scrForceAuto = true;
+    applyCodecPrefs();
+    emit codecNotice(QStringLiteral(
+        "Участник не понимает %1 — демонстрация переключена на H.264.")
+                         .arg(codecName(codec)));
+}
+
+// Жалоба наружу: сервер разошлёт её всем, как и просьбу об опорном кадре.
+// Полосу кладём в payload одним байтом — отправитель должен знать, какую
+// именно менять, а поле codec занято тем кодеком, который мы не поняли.
+void VideoEngine::complainCodec(quint8 band, quint8 codec) {
+    m_conf->sendBinary(Proto::pack(Proto::CODEC_UNSUPPORTED, 0, codec, 0,
+                                   QByteArray(1, char(band))));
+    qWarning() << "VideoEngine: не понимаем кодек" << codec
+               << "в полосе" << band << "— сообщили отправителю";
 }
 
 // Готовый кадр от воркера. Здесь он попадает на GUI-поток впервые — и только
@@ -781,10 +848,9 @@ static quint8 protoOfCodec(const QString& id) {
     if (id == "h264") return Proto::CODEC_H264;
     if (id == "vp8")  return Proto::CODEC_VP8;
     if (id == "vp9")  return Proto::CODEC_VP9;
-    // "hevc" и "av1" сюда пока не попадают: в настройках демонстрации они
-    // приглушены, и выбрать их нельзя. Своих байтов в протоколе у них тоже
-    // ещё нет — появятся вместе с обратной связью «не понимаю такой кодек»,
-    // без которой выпускать их нельзя (см. SettingsShare.qml).
+    if (id == "hevc") return Proto::CODEC_HEVC;
+    // "av1" сюда пока не попадает: в настройках он приглушён, своего байта в
+    // протоколе у него ещё нет.
     return 0;
 }
 
@@ -793,6 +859,7 @@ static QString codecName(int proto) {
     case Proto::CODEC_H264: return QStringLiteral("H.264");
     case Proto::CODEC_VP8:  return QStringLiteral("VP8");
     case Proto::CODEC_VP9:  return QStringLiteral("VP9");
+    case Proto::CODEC_HEVC: return QStringLiteral("HEVC");
     default:                return QStringLiteral("другой кодек");
     }
 }
@@ -801,12 +868,20 @@ static QString codecName(int proto) {
 // настройка едет туда queued-вызовом. Смена кодека переоткрывает энкодер, а
 // приёмники пересоздают декодеры сами — они сверяют кодек каждого кадра.
 void VideoEngine::applyCodecPrefs() {
+    // У камеры кодек не выбирается вовсе: 0 значит «как по умолчанию» —
+    // H.264, при неудаче VP8. Настройки у неё больше нет, и это осознанно
+    // (см. SettingsVideo.qml): на кадре 720p24 разница между кодеками
+    // теряется, а совместимость важнее.
     if (m_worker)
         QMetaObject::invokeMethod(m_worker, "setCodecPreference", Qt::QueuedConnection,
-                                  Q_ARG(int, protoOfCodec(m_settings->camCodec())));
+                                  Q_ARG(int, 0));
+    // m_scrForceAuto — след от жалобы участника: он не понял выбранный кодек,
+    // и до конца этой комнаты вещаем тем, что понимают все.
+    const quint8 scr = m_scrForceAuto ? quint8(0)
+                                      : protoOfCodec(m_settings->screenCodec());
     if (m_scrWorker)
         QMetaObject::invokeMethod(m_scrWorker, "setCodecPreference", Qt::QueuedConnection,
-                                  Q_ARG(int, protoOfCodec(m_settings->screenCodec())));
+                                  Q_ARG(int, scr));
 }
 
 void VideoEngine::noteEncoderOpened(bool screen, int codec, int width, int height,

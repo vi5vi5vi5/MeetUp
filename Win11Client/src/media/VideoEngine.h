@@ -39,6 +39,11 @@ class VideoEngine : public QObject {
     // Свой захват экрана реально даёт кадры — сцена показывает превью.
     Q_PROPERTY(bool screenPreviewActive READ screenPreviewActive
                NOTIFY screenPreviewActiveChanged)
+    // Есть ли на этой машине АППАРАТНЫЙ HEVC. Настройки по нему решают,
+    // показывать ли пункт активным. Спрашивается один раз при старте — на
+    // потоке экрана, потому что Media Foundation не работает на STA-потоке,
+    // а GUI-поток Qt всегда STA.
+    Q_PROPERTY(bool hevcAvailable READ hevcAvailable NOTIFY hevcAvailableChanged)
 public:
     VideoEngine(SignalingClient* conf, MediaSettings* settings,
                 ScreenSources* sources, AudioEngine* audio, MediaStats* stats,
@@ -84,6 +89,7 @@ public:
 
     bool previewActive() const { return m_previewActive; }
     bool screenPreviewActive() const { return m_screenPreviewActive; }
+    bool hevcAvailable() const { return m_hevcAvailable; }
 
 signals:
     void videoChanged(qint64 id, bool active);  // картинка появилась/пропала
@@ -94,6 +100,7 @@ signals:
     void lockedChanged(qint64 id, bool locked);
     void previewActiveChanged();
     void screenPreviewActiveChanged();
+    void hevcAvailableChanged();
     // Захват экрана не поднялся или окно закрыли — QML показывает уведомление.
     void screenError(const QString& text);
     // Выбранный кодек не открылся, вещаем запасным — тот же тост.
@@ -179,6 +186,10 @@ private:
     int screenBitrate(int presetBitrate, qint64 nowMs, qint64* queueBudget);
     void resetScreenRate();            // новая демонстрация — начинаем с полного
     void applyCodecPrefs();            // выбор кодека -> обоим воркерам
+    // Участник не понял наш кодек: возвращаемся на «Авто» и говорим об этом.
+    void onCodecUnsupported(quint8 band, quint8 codec);
+    // …и обратное: мы не поняли чужой — сообщить отправителю.
+    void complainCodec(quint8 band, quint8 codec);
     void noteCodecFallback(bool screen, int requested, int actual);
     // Кодировщик полосы открылся: какой кодек и какой кадр — в «Диагностику».
     void noteEncoderOpened(bool screen, int codec, int width, int height, bool hardware);
@@ -244,6 +255,11 @@ private:
     ScreenCapturer* m_scrCapture = nullptr;
     QVideoSink* m_scrPreview = nullptr;             // своя сцена (не владеем)
     bool m_scrCapturing = false;                    // идёт ли захват прямо сейчас
+    // Кто-то из участников не понял выбранный кодек — эту сессию вещаем «Авто».
+    // Сохранённую настройку НЕ переписываем: выбор человека остаётся за ним, а
+    // подмена снимается в новой комнате (onJoinOk), где участники уже другие.
+    bool m_scrForceAuto = false;
+    bool m_hevcAvailable = false;                   // см. hevcAvailable()
     bool m_scrSuspended = false;                    // окно свёрнуто — кадров нет
     // Последний снятый кадр: WGC присылает кадр только на изменение картинки,
     // а поток в сеть должен идти ровно (см. onScreenRepeat).

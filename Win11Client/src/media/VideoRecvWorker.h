@@ -54,6 +54,11 @@ signals:
     // флага — по нему плитка при рождении решает, показывать ли аватарку
     // вместо застывшего кадра.
     void awaitKeyChanged(quint32 sender, bool awaiting);
+    // Кадр пришёл с кодеком, которого мы не знаем. Наружу — чтобы движок сказал
+    // об этом отправителю (Proto::CODEC_UNSUPPORTED): молча ронять такие кадры
+    // значит оставить и себя без картинки, и ведущего без объяснения.
+    // Прорежено по времени: поток кадров идёт постоянно, а сообщение нужно одно.
+    void codecUnsupported(quint8 codec);
     // Кадры участника не открываются нашим ключом (или открылись снова).
     // Только на переходах — см. AudioWorker::peerLocked.
     void peerLocked(qint64 id, bool locked);
@@ -77,6 +82,8 @@ private:
     void setAwaitKey(Peer& p, quint32 sender, bool awaiting);
     void setLocked(Peer& p, quint32 sender, bool locked);
     void dropDecoder(Peer& p);
+    // Когда в последний раз жаловались на незнакомый кодек (мс эпохи).
+    qint64 m_lastCodecComplaintMs = 0;
     void sweep();                      // осиротевшие декодеры — не навсегда
     // Снять шифрование с payload. false — кадр не наш (чужой ключ): счётчик
     // подрос, а на трёх подряд плитка получит «замок».

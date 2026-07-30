@@ -12,6 +12,11 @@ static AVCodecID toAvCodec(quint8 protoCodec) {
     case Proto::CODEC_H264: return AV_CODEC_ID_H264;
     case Proto::CODEC_VP8:  return AV_CODEC_ID_VP8;
     case Proto::CODEC_VP9:  return AV_CODEC_ID_VP9;
+    // Принимать HEVC умеем всегда, даже если отправлять не можем: декодер
+    // безусловно есть в сборке FFmpeg, а на видеокартах с поддержкой его
+    // подхватит аппаратный путь. Возможность ПРИНЯТЬ шире возможности послать —
+    // так и должно быть, иначе выбор кодека у собеседника ломал бы нам картинку.
+    case Proto::CODEC_HEVC: return AV_CODEC_ID_HEVC;
     default:                return AV_CODEC_ID_NONE;
     }
 }
