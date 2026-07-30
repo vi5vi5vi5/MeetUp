@@ -4,6 +4,7 @@
 #include <QPixmap>
 #include <QWindowCapture>
 #include <QtMultimedia/private/qcapturablewindow_p.h>
+#include <qpa/qplatformnativeinterface.h>
 
 #ifdef Q_OS_WIN
 #  define WIN32_LEAN_AND_MEAN
@@ -127,7 +128,7 @@ void ScreenSources::rebuildScreens() {
     for (int i = 0; i < list.size(); ++i) {
         QScreen* s = list.at(i);
         const QString key = "screen:" + QString::number(i);
-        const QSize px = s->geometry().size() * s->devicePixelRatio();
+        const QSize px = monitorPixelSize(s);
 
         // Снимок целого монитора: grabWindow(0) у QScreen — это его рабочий стол.
         const QPixmap shot = s->grabWindow(0);
@@ -219,6 +220,60 @@ QCapturableWindow ScreenSources::selectedWindow() const {
     if (!m_selKey.startsWith("window:")) return {};
     const int i = m_selKey.mid(7).toInt();
     return (i >= 0 && i < m_winHandles.size()) ? m_winHandles.at(i) : QCapturableWindow();
+}
+
+// HMONITOR выбранного экрана.
+//
+// Сопоставлять экран Qt с монитором Windows ПО ИМЕНИ нельзя: на Windows
+// QScreen::name() — дружелюбное название из EDID («TV-Station»), а не
+// \\.\DISPLAY1, и совпасть они не могут. Подбирать «похожий по размеру» —
+// тоже: на паре «FHD + телевизор 4К» это давало не тот монитор, и захват
+// уезжал на соседний экран. Хендл лежит внутри платформенного плагина Qt;
+// публичного доступа к нему нет, поэтому берём через QPlatformNativeInterface —
+// как и хендл окна выше, по той же причине.
+void* ScreenSources::monitorHandleOf(QScreen* screen) {
+#ifdef Q_OS_WIN
+    if (!screen) return nullptr;
+    QPlatformNativeInterface* ni = QGuiApplication::platformNativeInterface();
+    if (!ni) return nullptr;
+    return ni->nativeResourceForScreen(QByteArrayLiteral("handle"), screen);
+#else
+    Q_UNUSED(screen);
+    return nullptr;
+#endif
+}
+
+// Физический размер монитора в пикселях. Считать его как geometry() * dpr
+// НЕЛЬЗЯ, хотя так и подмывает: geometry() округлена до целых логических
+// пикселей, и на телевизоре 4К при масштабе 225 % обратное умножение даёт
+// 1707 * 2.25 = 3840.75, то есть «3841 × 2160» в списке источников. Спрашиваем
+// у Windows по хендлу — она знает точно.
+QSize ScreenSources::monitorPixelSize(QScreen* screen) {
+#ifdef Q_OS_WIN
+    if (void* h = monitorHandleOf(screen)) {
+        MONITORINFO mi{};
+        mi.cbSize = sizeof(mi);
+        if (GetMonitorInfoW(static_cast<HMONITOR>(h), &mi))
+            return QSize(mi.rcMonitor.right - mi.rcMonitor.left,
+                         mi.rcMonitor.bottom - mi.rcMonitor.top);
+    }
+#endif
+    return screen ? screen->geometry().size() * screen->devicePixelRatio() : QSize();
+}
+
+void* ScreenSources::selectedMonitorHandle() const {
+    return monitorHandleOf(selectedScreen());
+}
+
+void* ScreenSources::selectedWindowHandle() const {
+#ifdef Q_OS_WIN
+    const QCapturableWindow w = selectedWindow();
+    if (!w.isValid()) return nullptr;
+    HWND h = handleOf(w);
+    return (h && IsWindow(h)) ? h : nullptr;
+#else
+    return nullptr;
+#endif
 }
 
 // id приходит как "<key>/<nonce>": nonce нужен лишь для того, чтобы QML

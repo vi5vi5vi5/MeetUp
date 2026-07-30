@@ -1,6 +1,5 @@
 #include "VideoSendWorker.h"
 #include "VideoEncoder.h"
-#include "ScreenCursor.h"
 #include "../net/Protocol.h"
 #include "../crypto/E2eCipher.h"
 #include <QVideoFrameFormat>
@@ -161,100 +160,18 @@ int VideoSendWorker::achievedFps(int requestedFps) const {
 // кодировании кадр обходится ~2.5 мс, а предсказуемость важнее. Если экономия
 // понадобится — правильное место для неё не отпечаток кадра, а dirty rects от
 // собственного захвата, где «не изменилось» известно точно и бесплатно.
-void VideoSendWorker::setCursorSource(const QRect& physicalRect) {
-    m_cursorSrc = physicalRect;
-}
+//
+// Дорисовки курсора здесь тоже больше НЕТ. Она была нужна, пока захват шёл
+// через Qt: Desktop Duplication отдаёт кадр без курсора, и его приходилось
+// накладывать самим — со своим масштабированием, своим сопоставлением
+// монитора и своими ошибками в обоих. Теперь захват наш (ScreenCapturer), а
+// Windows.Graphics.Capture рисует курсор сама по флагу IsCursorCaptureEnabled.
 
 void VideoSendWorker::setCodecPreference(int protoCodec) {
     const quint8 pref = quint8(protoCodec);
     if (m_codecPref == pref) return;
     m_codecPref = pref;
     reset();                       // энкодер переоткроется на следующем кадре
-}
-
-// Курсор поверх готового кадра YUV420P. Рисуем ПОСЛЕ масштабирования: так
-// стрелка остаётся резкой и не мельчает вместе с картинкой — на 360p её
-// «настоящий» размер был бы пять пикселей, поэтому есть нижняя граница.
-// Коэффициенты BT.601 — те же, по которым sws_scale переводил кадр в YUV.
-void VideoSendWorker::blendCursor(AVFrame* dst, int tw, int th, int pixFmt) {
-    if (m_cursorSrc.isEmpty() || !dst) return;
-    const ScreenCursor cur = ScreenCursor::grab();
-    if (cur.isNull()) return;
-
-    const QPoint rel = cur.posPhysical - m_cursorSrc.topLeft();
-    if (rel.x() < 0 || rel.y() < 0 ||
-        rel.x() >= m_cursorSrc.width() || rel.y() >= m_cursorSrc.height()) return;
-
-    const double sx = double(tw) / m_cursorSrc.width();
-    const double sy = double(th) / m_cursorSrc.height();
-    // Курсор масштабируется РОВНО как содержимое кадра, без нижней границы.
-    // Здесь стояло qMax(..., 16.0 / ширина картинки) — «не давать стрелке стать
-    // меньше 16 пикселей». Это единственное место, где наш курсор мог выйти
-    // крупнее настоящего: на 360p с монитора 1080p замер даёт 16 px против
-    // положенных 11 — стрелка на 45 % больше всего остального на экране, и
-    // выглядит она именно чужеродно. Мелкий курсор на мелкой картинке честнее
-    // крупного: он там ровно такой, каким его видит сам ведущий.
-    const double f = qMin(sx, sy);
-    const int cw = qMax(1, int(qRound(cur.image.width() * f)));
-    const int ch = qMax(1, int(qRound(cur.image.height() * f)));
-    const QImage img = (cw == cur.image.width() && ch == cur.image.height())
-        ? cur.image
-        : cur.image.scaled(cw, ch, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-
-    const int x0 = int(qRound(rel.x() * sx - cur.hotspot.x() * f));
-    const int y0 = int(qRound(rel.y() * sy - cur.hotspot.y() * f));
-
-    // NV12 держит цветность одной плоскостью, U и V через байт; YUV420P — двумя
-    // отдельными. Различие сводим к шагу и смещению, чтобы цикл ниже остался один.
-    const bool nv12 = (pixFmt == AV_PIX_FMT_NV12);
-    uint8_t* yPlane = dst->data[0];
-    uint8_t* cPlane = dst->data[1];
-    uint8_t* vPlane = nv12 ? dst->data[1] : dst->data[2];
-    const int cStep = nv12 ? 2 : 1;
-    const int vOff = nv12 ? 1 : 0;
-    if (!yPlane || !cPlane || !vPlane) return;
-
-    // Яркость — по каждому пикселю.
-    for (int y = 0; y < img.height(); ++y) {
-        const int py = y0 + y;
-        if (py < 0 || py >= th) continue;
-        const QRgb* row = reinterpret_cast<const QRgb*>(img.constScanLine(y));
-        uint8_t* yRow = yPlane + qsizetype(py) * dst->linesize[0];
-        for (int x = 0; x < img.width(); ++x) {
-            const int px = x0 + x;
-            if (px < 0 || px >= tw) continue;
-            const int a = qAlpha(row[x]);
-            if (a == 0) continue;
-            const int lum = (77 * qRed(row[x]) + 150 * qGreen(row[x])
-                             + 29 * qBlue(row[x])) >> 8;
-            yRow[px] = uint8_t((lum * a + yRow[px] * (255 - a)) / 255);
-        }
-    }
-
-    // Цветность — вчетверо реже, по сетке 2x2 исходного кадра.
-    const int cw2 = (tw + 1) / 2, ch2 = (th + 1) / 2;
-    for (int cy = qMax(0, y0 / 2); cy < ch2; ++cy) {
-        const int sampleY = cy * 2 - y0;
-        if (sampleY >= img.height()) break;
-        if (sampleY < 0) continue;
-        const QRgb* row = reinterpret_cast<const QRgb*>(img.constScanLine(sampleY));
-        uint8_t* uRow = cPlane + qsizetype(cy) * dst->linesize[1];
-        uint8_t* vRow = vPlane + qsizetype(cy) * dst->linesize[nv12 ? 1 : 2] + vOff;
-        for (int cx = qMax(0, x0 / 2); cx < cw2; ++cx) {
-            const int sampleX = cx * 2 - x0;
-            if (sampleX >= img.width()) break;
-            if (sampleX < 0) continue;
-            const int a = qAlpha(row[sampleX]);
-            if (a == 0) continue;
-            const int r = qRed(row[sampleX]), g = qGreen(row[sampleX]), b = qBlue(row[sampleX]);
-            const int u = qBound(0, 128 + ((-43 * r - 85 * g + 128 * b) >> 8), 255);
-            const int v = qBound(0, 128 + ((128 * r - 107 * g - 21 * b) >> 8), 255);
-            uint8_t& uPix = uRow[cx * cStep];
-            uint8_t& vPix = vRow[cx * cStep];
-            uPix = uint8_t((u * a + uPix * (255 - a)) / 255);
-            vPix = uint8_t((v * a + vPix * (255 - a)) / 255);
-        }
-    }
 }
 
 // Обёртка: что бы внутри ни случилось, счётчик занятости должен вернуться к
@@ -368,8 +285,6 @@ void VideoSendWorker::encodeFrame(const QVideoFrame& frame, int maxW, int maxH,
         if (!ensureSws(img.width(), img.height(), AV_PIX_FMT_RGBA, tw, th, dstFmt)) return;
         sws_scale(m_sws, data, stride, 0, img.height(), dst->data, dst->linesize);
     }
-
-    blendCursor(dst, tw, th, dstFmt);   // курсор рисуем уже по месту, поверх кадра
 
     const bool key = m_keyNext || (m_frames % m_keyEvery == 0);
     m_keyNext = false;

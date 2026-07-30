@@ -1,7 +1,7 @@
 #include "VideoEngine.h"
 #include "VideoSendWorker.h"
 #include "VideoRecvWorker.h"
-#include "ScreenCursor.h"
+#include "ScreenCapturer.h"
 #include "AudioEngine.h"
 #include "MediaStats.h"
 #include "../MediaSettings.h"
@@ -14,9 +14,6 @@
 #include <QCamera>
 #include <QCameraDevice>
 #include <QCameraFormat>
-#include <QScreenCapture>
-#include <QWindowCapture>
-#include <QScreen>
 #include <QMediaCaptureSession>
 #include <QThread>
 #include <QDateTime>
@@ -161,6 +158,25 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
     m_encThread->start();
     m_scrThread->start();
 
+    // Захват экрана создаём НА потоке экрана и уже после его запуска: WGC хочет
+    // апартамент COM = MTA (QThread его и даёт, GUI-поток Qt — нет), а сторож
+    // свёрнутого окна внутри требует работающего цикла событий.
+    QMetaObject::invokeMethod(m_scrWorker, [this] {
+        m_scrCapture = new ScreenCapturer;
+    }, Qt::BlockingQueuedConnection);
+    // Кадр приезжает с потока пула WGC — сюда queued, потому что дальше идут
+    // превью (только GUI-поток) и пейсер.
+    connect(m_scrCapture, &ScreenCapturer::frameReady,
+            this, &VideoEngine::onScreenCapFrame, Qt::QueuedConnection);
+    connect(m_scrCapture, &ScreenCapturer::failed, this,
+            [this](const QString& text) { failScreen(text); }, Qt::QueuedConnection);
+    connect(m_scrCapture, &ScreenCapturer::suspendedChanged,
+            this, &VideoEngine::onScreenSuspended, Qt::QueuedConnection);
+
+    // Досылка последнего кадра, когда экран неподвижен (см. onScreenRepeat).
+    m_scrRepeatTimer = new QTimer(this);
+    connect(m_scrRepeatTimer, &QTimer::timeout, this, &VideoEngine::onScreenRepeat);
+
     // Выбор кодека: воркеру он нужен до первого кадра, дальше — по изменению.
     connect(settings, &MediaSettings::camCodecChanged, this, &VideoEngine::applyCodecPrefs);
     connect(settings, &MediaSettings::screenCodecChanged, this, &VideoEngine::applyCodecPrefs);
@@ -188,6 +204,14 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
 VideoEngine::~VideoEngine() {
     stopCapture();
     stopScreenCapture();
+    // Захват создавали на потоке экрана — там же и разрушаем, до его остановки:
+    // внутри объекты WinRT и таймер, привязанные именно к тому потоку.
+    if (m_scrCapture) {
+        QMetaObject::invokeMethod(m_scrCapture, [this] {
+            delete m_scrCapture;
+            m_scrCapture = nullptr;
+        }, Qt::BlockingQueuedConnection);
+    }
     if (m_encThread) {                         // остановить потоки кодирования
         m_encThread->quit();
         m_encThread->wait();                   // finished -> deleteLater воркера
@@ -588,7 +612,7 @@ void VideoEngine::setPreviewActive(bool on) {
 // Просьба прислать опорный кадр (KEYFRAME_REQ, новичок, реконнект).
 // Rate-limit 500 мс — как у веба: спам запросов не роняет битрейт.
 void VideoEngine::forceKeyframe() {
-    if (!m_camera && !m_scrSession) return;
+    if (!m_camera && !m_scrCapturing) return;
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     if (now - m_lastForceAt < 500) return;
     m_lastForceAt = now;
@@ -649,81 +673,70 @@ void VideoEngine::onScreenSlotChanged() {
 }
 
 void VideoEngine::startScreenCapture() {
-    if (m_scrSession) return;
+    if (m_scrCapturing) return;
     if (!m_sources || !m_sources->hasSelection()) {
         failScreen(QStringLiteral("Не выбран экран или окно для демонстрации."));
         return;
     }
 
-    m_scrSession = new QMediaCaptureSession(this);
-    m_scrSink = new QVideoSink(this);
-    m_scrSession->setVideoSink(m_scrSink);
-    connect(m_scrSink, &QVideoSink::videoFrameChanged, this, &VideoEngine::onScreenCapFrame);
-
-    if (m_sources->isWindow()) {
-        m_scrWindow = new QWindowCapture(this);
-        m_scrWindow->setWindow(m_sources->selectedWindow());
-        m_scrSession->setWindowCapture(m_scrWindow);
-        // Окно закрыли посреди демонстрации — захват падает с ошибкой, и это
-        // единственный сигнал о том, что показывать больше нечего.
-        connect(m_scrWindow, &QWindowCapture::errorOccurred, this,
-                [this](QWindowCapture::Error e, const QString& s) {
-                    if (e != QWindowCapture::NoError)
-                        failScreen(s.isEmpty()
-                            ? QStringLiteral("Окно больше недоступно.") : s);
-                });
-        m_scrWindow->start();
-    } else {
-        QScreen* scr = m_sources->selectedScreen();
-        if (!scr) {                    // монитор отключили между выбором и стартом
-            stopScreenCapture();
-            failScreen(QStringLiteral("Выбранный экран больше недоступен."));
-            return;
-        }
-        // Курсор: захват монитора идёт через Desktop Duplication, а он отдаёт
-        // кадр без курсора (у захвата ОКНА он есть — там другой механизм).
-        // Значит для монитора рисуем сами; воркеру нужен физический
-        // прямоугольник монитора, чтобы перевести координаты курсора в кадр.
-        // Пусто — монитор сопоставить не удалось. Раньше здесь считался
-        // «примерный» прямоугольник как geometry * devicePixelRatio, и это
-        // ошибка: при разных масштабах у мониторов (FHD 125 % + телевизор)
-        // координаты Qt и физические координаты Windows связаны не одним
-        // множителем, так что получался неверный и масштаб, и сдвиг. Лучше не
-        // рисовать курсор вовсе, чем рисовать его вдвое крупнее и мимо места.
-        m_scrCursorRect = ScreenCursor::monitorRect(scr);
-        if (m_scrCursorRect.isEmpty())
-            qWarning() << "VideoEngine: монитор не сопоставлен, курсор не рисуем";
-        applyCursorSetting();              // …если пользователь курсор не выключил
-
-        m_scrScreen = new QScreenCapture(this);
-        m_scrScreen->setScreen(scr);
-        m_scrSession->setScreenCapture(m_scrScreen);
-        connect(m_scrScreen, &QScreenCapture::errorOccurred, this,
-                [this](QScreenCapture::Error e, const QString& s) {
-                    if (e != QScreenCapture::NoError)
-                        failScreen(s.isEmpty()
-                            ? QStringLiteral("Не удалось захватить экран.") : s);
-                });
-        m_scrScreen->start();
+    // Захват идёт НЕ через Qt, а своим ScreenCapturer поверх
+    // Windows.Graphics.Capture: у QScreenCapture частота была 27 к/с на
+    // мониторе 60 Гц без всякой возможности на это повлиять, а отдельное окно
+    // он снимал другим механизмом со своими особенностями. Запасного пути на
+    // Qt сознательно НЕТ: целевая система — Windows 11, а старые системы
+    // обслуживает веб-клиент.
+    if (!ScreenCapturer::isSupported()) {
+        failScreen(QStringLiteral(
+            "Захват экрана недоступен в этой версии Windows. "
+            "Подключитесь к встрече через браузер."));
+        return;
     }
 
+    void* handle = m_sources->isWindow() ? m_sources->selectedWindowHandle()
+                                         : m_sources->selectedMonitorHandle();
+    if (!handle) {
+        failScreen(m_sources->isWindow()
+                       ? QStringLiteral("Выбранное окно больше недоступно.")
+                       : QStringLiteral("Выбранный экран больше недоступен."));
+        return;
+    }
+
+    const bool wantWindow = m_sources->isWindow();
+    const bool cursor = m_settings->screenCursor();
+    bool started = false;
+    // Захватчик живёт на потоке кодирования: WGC требует апартамента COM = MTA,
+    // а GUI-поток Qt — STA. Заодно там уже есть цикл событий для его сторожа.
+    QMetaObject::invokeMethod(m_scrCapture, [this, handle, wantWindow, cursor, &started] {
+        started = wantWindow ? m_scrCapture->startWindow(handle, cursor)
+                             : m_scrCapture->startMonitor(handle, cursor);
+    }, Qt::BlockingQueuedConnection);
+    if (!started) {                    // подробность уже уехала сигналом failed
+        stopScreenCapture();
+        return;
+    }
+
+    m_scrCapturing = true;
     m_scrKeyNext = true;
     m_scrNextDueMs = 0;
     m_scrPreviewDueMs = 0;             // первый кадр — сразу на сцену
+    m_scrSuspended = false;
     resetScreenRate();                 // новая демонстрация начинается с полного качества
+    // Повтор последнего кадра: WGC присылает кадр, только когда композитор
+    // что-то перерисовал, и на неподвижном экране поток бы просто прерывался.
+    // Нам нужен ровный — см. onScreenRepeat.
+    m_scrRepeatTimer->start(int(qMax<qint64>(1, 1000 / m_settings->screenPreset().fps)));
 }
 
 void VideoEngine::stopScreenCapture() {
-    if (m_scrScreen) { m_scrScreen->stop(); m_scrScreen->deleteLater(); m_scrScreen = nullptr; }
-    if (m_scrWindow) { m_scrWindow->stop(); m_scrWindow->deleteLater(); m_scrWindow = nullptr; }
-    if (m_scrSession) { m_scrSession->deleteLater(); m_scrSession = nullptr; }
-    if (m_scrSink) { m_scrSink->deleteLater(); m_scrSink = nullptr; }
-    m_scrCursorRect = QRect();
-    if (m_scrWorker) {
+    m_scrCapturing = false;
+    m_scrRepeatTimer->stop();
+    if (m_scrCapture)
+        QMetaObject::invokeMethod(m_scrCapture, [this] { m_scrCapture->stop(); },
+                                  Qt::BlockingQueuedConnection);
+    m_scrLastFrame = QVideoFrame();
+    m_scrSuspended = false;
+    if (m_scrWorker)
         QMetaObject::invokeMethod(m_scrWorker, "reset", Qt::QueuedConnection);
-        QMetaObject::invokeMethod(m_scrWorker, "setCursorSource", Qt::QueuedConnection,
-                                  Q_ARG(QRect, QRect()));   // курсор больше не наш
-    }
     m_scrKeyNext = true;
     if (m_scrPreview) m_scrPreview->setVideoFrame(QVideoFrame());
     setScreenPreviewActive(false);
@@ -732,7 +745,7 @@ void VideoEngine::stopScreenCapture() {
 
 // Смена пресета качества на лету: перезапускаем, только если реально снимаем.
 void VideoEngine::restartScreenCapture() {
-    if (!m_scrSession) return;
+    if (!m_scrCapturing) return;
     stopScreenCapture();
     onScreenSlotChanged();
 }
@@ -796,10 +809,36 @@ void VideoEngine::noteCodecFallback(bool screen, int requested, int actual) {
 // только если пользователь этого хочет. Пустой прямоугольник = не рисовать,
 // поэтому переключение на лету не требует перезапуска захвата.
 void VideoEngine::applyCursorSetting() {
-    if (!m_scrWorker) return;
-    const QRect r = m_settings->screenCursor() ? m_scrCursorRect : QRect();
-    QMetaObject::invokeMethod(m_scrWorker, "setCursorSource", Qt::QueuedConnection,
-                              Q_ARG(QRect, r));
+    if (!m_scrCapture) return;
+    const bool on = m_settings->screenCursor();
+    // Курсор рисует система, а не мы: раньше здесь передавался физический
+    // прямоугольник монитора, по которому воркер сам накладывал стрелку —
+    // со своим масштабированием и своими ошибками в нём.
+    QMetaObject::invokeMethod(m_scrCapture, [this, on] { m_scrCapture->setCursorEnabled(on); },
+                              Qt::QueuedConnection);
+}
+
+// Окно свернули: кадров не будет, пока его не развернут. Отпускать слот
+// демонстрации при этом неправильно — человек свернул окно на секунду, — но и
+// молчать нельзя: у зрителей сцена замрёт на последнем кадре без объяснений.
+// Поэтому говорим им текстом и перестаём слать повторы (слать один и тот же
+// кадр в никуда незачем), а как развернут — поток пойдёт сам.
+void VideoEngine::onScreenSuspended(bool suspended) {
+    if (m_scrSuspended == suspended) return;
+    m_scrSuspended = suspended;
+    if (suspended)
+        emit screenError(QStringLiteral(
+            "Окно свёрнуто — демонстрация приостановлена. Разверните окно."));
+}
+
+// Повтор последнего кадра. WGC присылает кадр только на изменение картинки:
+// на неподвижном экране поток бы прерывался совсем, а это ровно то, из-за чего
+// у аппаратного кодировщика застревают внутри последние два кадра, и зритель
+// продолжает видеть картинку до остановки. Поэтому досылаем последний кадр по
+// расписанию пейсера — он же и решит, не рано ли.
+void VideoEngine::onScreenRepeat() {
+    if (!m_scrCapturing || m_scrSuspended || !m_scrLastFrame.isValid()) return;
+    sendScreenFrame(m_scrLastFrame);
 }
 
 void VideoEngine::resetScreenRate() {
@@ -862,12 +901,17 @@ void VideoEngine::setScreenPreviewActive(bool on) {
     emit screenPreviewActiveChanged();
 }
 
+// Свежий кадр от захвата. Приезжает queued с потока пула WGC: рисовать превью и
+// трогать пейсер можно только здесь, на GUI-потоке.
 void VideoEngine::onScreenCapFrame(const QVideoFrame& frame) {
     if (!frame.isValid()) return;
 
-    const MediaSettings::CamPreset q = m_settings->screenPreset();
+    // Запоминаем для повтора: на неподвижном экране новых кадров не будет,
+    // а поток в сеть должен идти ровно (см. onScreenRepeat).
+    m_scrLastFrame = frame;
+
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    const qint64 period = qMax<qint64>(1, 1000 / q.fps);
+    const qint64 period = qMax<qint64>(1, 1000 / m_settings->screenPreset().fps);
 
     // Своя сцена — сразу и без кодека (как превью камеры): видеть, что именно
     // ты показываешь, нужно немедленно. Но НЕ на каждый кадр захвата: кадр
@@ -881,6 +925,19 @@ void VideoEngine::onScreenCapFrame(const QVideoFrame& frame) {
         if (m_scrPreview) m_scrPreview->setVideoFrame(frame);
     }
     setScreenPreviewActive(true);
+
+    sendScreenFrame(frame);
+}
+
+// Один путь для свежего кадра и для повтора: пейсер, регулятор качества,
+// отбраковка при заторе и передача воркеру. Повтор отличается только тем, что
+// содержимое то же самое — и кодировщик превратит его в считанные байты.
+void VideoEngine::sendScreenFrame(const QVideoFrame& frame) {
+    if (!frame.isValid()) return;
+
+    const MediaSettings::CamPreset q = m_settings->screenPreset();
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const qint64 period = qMax<qint64>(1, 1000 / q.fps);
 
     if (!m_live) return;
     if (now < m_scrNextDueMs) return;                           // ещё рано

@@ -15,7 +15,7 @@ set(CMAKE_AUTOMOC ON)
 # MultimediaPrivate — отдельный компонент: цель Qt6::MultimediaPrivate сама по
 # себе не появляется от Multimedia, её нужно запросить явно (см. ScreenSources).
 # GuiPrivate — ради HMONITOR экрана: публичного способа узнать, какому монитору
-# Windows соответствует QScreen, нет вовсе (см. src/media/ScreenCursor.cpp).
+# Windows соответствует QScreen, нет вовсе (см. src/ScreenSources.cpp).
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui GuiPrivate Qml Quick QuickControls2
                                          Network WebSockets Multimedia MultimediaPrivate)
 
@@ -53,7 +53,6 @@ qt_add_executable(Win11Client
     src/media/VideoEncoder.cpp
     src/media/VideoSendWorker.cpp
     src/media/VideoRecvWorker.cpp
-    src/media/ScreenCursor.cpp
     src/media/ScreenCapturer.cpp
     src/media/VideoEngine.cpp
     src/media/MediaStats.cpp

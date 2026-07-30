@@ -19,9 +19,8 @@ class E2eCipher;
 class QVideoSink;
 class QVideoFrame;
 class QCamera;
-class QScreenCapture;
-class QWindowCapture;
 class QMediaCaptureSession;
+class ScreenCapturer;
 class QThread;
 class QTimer;
 
@@ -166,6 +165,10 @@ private:
     void stopScreenCapture();
     void restartScreenCapture();       // смена пресета качества на лету
     void onScreenCapFrame(const QVideoFrame& frame);
+    // Общий путь свежего кадра и повтора: пейсер, качество, затор, воркер.
+    void sendScreenFrame(const QVideoFrame& frame);
+    void onScreenRepeat();             // досылка последнего кадра по расписанию
+    void onScreenSuspended(bool suspended);   // окно свернули/развернули
     void failScreen(const QString& text);   // сорвалось: отпустить слот и сказать
     void setScreenPreviewActive(bool on);
     void applyCursorSetting();         // включить/выключить дорисовку курсора
@@ -234,12 +237,18 @@ private:
     qint64 m_nextDueMs = 0;
 
     // отправка экрана
-    QMediaCaptureSession* m_scrSession = nullptr;   // своя сессия: у камеры своя
-    QScreenCapture* m_scrScreen = nullptr;          // выбран монитор
-    QWindowCapture* m_scrWindow = nullptr;          // выбрано окно
-    QVideoSink* m_scrSink = nullptr;                // кадры экрана прилетают сюда
+    // Свой захват поверх Windows.Graphics.Capture вместо QScreenCapture:
+    // у того было 27 к/с на мониторе 60 Гц и никакого способа на это повлиять.
+    // Живёт на m_scrThread — WGC требует апартамента COM = MTA, а GUI-поток
+    // Qt всегда STA.
+    ScreenCapturer* m_scrCapture = nullptr;
     QVideoSink* m_scrPreview = nullptr;             // своя сцена (не владеем)
-    QRect m_scrCursorRect;                          // физ. прямоугольник монитора
+    bool m_scrCapturing = false;                    // идёт ли захват прямо сейчас
+    bool m_scrSuspended = false;                    // окно свёрнуто — кадров нет
+    // Последний снятый кадр: WGC присылает кадр только на изменение картинки,
+    // а поток в сеть должен идти ровно (см. onScreenRepeat).
+    QVideoFrame m_scrLastFrame;
+    QTimer* m_scrRepeatTimer = nullptr;
     // Отдельный поток, а не общий с камерой: на одном потоке кадр камеры ждал
     // бы, пока закодируется кадр экрана (а это десятки миллисекунд на 4K), и
     // приезжал бы получателю уже просроченным — с этого и разъезжались губы.

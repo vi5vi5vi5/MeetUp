@@ -284,6 +284,13 @@ bool ScreenCapturer::startMonitor(void* hmonitor, bool drawCursor) {
     return startItem(drawCursor, QStringLiteral("экран"));
 }
 
+// Кадр окна приходит чуть КРУПНЕЕ самого окна: у окна 3840x2160 замер дал
+// 3848x2180. Это расширенные границы от DWM — тень и рамка, которые система
+// считает частью окна. Обрезать не стали намеренно: лишние пиксели по краям
+// зрителю не мешают (это фон окна, а не чужое содержимое), а обрезка означала бы
+// ещё один проход по кадру ради косметики. Если однажды понадобится — считать
+// границы через DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS) и вырезать
+// в deliverFrame, там уже есть D3D11_BOX.
 bool ScreenCapturer::startWindow(void* hwnd, bool drawCursor) {
     stop();
     HWND h = static_cast<HWND>(hwnd);

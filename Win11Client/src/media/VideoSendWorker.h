@@ -45,10 +45,6 @@ public slots:
     // Захват остановлен / сменились параметры: энкодер в мусор, следующий
     // запуск начнётся с опорного кадра.
     void reset();
-    // Дорисовывать ли курсор и в каких координатах. Прямоугольник — физические
-    // пиксели снимаемого монитора на рабочем столе; пустой = не рисовать
-    // (камера, а также захват окна — там курсор рисует сама система).
-    void setCursorSource(const QRect& physicalRect);
     // Кодек по выбору пользователя (Proto::CODEC_*, 0 = авто). Смена требует
     // переоткрытия энкодера — он держит состояние потока кадров, — поэтому
     // здесь же reset(); приёмники увидят новый кодек и пересоздадут декодеры.
@@ -77,9 +73,6 @@ signals:
 private:
     void encodeFrame(const QVideoFrame& frame, int maxW, int maxH, int fps,
                      int bitrate, bool forceKey, qint64 tsMs);
-    // Врисовать курсор в уже отмасштабированный кадр. pixFmt — YUV420P (цветность
-    // двумя отдельными плоскостями) или NV12 (одна, U и V через байт).
-    void blendCursor(AVFrame* dst, int tw, int th, int pixFmt);
     // Пересоздать масштабатор, если поменялись размеры или форматы.
     bool ensureSws(int sw, int sh, int srcFmt, int tw, int th, int dstFmt);
     // Сколько кадров в секунду мы РЕАЛЬНО отдаём — по интервалам между
@@ -101,7 +94,6 @@ private:
     int m_frames = 0;
     bool m_keyNext = true;
     qint64 m_sendStartMs = 0;      // база внутренней PTS-шкалы кодера
-    QRect m_cursorSrc;             // пусто — курсор не рисуем
     quint8 m_codecPref = 0;        // 0 — авто (H.264, при неудаче VP8)
     std::atomic<int> m_inFlight{ 0 };   // см. busy()
     // Измерение реальной частоты (см. achievedFps).

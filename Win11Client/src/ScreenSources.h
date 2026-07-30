@@ -44,8 +44,17 @@ public:
     // ---- для VideoEngine (не QML) ----
     bool hasSelection() const { return !m_selKey.isEmpty(); }
     bool isWindow() const { return m_selKey.startsWith("window:"); }
-    QScreen* selectedScreen() const;            // nullptr, если выбрано окно
-    QCapturableWindow selectedWindow() const;   // невалидное, если выбран монитор
+
+    // Хендлы выбранного источника для ScreenCapturer. Возвращают void*
+    // (HMONITOR/HWND), чтобы не тащить windows.h в заголовок; nullptr — выбран
+    // источник другого вида или он уже исчез.
+    //
+    // Живут здесь, а не в захватчике, потому что это продолжение выбора: класс
+    // и так знает, какой экран и какое окно выбраны, и уже добывает HWND для
+    // миниатюр. Разносить «что выбрано» и «чем это открыть» по разным файлам
+    // означало бы дважды решать одну задачу сопоставления.
+    void* selectedMonitorHandle() const;
+    void* selectedWindowHandle() const;
 
     // Кэш миниатюр для image-провайдера (ключ — тот же key источника).
     QImage thumb(const QString& key) const { return m_thumbs.value(key); }
@@ -55,6 +64,15 @@ signals:
     void selectedChanged();
 
 private:
+    // Разрешение выбранного ключа в объект Qt. Наружу больше не нужны: движку
+    // отдаются готовые хендлы, а всё остальное — дело этого класса.
+    QScreen* selectedScreen() const;            // nullptr, если выбрано окно
+    QCapturableWindow selectedWindow() const;   // невалидное, если выбран монитор
+
+    // HMONITOR экрана и его точный размер в пикселях — см. пояснения в .cpp.
+    static void* monitorHandleOf(QScreen* screen);
+    static QSize monitorPixelSize(QScreen* screen);
+
     void rebuildScreens();
     void rebuildWindows();
     QString thumbUrl(const QString& key) const;   // "" — миниатюры нет

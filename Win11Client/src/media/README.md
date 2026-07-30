@@ -48,6 +48,23 @@ The media pipeline (see `docs/ROADMAP.md`).
 
   Two invariants hold on the send path, and both exist because breaking them
   cost the screen band half its frames:
+  **Screen capture is ours** (`ScreenCapturer`, on top of Windows.Graphics
+  Capture) rather than `QScreenCapture`, which delivered 27 fps on a 60 Hz
+  monitor with no way to influence that, and 61 % of those frames were
+  byte-identical to the previous one. WGC measured 50 fps on the same 4K screen,
+  captures a **single window** (DXGI Desktop Duplication cannot at all), and
+  draws the cursor itself via `IsCursorCaptureEnabled` — which is why the
+  client-side cursor compositing is gone entirely. There is deliberately **no Qt
+  fallback**: the target is Windows 11, and older systems are served by the web
+  client. Two consequences worth knowing:
+  - WGC delivers a frame **only when the compositor repainted something**, so on
+    a still screen the stream would simply stop. `VideoEngine` re-sends the last
+    frame on the pacer's schedule; a repeat costs a handful of bytes and keeps
+    the hardware encoder's two-frame pipeline moving.
+  - A **minimised window** produces no frames at all. `ScreenCapturer` watches
+    for that and reports it, so viewers get a sentence instead of a silently
+    frozen stage.
+
   **(1) no media payload crosses the GUI thread.** Encoded packets go from the
   encode thread straight to the socket thread (`packetReady` →
   `SignalingLink::sendBinary`); only byte counts visit the GUI thread, for
