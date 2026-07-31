@@ -5,6 +5,7 @@
 #include <QHash>
 #include <QList>
 #include <QMutex>
+#include <memory>
 
 class QAudioSink;
 class QAudioSource;
@@ -12,6 +13,7 @@ class QIODevice;
 class QTimer;
 class ScreenAudioCapture;
 class E2eCipher;
+class Denoiser;
 struct OpusEncoder;   // C-структуры из opus.h — вперёд объявляются как struct
 struct OpusDecoder;
 
@@ -62,6 +64,10 @@ public slots:
     // иначе PID окна, которое показываем). См. ScreenAudioCapture.
     void setScreenAudio(bool on, quint32 pid);
     void setBitrate(int bps);        // Opus голоса — на лету, без пересоздания
+    // Шумоподавление микрофона. Переключается на лету и НЕ трогает
+    // QAudioSource: тумблер, который на полсекунды глушит разговор ради
+    // перезапуска устройства, никто трогать не станет.
+    void setDenoise(bool on);
     void setGains(qreal volume, qreal sensitivity, qreal screenVolume);
     void setOutputMuted(bool muted);
     // Личная громкость участника (множитель 0..2). Только голос: у звука
@@ -138,6 +144,7 @@ private:
     QAudioDevice m_inDev, m_outDev;
     bool m_comReady = false;            // COM на этом потоке подняли мы
     bool m_wantCapture = false, m_wantPlayback = false, m_wantScreenAudio = false;
+    bool m_wantDenoise = true;          // настройка; сам объект живёт с захватом
     bool m_outputMuted = false;
     int  m_bitrate = 32000;
     qreal m_volGain = 1.0, m_sensGain = 1.0, m_scrVolGain = 1.0;
@@ -145,10 +152,15 @@ private:
     QAudioSource* m_source = nullptr;   // захват (жив только пока говорим)
     QIODevice* m_mic = nullptr;         // поток сэмплов (принадлежит m_source)
     QByteArray m_pcm;                   // накопитель до полного кадра
+    // Шумодав. Состояние рекуррентное — значит один экземпляр обязан видеть
+    // непрерывный поток сэмплов; живёт ровно столько же, сколько захват.
+    // Только микрофон: у полосы демонстрации там музыка, а не голос.
+    std::unique_ptr<Denoiser> m_denoiser;
     OpusEncoder* m_enc = nullptr;       // кодер (жив вместе с захватом)
     qint64 m_audioClockMs = 0;          // монотонные часы меток отправки
     qint64 m_micLevelAt = 0;            // прореживание индикатора уровня
     qint64 m_selfSpokeAt = 0;           // прореживание «говорит» для себя
+    bool m_selfSpeech = false;          // речь идёт: нижний порог VAD держит её
 
     ScreenAudioCapture* m_scrCapture = nullptr;   // захват звука машины
     quint32 m_scrPid = 0;                         // чей звук снимаем (0 — всё, кроме нас)

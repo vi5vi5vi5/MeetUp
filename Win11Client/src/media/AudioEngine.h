@@ -74,6 +74,7 @@ private:
     void updateScreenAudio();           // судья: захватывать звук машины или нет
     void pushDevices();                 // выбранные устройства -> воркеру
     void pushGains();                   // громкость/чувствительность -> воркеру
+    void pushDenoise();                 // шумоподавление -> воркеру
     void forgetPeerVolumes();           // сброс личных громкостей (новая комната)
     void setScreenLive(bool on);
 

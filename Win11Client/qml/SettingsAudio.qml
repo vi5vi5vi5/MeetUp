@@ -107,31 +107,34 @@ Column {
 
     Rectangle { width: parent.width; height: 1; color: Theme.border }
 
-    // ---- Обработка голоса (планируется) ----
-    // Qt такого не умеет: понадобится speexdsp или webrtc-apm в vcpkg.
+    // ---- Обработка голоса ----
+    // Шумоподавление работает (RNNoise, см. src/media/Denoiser.h). Двум
+    // оставшимся тумблерам нужен эхоподавитель WebRTC (AEC3): своя задача,
+    // не «шумодав получше» — там нужен второй, опорный сигнал того, что ушло
+    // в динамики, и оценка задержки тракта.
     Field {
         width: parent.width
         label: "Обработка голоса"
-        soon: true
         Column {
             width: parent.width
             spacing: 14
-            enabled: false
-            opacity: 0.62
 
             SettingSwitch {
                 label: "Шумоподавление"
                 description: "Убирает вентилятор, клавиатуру и фон комнаты."
-                checked: true
+                checked: AV.noiseSuppression
+                onToggled: function (v) { AV.noiseSuppression = v }
             }
             SettingSwitch {
                 label: "Эхоподавление"
                 description: "Нужно, когда вы слушаете через колонки, а не наушники."
+                soon: true
                 checked: true
             }
             SettingSwitch {
                 label: "Автоусиление"
                 description: "Выравнивает громкость, если вы отсели от микрофона."
+                soon: true
             }
         }
     }

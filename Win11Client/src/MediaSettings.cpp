@@ -27,6 +27,7 @@ MediaSettings::MediaSettings(QObject* parent) : QObject(parent) {
     m_outId = s.value("outId").toString();
     m_volume = qBound(0, s.value("volume", 100).toInt(), 200);
     m_sensitivity = qBound(0, s.value("sens", 100).toInt(), 200);
+    m_noiseSuppression = s.value("noiseSuppression", true).toBool();
     const QStringList levels{"low", "med", "high"};
     m_camQuality = s.value("qCam", "med").toString();
     if (!levels.contains(m_camQuality)) m_camQuality = "med";
@@ -170,6 +171,13 @@ void MediaSettings::setScreenCursor(bool on) {
     m_screenCursor = on;
     save("screenCursor", on);
     emit screenCursorChanged();
+}
+
+void MediaSettings::setNoiseSuppression(bool on) {
+    if (m_noiseSuppression == on) return;
+    m_noiseSuppression = on;
+    save("noiseSuppression", on);
+    emit noiseSuppressionChanged();
 }
 
 void MediaSettings::setUiSounds(bool on) {

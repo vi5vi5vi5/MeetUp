@@ -1,7 +1,8 @@
 ﻿cmake_minimum_required(VERSION 3.21)
 # RC — ради resources/app.rc: значок .exe (панель задач, Alt+Tab, ярлык).
 # Без него CMake не знает, чем собирать .rc, и молча его пропустит.
-project(Win11Client VERSION 1.05 LANGUAGES CXX RC)
+# C — ради third_party/rnnoise: шумоподавление написано на чистом C.
+project(Win11Client VERSION 1.05 LANGUAGES C CXX RC)
 
 # ---- MeetUp Win11 client ----------------------------------------------------
 # Qt6/QML desktop client for the MeetUp conference server.
@@ -30,6 +31,63 @@ find_package(FFMPEG REQUIRED)   # наполняет переменные FFMPEG
 
 qt_standard_project_setup(REQUIRES 6.5)
 
+# ---- RNNoise: шумоподавление микрофона -------------------------------------
+# Вендорится, а не тянется из vcpkg: порт rnnoise там есть, но собран под
+# autotools и в своих платформах Windows не заявляет вовсе. Зависимостей у
+# библиотеки при этом нет ни одной — это чистый C, поэтому вендоринг здесь
+# стоит дешевле, чем свой порт.
+#
+# Источник: github.com/xiph/rnnoise @ 70f1d256 (2025-02-22).
+# Веса (src/rnnoise_data.c) в репозитории апстрима НЕ лежат — их качает
+# download_model.sh по хэшу из model_version. Файл положен сюда уже скачанным:
+# без него сборка не поднимется, а требовать sh-скрипт на Windows незачем.
+set(RNNOISE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/rnnoise)
+add_library(rnnoise STATIC
+    ${RNNOISE_DIR}/src/denoise.c
+    ${RNNOISE_DIR}/src/rnn.c
+    ${RNNOISE_DIR}/src/pitch.c
+    ${RNNOISE_DIR}/src/kiss_fft.c
+    ${RNNOISE_DIR}/src/celt_lpc.c
+    ${RNNOISE_DIR}/src/nnet.c
+    ${RNNOISE_DIR}/src/nnet_default.c
+    ${RNNOISE_DIR}/src/parse_lpcnet_weights.c
+    ${RNNOISE_DIR}/src/rnnoise_data.c
+    ${RNNOISE_DIR}/src/rnnoise_tables.c
+)
+target_include_directories(rnnoise PUBLIC ${RNNOISE_DIR}/include)
+target_include_directories(rnnoise PRIVATE ${RNNOISE_DIR}/src)
+# CMAKE_AUTOMOC включён глобально и цепляется к каждой цели. Здесь чистый C
+# без единого Q_OBJECT, а один только файл весов — 74 МБ: пусть moc его не
+# читает.
+set_target_properties(rnnoise PROPERTIES AUTOMOC OFF)
+
+# Векторизация выбирается на старте по фактическому процессору (RTCD), а не
+# флагом сборки: собранный с /arch:AVX2 целиком бинарник просто не запустится
+# там, где AVX2 нет. Замерено на 60 с звука: без SIMD 0.47 мс на кадр 10 мс,
+# с диспетчером — 0.27 мс, то есть почти вдвое.
+if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+    target_sources(rnnoise PRIVATE
+        ${RNNOISE_DIR}/src/x86/x86_dnn_map.c
+        ${RNNOISE_DIR}/src/x86/x86cpu.c
+        ${RNNOISE_DIR}/src/x86/nnet_sse4_1.c
+        ${RNNOISE_DIR}/src/x86/nnet_avx2.c
+    )
+    target_compile_definitions(rnnoise PRIVATE RNN_ENABLE_X86_RTCD)
+    # У MSVC нет ключа «включить SSE4.1»: на x64 эти интринсики доступны всегда,
+    # а вот __SSE4_1__ компилятор сам не определяет — за него это делает
+    # x86_arch_macros.h, но только увидев OPUS_X86_MAY_HAVE_SSE4_1.
+    set_source_files_properties(${RNNOISE_DIR}/src/x86/nnet_sse4_1.c PROPERTIES
+        COMPILE_DEFINITIONS OPUS_X86_MAY_HAVE_SSE4_1)
+    # А вот AVX2 — ровно наоборот: нужен ключ, и строго на этот один файл.
+    if(MSVC)
+        set_source_files_properties(${RNNOISE_DIR}/src/x86/nnet_avx2.c PROPERTIES
+            COMPILE_OPTIONS /arch:AVX2)
+    else()
+        set_source_files_properties(${RNNOISE_DIR}/src/x86/nnet_avx2.c PROPERTIES
+            COMPILE_OPTIONS "-mavx2;-mfma")
+    endif()
+endif()
+
 qt_add_executable(Win11Client
     src/main.cpp
     src/SysBridge.cpp
@@ -48,6 +106,7 @@ qt_add_executable(Win11Client
     src/net/LinkController.cpp
     src/media/AudioEngine.cpp
     src/media/AudioWorker.cpp
+    src/media/Denoiser.cpp
     src/media/ScreenAudioCapture.cpp
     src/media/VideoDecoder.cpp
     src/media/VideoEncoder.cpp
@@ -197,6 +256,7 @@ target_link_libraries(Win11Client PRIVATE
     # Windows» на двух мониторах разъезжается курсор в демонстрации.
     Qt6::GuiPrivate
     Opus::opus
+    rnnoise
 )
 
 if(WIN32)

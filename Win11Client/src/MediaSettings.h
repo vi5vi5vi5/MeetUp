@@ -24,6 +24,12 @@ class MediaSettings : public QObject {
     // Проценты 0..200, как у веба (100 = как есть).
     Q_PROPERTY(int volume READ volume WRITE setVolume NOTIFY volumeChanged)
     Q_PROPERTY(int sensitivity READ sensitivity WRITE setSensitivity NOTIFY sensitivityChanged)
+    // Шумоподавление микрофона (RNNoise, см. media/Denoiser.h). По умолчанию
+    // включено — ровно как noiseSuppression:true у веб-клиента: два наших
+    // собственных клиента, ведущие себя при одинаковых настройках по-разному,
+    // — худший вид сюрприза.
+    Q_PROPERTY(bool noiseSuppression READ noiseSuppression WRITE setNoiseSuppression
+               NOTIFY noiseSuppressionChanged)
     // Пресеты качества отправки: "low" | "med" | "high".
     Q_PROPERTY(QString camQuality READ camQuality WRITE setCamQuality NOTIFY camQualityChanged)
     Q_PROPERTY(QString audioQuality READ audioQuality WRITE setAudioQuality NOTIFY audioQualityChanged)
@@ -70,6 +76,7 @@ public:
     QString outId() const { return m_outId; }
     int volume() const { return m_volume; }
     int sensitivity() const { return m_sensitivity; }
+    bool noiseSuppression() const { return m_noiseSuppression; }
     QString camQuality() const { return m_camQuality; }
     QString audioQuality() const { return m_audioQuality; }
     QString screenRes() const { return m_screenRes; }
@@ -89,6 +96,7 @@ public:
     void setOutId(const QString& id);
     void setVolume(int v);
     void setSensitivity(int v);
+    void setNoiseSuppression(bool on);
     void setCamQuality(const QString& q);
     void setAudioQuality(const QString& q);
     void setScreenRes(const QString& r);
@@ -138,6 +146,7 @@ signals:
     void outIdChanged();
     void volumeChanged();
     void sensitivityChanged();
+    void noiseSuppressionChanged();
     void camQualityChanged();
     void audioQualityChanged();
     void screenResChanged();
@@ -159,6 +168,7 @@ private:
 
     QString m_micId, m_camId, m_outId;
     int m_volume = 100, m_sensitivity = 100;
+    bool m_noiseSuppression = true;
     QString m_camQuality = "med", m_audioQuality = "med";
     QString m_screenRes = "720";
     int m_screenFps = 30;

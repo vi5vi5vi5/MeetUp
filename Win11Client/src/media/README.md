@@ -10,6 +10,40 @@ The media pipeline (see `docs/ROADMAP.md`).
   The jitter buffer starts at a 3-chunk (60 ms) prebuffer and adapts: an
   underrun is concealed with Opus PLC and widens the buffer by 2 chunks
   (up to 160 ms), which decays back after 5 s of clean playback.
+
+  **Noise suppression** (`Denoiser`, on top of RNNoise) sits on the capture
+  path, and its position in `onCaptured()` is load-bearing: it runs *before*
+  the sensitivity gain, because the network was trained on natural levels and
+  samples cranked to 200 % throw off its band estimates. The 960-sample frame
+  maps onto RNNoise as exactly two 480-sample blocks, so nothing is re-buffered
+  and no resampling happens: it is written for 48 kHz mono, which is already
+  the conference format.
+
+  The same call also returns a **speech probability, and that — not the RMS —
+  drives the "speaking" highlight.** The old level threshold was measuring the
+  wrong quantity: loudness is not speech, so it both missed quiet sentences
+  (below the threshold) and accepted any loud enough thud. Two thresholds
+  rather than one, because a single one flickers at the boundary on every
+  breath between words: the upper one lights the highlight, the lower one only
+  sustains it. The level meter stays on RMS — it answers "how loud", which is
+  a different and honestly-answered question. With suppression switched off
+  there is no probability to read, and the old level threshold is what remains.
+
+  Cost, measured over 60 s of audio on this machine: **0.27 ms per 10 ms frame**
+  (0.55 ms per conference frame, ~2.7 % of one core) and **+10 ms** of
+  algorithmic delay from the 50 %-overlapped analysis window — single-digit
+  percent against a pipeline that already holds 60–160 ms of jitter buffer plus
+  ~60 ms in the sink. Suppression measured on synthetic noise: −34 dB on white
+  noise, −35 dB on noise with keyboard-like transients, and a fan-style tonal
+  hum driven to silence. The state is recurrent, so one instance must see one
+  uninterrupted sample stream — it lives and dies with the capture, and the
+  screen-audio band deliberately has none of this (that band carries music).
+
+  `OPUS_SET_DTX` is on, and only makes sense *together* with the denoiser:
+  before it there is no silence in a real room for DTX to detect. The frame is
+  still transmitted when Opus shrinks it to a single byte — dropping it would
+  punch a hole at the receiver, and a hole there widens the jitter buffer by
+  2 chunks, which would pay for the saved bandwidth in conversation delay.
 - **M3 Video receive** (`VideoEngine` + `VideoRecvWorker` + `VideoDecoder`) —
   FFmpeg (libavcodec) decode of H.264/HEVC/VP8/VP9/AV1, keyframe and
   `KEYFRAME_REQ` handling, render into tiles via `QVideoSink`. Decoding is
@@ -158,7 +192,38 @@ The media pipeline (see `docs/ROADMAP.md`).
   participants, and an incoming message is silent while the chat is visible in
   a focused window.
 
-External deps introduced here (MSVC, via vcpkg): FFmpeg (avcodec/swscale with
-`openh264` + `vpx` features) and libopus. UI sounds need no dependency beyond
-Qt Multimedia — `QSoundEffect` plays uncompressed PCM WAV only, which is what
-the files are (48 kHz, mono, 16-bit).
+- **M8 Settings** also owns the voice-processing switches in `SettingsAudio.qml`.
+  Only noise suppression is wired; **echo cancellation and auto-gain are still
+  `soon: true`**, and that is not laziness about a "better denoiser". An echo
+  canceller is a different problem: it needs a second, reference signal (what
+  went to the speakers), an estimate of the round-trip delay, and non-linear
+  post-processing of the residual. Realistically that means WebRTC's AEC3.
+  The architecture is already in its favour — `mixOneFrame()` is the reference,
+  `sinkQueuedMs()` is the delay, and both live on the same thread as capture,
+  which is where naive AEC integrations usually come apart. Note that AEC must
+  run **before** the denoiser: suppression is non-linear and an adaptive filter
+  placed after it stops converging.
+
+External deps introduced here: FFmpeg (avcodec/swscale with `openh264` + `vpx`
+features) and libopus, both MSVC via vcpkg.
+
+**RNNoise is fetched, not committed.** vcpkg does have a port, but it is
+autotools-built and does not claim Windows at all, while the library itself has
+no dependencies whatsoever — so it lives in `third_party/`, which is
+`.gitignore`d in full and populated by `scripts/fetch-deps.ps1`. Nobody has to
+remember to run it: `configure.ps1` calls it, and every road (build, deploy)
+goes through configure. It costs ~6 s on a cold tree and 0.1 s afterwards.
+The reason for the whole arrangement is one file: the model weights
+(`src/rnnoise_data.c`) are ~75 MB of generated C, which is forty times the size
+of this entire client and would sit in git history forever. They are not in the
+upstream repository either — the script downloads them from media.xiph.org by
+the hash in `model_version`, which doubles as the SHA-256 checksum, and pins the
+RNNoise commit so a build is reproducible a year from now.
+
+One build detail is deliberate: the SIMD path is chosen at **runtime**
+(`RNN_ENABLE_X86_RTCD`, SSE4.1/AVX2 in their own translation units) rather than
+by a global `/arch:` flag, which would produce a binary that refuses to start on
+machines without AVX2. The dispatcher is worth it, at 0.47 → 0.27 ms per frame.
+
+UI sounds need no dependency beyond Qt Multimedia — `QSoundEffect` plays
+uncompressed PCM WAV only, which is what the files are (48 kHz, mono, 16-bit).

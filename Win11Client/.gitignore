@@ -4,6 +4,11 @@
 /build/
 /docs/
 
+# Третьи стороны: качает scripts/fetch-deps.ps1 (его зовёт configure.ps1).
+# Здесь лежит RNNoise, у которого одни только веса модели — 75 МБ
+# сгенерированного C, то есть в сорок раз больше всех наших исходников.
+/third_party/
+
 # IDE / tooling
 /.qtcreator/
 /.vs/

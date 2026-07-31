@@ -1,5 +1,6 @@
 #include "AudioWorker.h"
 #include "ScreenAudioCapture.h"
+#include "Denoiser.h"
 #include "../net/Protocol.h"
 #include "../crypto/E2eCipher.h"
 #include <QAudioSource>
@@ -167,6 +168,15 @@ void AudioWorker::setBitrate(int bps) {
     if (m_enc) opus_encoder_ctl(m_enc, OPUS_SET_BITRATE(bps));
 }
 
+void AudioWorker::setDenoise(bool on) {
+    if (m_wantDenoise == on) return;
+    m_wantDenoise = on;
+    // Захвата нет — просто запомнили: объект поднимется вместе с ним.
+    if (!m_source) return;
+    if (on && !m_denoiser)      m_denoiser = std::make_unique<Denoiser>();
+    else if (!on && m_denoiser) m_denoiser.reset();
+}
+
 void AudioWorker::setGains(qreal volume, qreal sensitivity, qreal screenVolume) {
     m_volGain = volume;
     m_sensGain = sensitivity;
@@ -206,6 +216,15 @@ void AudioWorker::startCapture() {
         return;
     }
     opus_encoder_ctl(m_enc, OPUS_SET_BITRATE(m_bitrate));
+    // DTX имеет смысл только вместе с шумоподавлением: он молчит на кадрах,
+    // которые счёл тишиной, а до шумодава тишины в комнате не бывает вовсе.
+    // Кадр всё равно уходит в сеть (Opus отдаёт его одним байтом вместо
+    // восьмидесяти): пропуск породил бы у приёмника провал, а провал у нас
+    // расширяет джиттер-буфер на 2 чанка — экономию трафика оплатили бы
+    // задержкой разговора.
+    opus_encoder_ctl(m_enc, OPUS_SET_DTX(1));
+
+    if (m_wantDenoise) m_denoiser = std::make_unique<Denoiser>();
 
     m_pcm.clear();
     m_audioClockMs = 0;           // часы меток начнутся с первой пачки
@@ -225,9 +244,11 @@ void AudioWorker::stopCapture() {
         opus_encoder_destroy(m_enc);
         m_enc = nullptr;
     }
+    m_denoiser.reset();           // рвём поток сэмплов — рвём и его состояние
     m_pcm.clear();                // недособранный хвост кадра — в мусор
     m_audioClockMs = 0;
     m_micLevelAt = 0;
+    m_selfSpeech = false;         // иначе следующий захват стартует «говорящим»
     emit micLevel(0);             // индикатор в настройках гаснет
 }
 
@@ -255,6 +276,15 @@ void AudioWorker::onCaptured() {
     unsigned char packet[1500];   // Opus при 32 кбит/с даёт ~80 байт, запас велик
     while (m_pcm.size() >= kFrameBytes) {
         opus_int16* samples = reinterpret_cast<opus_int16*>(m_pcm.data());
+
+        // Шумоподавление — ПЕРВЫМ действием над кадром: RNNoise обучен на
+        // естественных уровнях, и накрученные до 200 % сэмплы сбивают ему
+        // оценку полос, поэтому оно идёт до гейна чувствительности.
+        // Кадр 960 сэмплов ложится на RNNoise ровно двумя блоками по 480.
+        // Тот же вызов попутно отдаёт вероятность речи; -1 — шумодав выключен,
+        // и считать её нечем.
+        const float vad = m_denoiser ? m_denoiser->process(samples, kFrameSamples) : -1.f;
+
         double sumSq = 0;
         for (int i = 0; i < kFrameSamples; ++i) {
             const qint32 v = qBound<qint32>(-32768, qint32(samples[i] * gain), 32767);
@@ -269,7 +299,23 @@ void AudioWorker::onCaptured() {
         // гасили бы через раз — полоска обновлялась бы вдвое реже обещанного.
         const qreal level = qSqrt(sumSq / kFrameSamples) / 32768.0;
         if (nowMs - m_micLevelAt >= 60) { m_micLevelAt = nowMs; emit micLevel(level); }
-        if (level > 0.02 && nowMs - m_selfSpokeAt >= 150) {
+
+        // Говорим ли мы — решает вероятность речи, а не громкость. Порог по
+        // RMS мерил не то: громкость и речь — разные вещи, и он одинаково
+        // пропускал тихую фразу (её уровень ниже порога) и принимал за голос
+        // любой достаточно громкий стук. Сеть отвечает на нужный вопрос, и
+        // ответ достаётся тем же вызовом, что чистит кадр, — то есть даром.
+        //
+        // Порогов два: у самой границы одиночный порог мигал бы на каждом
+        // вдохе между словами. Верхний зажигает, нижний — только удерживает,
+        // поэтому начатая фраза не гаснет на паузах внутри себя.
+        // Полоска уровня выше остаётся по RMS: она показывает, насколько
+        // громко, и это честно — вопрос там другой.
+        const bool speech = vad < 0
+            ? level > 0.02                                     // шумодав выключен
+            : (m_selfSpeech ? vad > 0.20f : vad > 0.60f);
+        m_selfSpeech = speech;
+        if (speech && nowMs - m_selfSpokeAt >= 150) {
             m_selfSpokeAt = nowMs;      // подсветка держится 450 мс — хватает
             emit selfSpeaking();
         }
