@@ -141,9 +141,23 @@ void AudioWorker::setPlayback(bool on) {
     else if (!on && m_sink)  stopPlayback();
 }
 
-void AudioWorker::setScreenAudio(bool on) {
+// pid — чей звук снимать: 0 (показываем монитор) значит «всё, кроме нас»,
+// иначе только дерево процессов этого окна. См. ScreenAudioCapture.
+void AudioWorker::setScreenAudio(bool on, quint32 pid) {
+    const bool pidChanged = (m_scrPid != pid);
     m_wantScreenAudio = on;
+    m_scrPid = pid;
     if (!m_scrCapture) return;
+
+    // Ведущий переключил показ на другое окно, не выключая звук. Цель нельзя
+    // поменять на лету, поэтому перезапускаем полосу целиком — вместе с
+    // кодером и часами: у нового источника своя дорожка, и продолжать чужую
+    // нумерацию кадров незачем.
+    if (on && m_scrCapture->active() && pidChanged) {
+        stopScreenAudio();
+        startScreenAudio();
+        return;
+    }
     if (on && !m_scrCapture->active())       startScreenAudio();
     else if (!on && m_scrCapture->active())  stopScreenAudio();
 }
@@ -303,6 +317,8 @@ void AudioWorker::startScreenAudio() {
     opus_encoder_ctl(m_scrEnc, OPUS_SET_BITRATE(64000));
     opus_encoder_ctl(m_scrEnc, OPUS_SET_SIGNAL(OPUS_SIGNAL_MUSIC));
     m_scrClockMs = 0;
+    // Цель задаём ДО запуска: она читается при активации клиента WASAPI.
+    m_scrCapture->setTarget(m_scrPid);
     m_scrCapture->start();
 }
 
@@ -405,6 +421,7 @@ void AudioWorker::resetPeers() {
     setScreenLive(false);
     QMutexLocker lock(&m_phLock);
     m_playheads.clear();
+    m_scrPlayheads.clear();
 }
 
 void AudioWorker::dropPeer(qint64 id) {
@@ -498,7 +515,10 @@ void AudioWorker::onFrame(const QByteArray& d) {
         while (p.queue.size() > p.prebuf + 3)
             p.queue.removeFirst();
 
-    if (!isScreen) publishPlayheads();
+    // Часы обеих полос обновляем на каждом кадре: pump() делает это раз в
+    // 10 мс, но кадр, только что приехавший по сети, несёт более свежую метку,
+    // а по ней придерживается картинка.
+    publishPlayheads();
 }
 
 // ---------- микс и вывод ----------
@@ -608,19 +628,29 @@ void AudioWorker::publishPlayheads() {
     for (auto it = m_peers.cbegin(); it != m_peers.cend(); ++it)
         m_playheads[it.key()] = { it->lastTs, it->lastTsAt,
                                   int(it->queue.size()) * kFrameMs + sink };
+    // Часы демонстрации считаются ровно так же и из тех же составляющих:
+    // очередь этой полосы плюс общий буфер звуковой карты. Своя очередь у неё
+    // отдельная (m_scrPeers), поэтому и запас не тот, что у голоса.
+    for (auto it = m_scrPeers.cbegin(); it != m_scrPeers.cend(); ++it)
+        m_scrPlayheads[it.key()] = { it->lastTs, it->lastTsAt,
+                                     int(it->queue.size()) * kFrameMs + sink };
 }
 
 void AudioWorker::forgetPlayhead(quint32 id) {
     QMutexLocker lock(&m_phLock);
     m_playheads.remove(id);
+    m_scrPlayheads.remove(id);
 }
 
-qint64 AudioWorker::playheadMs(quint32 id) const {
+// Общая арифметика для обеих полос: какой МЕТКЕ отправителя соответствует
+// звук, который слышно прямо сейчас.
+qint64 AudioWorker::headOf(const QHash<quint32, Playhead>& map,
+                           QMutex& lock, quint32 id) {
     Playhead ph;
     {
-        QMutexLocker lock(&m_phLock);
-        const auto it = m_playheads.constFind(id);
-        if (it == m_playheads.constEnd()) return 0;
+        QMutexLocker guard(&lock);
+        const auto it = map.constFind(id);
+        if (it == map.constEnd()) return 0;
         ph = *it;
     }
     if (ph.lastTs == 0) return 0;
@@ -629,4 +659,12 @@ qint64 AudioWorker::playheadMs(quint32 id) const {
     // Всё, что лежит в очереди и в синке, ещё НЕ прозвучало — значит слышимый
     // сейчас звук соответствует более ранней метке отправителя.
     return ph.lastTs - ph.bufMs + age;
+}
+
+qint64 AudioWorker::playheadMs(quint32 id) const {
+    return headOf(m_playheads, m_phLock, id);
+}
+
+qint64 AudioWorker::screenPlayheadMs(quint32 id) const {
+    return headOf(m_scrPlayheads, m_phLock, id);
 }

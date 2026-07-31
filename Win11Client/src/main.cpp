@@ -68,7 +68,7 @@ int main(int argc, char *argv[])
     ScreenSources screens;                 // мониторы и окна для демонстрации
     GlobalHotkeys hotkeys(&av);            // системные бинды (работают вне фокуса)
     MediaStats stats(&conf);               // счётчики для раздела «Диагностика»
-    AudioEngine audio(&conf, &av, &stats, &cipher);
+    AudioEngine audio(&conf, &av, &screens, &stats, &cipher);
     // audio даёт часы звука (синхронизация губ) и «замки» голосовой полосы
     VideoEngine video(&conf, &av, &screens, &audio, &stats, &cipher);
     E2eController crypto(&cipher, &conf, &link, &sys);   // ключ: фраза и ссылка

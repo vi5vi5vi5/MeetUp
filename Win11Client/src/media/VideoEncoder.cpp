@@ -11,49 +11,6 @@ extern "C" {
 
 VideoEncoder::~VideoEncoder() { close(); }
 
-// Общая проверка «есть ли железо под этот кодек». Пробуем именно ОТКРЫТЬ его с
-// hw_encoding=1: имя в сборке FFmpeg есть всегда, а видеокарта, умеющая им
-// кодировать, — нет. Программный вариант нас не устраивает ни в одном случае
-// (он медленнее openh264), поэтому «нет железа» = «пункта нет».
-static bool probeHardware(const char* encoderName, AVCodecID decoderId,
-                          const char* human) {
-    int ok = 0;
-    if (const AVCodec* c = avcodec_find_encoder_by_name(encoderName)) {
-        AVCodecContext* ctx = avcodec_alloc_context3(c);
-        if (ctx) {
-            // Размер маленький намеренно: проверяем наличие железа, а не его
-            // производительность, и платить за это созданием кадра 4К незачем.
-            ctx->width = 640;
-            ctx->height = 360;
-            ctx->pix_fmt = AV_PIX_FMT_NV12;
-            ctx->time_base = { 1, 1000 };
-            ctx->framerate = { 30, 1 };
-            ctx->bit_rate = 1000000;
-            AVDictionary* opts = nullptr;
-            av_dict_set(&opts, "hw_encoding", "1", 0);
-            const int rc = avcodec_open2(ctx, c, &opts);
-            av_dict_free(&opts);
-            ok = (rc >= 0) ? 1 : 0;
-            avcodec_free_context(&ctx);
-        }
-    }
-    // Уметь кодировать мало: если наш же декодер не соберётся, два наших
-    // клиента друг друга не увидят. Предлагать такой выбор нечестно.
-    if (ok && !avcodec_find_decoder(decoderId)) ok = 0;
-    qInfo() << "VideoEncoder: аппаратный" << human << (ok ? "доступен" : "недоступен");
-    return ok != 0;
-}
-
-bool VideoEncoder::hardwareHevcAvailable() {
-    static const bool ok = probeHardware("hevc_mf", AV_CODEC_ID_HEVC, "HEVC");
-    return ok;
-}
-
-bool VideoEncoder::hardwareAv1Available() {
-    static const bool ok = probeHardware("av1_mf", AV_CODEC_ID_AV1, "AV1");
-    return ok;
-}
-
 bool VideoEncoder::tryOpen(const Candidate& cand,
                            int width, int height, int fps, int bitrate) {
     const AVCodec* codec = avcodec_find_encoder_by_name(cand.name);
@@ -84,7 +41,15 @@ bool VideoEncoder::tryOpen(const Candidate& cand,
         // игнорирует — уровень она считает сама по размеру кадра и частоте,
         // и считает верно: 4.0 на 720p60, 4.2 на 1080p60, 5.1 на 4К30).
         //   scenario=display_remoting — режим «удалённый рабочий стол»: именно
-        //     под экранный контент, а не под говорящую голову.
+        //     под экранный контент, а не под говорящую голову. Ставим его ВСЕМ,
+        //     КРОМЕ h264_mf, и это не вкусовщина, а замер. У кодировщика H.264
+        //     этот режим стоит 17-30 мс на кадр — и на 720p, и на 4К, то есть
+        //     расход не зависит от числа пикселей и работой быть не может. При
+        //     этом он не даёт ничего: тот же битрейт (5687 против 5687 кбит/с) и
+        //     тот же PSNR (40.02 против 40.05 дБ). Тридцать миллисекунд ни за
+        //     что — это потолок в 33 кадра в секунду на ровном месте, каким бы
+        //     мелким ни было окно. Ровно об этот параметр и бился весь H.264.
+        //     У hevc_mf и av1_mf режим бесплатен (1.4 мс), там он остаётся.
         //   rate_control=pc_vbr — VBR с ограничением пика. Здесь был cbr, и это
         //     была ошибка: CBR добивает поток до целевого битрейта независимо от
         //     содержимого, а демонстрация экрана почти всегда неподвижна. На
@@ -98,7 +63,8 @@ bool VideoEncoder::tryOpen(const Candidate& cand,
         //     открытие ПРОВАЛИТСЯ, и мы уйдём на libopenh264 ниже. Так и надо:
         //     программный кодировщик внутри MF медленнее openh264, и получить
         //     его молча было бы хуже, чем не получить MF вовсе.
-        av_dict_set(&opts, "scenario", "display_remoting", 0);
+        if (cand.proto != Proto::CODEC_H264)
+            av_dict_set(&opts, "scenario", "display_remoting", 0);
         av_dict_set(&opts, "rate_control", "pc_vbr", 0);
         av_dict_set(&opts, "hw_encoding", "1", 0);
     } else if (cand.proto == Proto::CODEC_H264) {
@@ -147,7 +113,7 @@ bool VideoEncoder::tryOpen(const Candidate& cand,
 }
 
 bool VideoEncoder::open(int width, int height, int fps, int bitrate,
-                        quint8 preferred, bool allowHardware) {
+                        bool screen, int step) {
     close();
     width &= ~1;                             // чётные размеры — правило §5.5
     height &= ~1;
@@ -157,12 +123,11 @@ bool VideoEncoder::open(int width, int height, int fps, int bitrate,
     // кодеком протокола. Поэтому отбор дальше идёт по имени кодировщика: будь
     // он по Proto::CODEC_*, второй H.264 отбрасывался бы как дубликат — то
     // есть запасного пути у аппаратного не осталось бы вовсе.
-    static const Candidate kH264Hw{ "h264_mf",     Proto::CODEC_H264, AV_PIX_FMT_NV12,    true };
     static const Candidate kHevcHw{ "hevc_mf",     Proto::CODEC_HEVC, AV_PIX_FMT_NV12,    true };
-    static const Candidate kAv1Hw { "av1_mf",      Proto::CODEC_AV1,  AV_PIX_FMT_NV12,    true };
+    static const Candidate kH264Hw{ "h264_mf",     Proto::CODEC_H264, AV_PIX_FMT_NV12,    true };
     static const Candidate kH264Sw{ "libopenh264", Proto::CODEC_H264, AV_PIX_FMT_YUV420P, false };
-    static const Candidate kVp8   { "libvpx",      Proto::CODEC_VP8,  AV_PIX_FMT_YUV420P, false };
     static const Candidate kVp9   { "libvpx-vp9",  Proto::CODEC_VP9,  AV_PIX_FMT_YUV420P, false };
+    static const Candidate kVp8   { "libvpx",      Proto::CODEC_VP8,  AV_PIX_FMT_YUV420P, false };
 
     QList<Candidate> order;
     const auto add = [&order](const Candidate& c) {
@@ -170,34 +135,41 @@ bool VideoEncoder::open(int width, int height, int fps, int bitrate,
         order.append(c);
     };
 
-    // Сначала — выбор пользователя. Для H.264 это значит «сперва видеокарта,
-    // потом процессор»: и то и другое для приёмника один и тот же H.264.
-    if (preferred == Proto::CODEC_H264) {
-        if (allowHardware) add(kH264Hw);
-        add(kH264Sw);
-    } else if (preferred == Proto::CODEC_HEVC) {
-        // Только аппаратный и только по явной просьбе. В запасные HEVC не
-        // попадает НИКОГДА: получить патентованный кодек случайно, не выбирая
-        // его, не должен никто. Если железа нет — уйдём на H.264 ниже, и
-        // человек об этом узнает (codecFallback).
-        if (allowHardware) add(kHevcHw);
-    } else if (preferred == Proto::CODEC_AV1) {
-        // Как и HEVC: только аппаратный и только по явной просьбе. В
-        // запасные не попадает — принимать AV1 умеют далеко не все, и
-        // получить его молча значило бы выключить часть участников.
-        if (allowHardware) add(kAv1Hw);
-    } else if (preferred == Proto::CODEC_VP8) {
+    // Лестница кодеков. Ступенька — это не предпочтение, а ответ на конкретное
+    // событие: получатель прислал «не понимаю такой кодек», и мы спускаемся на
+    // одну ниже. Сам по себе спуск не происходит никогда — наверху всегда
+    // лучшее, что есть.
+    //
+    // Ступени внутри себя ещё и подстраховывают друг друга: если ступень не
+    // открылась (нет железа, нет кодека в сборке), пробуем всё, что ниже.
+    // Остаться совсем без картинки хуже, чем вещать не тем, чем хотелось.
+    if (screen) {
+        // Демонстрация. Всё, что можно, — на видеокарту: замер показал, что
+        // программный H.264 на 1440p стоит 31 мс на кадр, а на 4К — 71, то
+        // есть годится он только как последний довод.
+        //   0. HEVC — основной. Втрое экономнее H.264 по каналу при том же
+        //      качестве (4158 против 10832 кбит/с на 1080p) и той же цене
+        //      кодирования. Железо старше 2015 года его уже умеет.
+        //   1. H.264 — упор на совместимость: его понимают все, включая
+        //      браузеры без HEVC. Сперва видеокарта, потом процессор — для
+        //      получателя это один и тот же поток.
+        //   2. VP8 — реликт на случай, которого мы не ждём.
+        if (step <= 0) add(kHevcHw);
+        if (step <= 1) { add(kH264Hw); add(kH264Sw); }
         add(kVp8);
-    } else if (preferred == Proto::CODEC_VP9) {
-        // VP9 в запасные не входит: он дороже по процессору, и получить его
-        // случайно, не выбирая, никто не должен.
-        add(kVp9);
+    } else {
+        // Камера. Остаётся на процессоре целиком, и намеренно: у аппаратного
+        // кодировщика конвейер глубиной два кадра, на 24 к/с это лишние ~83 мс
+        // прямо в расхождение с голосом. Кадр 720p и на процессоре кодируется
+        // за единицы миллисекунд — узким местом камера не была никогда.
+        //   0. VP9 — самый быстрый из программных (3.6 мс на 1080p против
+        //      16.3 у openh264) и разбирается видеокартой у большинства.
+        //   1. H.264 — база совместимости: программный, зато понимают все.
+        //   2. VP8 — тот же реликт.
+        if (step <= 0) add(kVp9);
+        if (step <= 1) add(kH264Sw);
+        add(kVp8);
     }
-    // Дальше — порядок по умолчанию, как у веба: H.264 (аппаратный декод почти
-    // у всех приёмников), затем VP8. Все уходят одним протоколом v2.
-    if (allowHardware) add(kH264Hw);
-    add(kH264Sw);
-    add(kVp8);
 
     for (const Candidate& c : order)
         if (tryOpen(c, width, height, fps, bitrate)) return true;

@@ -40,9 +40,6 @@ class MediaSettings : public QObject {
     // Дорисовывать ли курсор при показе монитора. Захват окна курсор рисует сам
     // (другой механизм), поэтому настройка влияет только на показ монитора.
     Q_PROPERTY(bool screenCursor READ screenCursor WRITE setScreenCursor NOTIFY screenCursorChanged)
-    // Кодек демонстрации: "auto" | "hevc" | "av1". У камеры выбора нет вовсе —
-    // там он был бы выбором из одного правильного ответа (см. SettingsVideo.qml).
-    Q_PROPERTY(QString screenCodec READ screenCodec WRITE setScreenCodec NOTIFY screenCodecChanged)
     // Передавать ли вместе с картинкой звук компьютера. По умолчанию выключено:
     // делиться звуком машины — осознанное решение, а не то, что включается само.
     Q_PROPERTY(bool screenAudio READ screenAudio WRITE setScreenAudio NOTIFY screenAudioChanged)
@@ -79,7 +76,6 @@ public:
     int screenFps() const { return m_screenFps; }
     QString screenBitrate() const { return m_screenBitrate; }
     bool screenCursor() const { return m_screenCursor; }
-    QString screenCodec() const { return m_screenCodec; }
     bool screenAudio() const { return m_screenAudio; }
     int screenVolume() const { return m_screenVolume; }
     bool uiSounds() const { return m_uiSounds; }
@@ -99,7 +95,6 @@ public:
     void setScreenFps(int fps);
     void setScreenBitrate(const QString& b);
     void setScreenCursor(bool on);
-    void setScreenCodec(const QString& c);
     void setScreenAudio(bool on);
     void setScreenVolume(int v);
     void setUiSounds(bool on);
@@ -149,7 +144,6 @@ signals:
     void screenFpsChanged();
     void screenBitrateChanged();
     void screenCursorChanged();
-    void screenCodecChanged();
     void screenAudioChanged();
     void screenVolumeChanged();
     void uiSoundsChanged();
@@ -170,7 +164,6 @@ private:
     int m_screenFps = 30;
     QString m_screenBitrate = "auto";
     bool m_screenCursor = true;
-    QString m_screenCodec = "auto";
     bool m_screenAudio = false;
     int m_screenVolume = 100;
     bool m_uiSounds = true;

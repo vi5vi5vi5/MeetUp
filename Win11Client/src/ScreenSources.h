@@ -55,6 +55,11 @@ public:
     // означало бы дважды решать одну задачу сопоставления.
     void* selectedMonitorHandle() const;
     void* selectedWindowHandle() const;
+    // PID процесса выбранного ОКНА — для прицельного захвата его звука
+    // (см. ScreenAudioCapture). 0 — выбран монитор, окна нет или процесс не
+    // выяснился. Живёт здесь по той же причине, что и хендлы выше: это
+    // продолжение выбора, а не отдельное знание.
+    quint32 selectedWindowPid() const;
 
     // Кэш миниатюр для image-провайдера (ключ — тот же key источника).
     QImage thumb(const QString& key) const { return m_thumbs.value(key); }

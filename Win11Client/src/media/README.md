@@ -11,23 +11,75 @@ The media pipeline (see `docs/ROADMAP.md`).
   underrun is concealed with Opus PLC and widens the buffer by 2 chunks
   (up to 160 ms), which decays back after 5 s of clean playback.
 - **M3 Video receive** (`VideoEngine` + `VideoRecvWorker` + `VideoDecoder`) —
-  FFmpeg (libavcodec) decode of H.264/VP8/VP9, keyframe and `KEYFRAME_REQ`
-  handling, render into tiles via `QVideoSink`. Decode and `sws_scale` run on
+  FFmpeg (libavcodec) decode of H.264/HEVC/VP8/VP9/AV1, keyframe and
+  `KEYFRAME_REQ` handling, render into tiles via `QVideoSink`. Decoding is
+  **receive-wider-than-send on purpose**: VP9 and AV1 have no encoder in either
+  ladder below, but a browser or a future client may well send them, and
+  refusing a stream we can decode would be a self-inflicted blackout.
+  Where the GPU offers it, decode goes through **D3D11VA** on one device shared
+  by every decoder (`sharedD3d11Device`); `get_format` asks for
+  `AV_PIX_FMT_D3D11` and silently accepts a software format when the driver
+  will not take the stream. Decode and `sws_scale` run on
   **two decode threads** (one per band, same reason as the send side), fed
   straight from the socket thread; only the finished `QVideoFrame` crosses to
   the GUI thread, because `QVideoSink` belongs to the tile.
-- **M4 Video send** (`VideoEngine` + `VideoEncoder`) — `QCamera` →
-  YUV420P (sws_scale) → H.264 Annex B (libopenh264) or VP8 (libvpx), even
-  dimensions, keyframe every ~72 frames + forced on `KEYFRAME_REQ` /
-  `participant_joined` → v2 packets, with backpressure (drop video frames above
-  1.5 MB queued in the socket). Self tile gets the raw camera preview.
 
-  **The screen band encodes on the GPU**, via `h264_mf` (Media Foundation) with
-  `scenario=display_remoting`, `rate_control=cbr`, `hw_encoding=1`; on this
-  machine's AMD card that is 2.5 ms per 1080p frame against libopenh264's 13.4 ms
-  average and 48 ms worst case — the worst case being what actually broke a
-  60 fps budget. Three things about it are load-bearing, and all three were
-  established by probe rather than by reading docs:
+  **A/V sync holds both bands, each against its own clock.** Audio reaches the
+  ear later than video reaches the eye — jitter prebuffer plus the sink's own
+  queue, roughly 60–120 ms — so a frame that has overtaken its sound waits in
+  `Peer::holdQ` until `AudioWorker`'s playhead reaches its timestamp. The screen
+  band used to be exempt on the grounds that a desktop has no lips; that was
+  wrong once screen audio existed, because `SCREEN_AUDIO` travels through the
+  same jitter buffer while the picture did not, and a video played inside a
+  shared window drifted exactly as far as a face would. So `AudioWorker`
+  publishes **two** playhead maps (voice and screen) and the video engine picks
+  by band. The cursor does not pay for this: the screen playhead exists only
+  while screen audio is actually flowing, and otherwise reads 0, which paints
+  immediately as before. Queue depth is 16 frames for screen against 12 for
+  camera — the hold is a duration, and 60 fps fits fewer milliseconds into the
+  same frame count than 24 fps does; the cap stays counted in frames rather
+  than milliseconds because a 4K NV12 frame is 12 MB and "1200 ms at 60 fps"
+  would be most of a gigabyte.
+- **M4 Video send** (`VideoEngine` + `VideoEncoder`) — `QCamera` → sws_scale →
+  encoder, even dimensions, keyframe every ~72 frames + forced on
+  `KEYFRAME_REQ` / `participant_joined` → v2 packets, with backpressure (drop
+  video frames above 1.5 MB queued in the socket). Self tile gets the raw
+  camera preview.
+
+  **There is no codec setting, in either band.** There was one, and removing it
+  was a measurement result: a full sweep of every codec this build can encode,
+  at 720p/1080p/1440p/4K, produced the same top answer on every resolution, and
+  the only reason to move off it is a receiver saying it cannot decode — which
+  the program learns before the user could. What replaces the setting is a
+  **ladder per band**, walked downward only by `Proto::CODEC_UNSUPPORTED`
+  (`VideoEncoder::open`), and reset to the top on the next `join_ok` because the
+  next room holds different people:
+  - **screen: HEVC → H.264 → VP8**, hardware first. HEVC costs the same to
+    encode as H.264 on this card (2.4 vs 2.2 ms at 1440p) and a third of the
+    bandwidth at equal quality (4158 vs 10832 kbit/s at 1080p). H.264 is the
+    compatibility rung — no browser lacks it, and plenty lack HEVC.
+  - **camera: VP9 → H.264 → VP8**, software throughout. VP9 is the fastest
+    software encoder measured (3.6 ms at 1080p against openh264's 16.3) and
+    browsers decode it. Hardware is withheld deliberately, see below.
+
+  A complaint is only acted on when the codec named in it is the one *this*
+  band is currently sending (`m_scrCodec` / `m_camCodec`): the server fans
+  `CODEC_UNSUPPORTED` out to every sender, and without that check one
+  participant's missing HEVC would demote a second presenter who was already
+  on H.264.
+
+  One measured trap is worth repeating because it cost the screen band its
+  frame rate for a long time: **`scenario=display_remoting` must not be set on
+  `h264_mf`.** It costs 17–30 ms per frame — identically at 720p and at 4K, so
+  it is not work — and buys nothing: same bitrate (5687 vs 5687 kbit/s) and same
+  PSNR (40.02 vs 40.05 dB). Thirty milliseconds of nothing is a 33 fps ceiling
+  at any resolution. On `hevc_mf` the same option is free (1.4 ms) and stays.
+  The rate control is `pc_vbr`, not `cbr`: CBR pads a static screen up to the
+  target regardless of content (3414 vs 714 kbit/s measured on a still 1080p
+  desktop).
+
+  Three more things about the hardware path are load-bearing, and all three
+  were established by probe rather than by reading docs:
   - **NV12 is mandatory.** `h264_mf` advertises `yuv420p` in its pixel-format
     list and then fails `avcodec_open2` with it. So `VideoEncoder::pixFmt()`
     exists and both `sws_scale` and the cursor blend handle either layout.
@@ -35,16 +87,21 @@ The media pipeline (see `docs/ROADMAP.md`).
     to the frame fed two calls earlier. `Packet::ptsMs` carries the real one;
     stamping the header with the current frame's time would put a timestamp two
     frames into the future on every packet.
-  - **The camera deliberately stays on libopenh264** (`allowHardware` is set
-    only for `SCREEN_CODED`). Those two frames of pipeline are ~66 ms at 30 fps,
-    which for a face goes straight into lip-sync drift, and there is nothing to
-    win: 720p on the CPU already encodes in 3–5 ms.
+  - **The camera ladder is software-only**, and that is the reason it has its
+    own ladder at all. Those two frames of pipeline are ~83 ms at 24 fps, which
+    for a face goes straight into lip-sync drift, and there is nothing to win:
+    720p on the CPU already encodes in single-digit milliseconds.
   `hw_encoding=1` means the open *fails* without a GPU encoder and the candidate
-  list falls through to libopenh264 — deliberate, since MF's own software
+  list falls through to the next rung — deliberate, since MF's own software
   encoder is slower than openh264, and getting it silently would be worse than
   not getting MF at all. Candidate de-duplication is therefore **by encoder
   name**, not by `Proto::CODEC_*`: hardware and software H.264 share a protocol
   codec byte, and de-duplicating by that would have dropped the fallback.
+
+  **AV1 is absent from both ladders** although this card encodes it. It decodes
+  at 18–20 ms per frame at *every* resolution — 720p costs what 4K costs — which
+  is past the whole 60 fps budget on its own, and its encoder buffers ~18 frames
+  deep. The decoder stays wired up for interop; the encoder is gone.
 
   Two invariants hold on the send path, and both exist because breaking them
   cost the screen band half its frames:

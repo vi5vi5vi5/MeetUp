@@ -4,6 +4,7 @@
 
 class SignalingClient;
 class MediaSettings;
+class ScreenSources;
 class MediaStats;
 class AudioWorker;
 class E2eCipher;
@@ -30,8 +31,10 @@ class AudioEngine : public QObject {
     // не управляет, — это обещание звука, которого нет.
     Q_PROPERTY(bool screenAudioLive READ screenAudioLive NOTIFY screenAudioLiveChanged)
 public:
-    AudioEngine(SignalingClient* conf, MediaSettings* settings, MediaStats* stats,
-                E2eCipher* cipher, QObject* parent = nullptr);
+    // sources — чтобы знать, показываем монитор или конкретное окно: от этого
+    // зависит, чей звук снимать (см. updateScreenAudio).
+    AudioEngine(SignalingClient* conf, MediaSettings* settings, ScreenSources* sources,
+                MediaStats* stats, E2eCipher* cipher, QObject* parent = nullptr);
     ~AudioEngine() override;
 
     bool outputMuted() const { return m_outputMuted; }
@@ -42,6 +45,7 @@ public:
     // придерживает обогнавшее видео. Потокобезопасно: считает воркер, здесь
     // читается снимок.
     qint64 playheadMs(quint32 id) const;
+    qint64 screenPlayheadMs(quint32 id) const;
 
     // Личная громкость участника, проценты 0..200 (100 — как есть). Живёт
     // только пока идёт разговор и только у нас: наружу не уходит ничего.
@@ -75,6 +79,7 @@ private:
 
     SignalingClient* m_conf;            // не владеем
     MediaSettings* m_settings;          // не владеем
+    ScreenSources* m_sources;           // не владеем: что именно демонстрируем
     MediaStats* m_stats;                // не владеем: складываем туда числа
     QThread* m_thread = nullptr;        // поток звука
     AudioWorker* m_worker = nullptr;    // живёт на m_thread

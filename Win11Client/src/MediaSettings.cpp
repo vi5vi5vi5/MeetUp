@@ -19,13 +19,6 @@ static bool knownScreenBitrate(const QString& b) {
     return kAll.contains(b);
 }
 
-// Выбор кодека остался только у демонстрации и сведён к трём осмысленным
-// задачам: «видно всем», «дёшево по нагрузке», «дёшево по каналу».
-// У камеры выбора нет вовсе — см. SettingsVideo.qml.
-static bool knownScreenCodec(const QString& c) {
-    return c == "auto" || c == "hevc" || c == "av1";
-}
-
 MediaSettings::MediaSettings(QObject* parent) : QObject(parent) {
     QSettings s;
     s.beginGroup(kGroup);
@@ -55,13 +48,11 @@ MediaSettings::MediaSettings(QObject* parent) : QObject(parent) {
     m_screenBitrate = s.value("screenBitrate", "auto").toString();
     if (!knownScreenBitrate(m_screenBitrate)) m_screenBitrate = "auto";
     m_screenCursor = s.value("screenCursor", true).toBool();
-    // Из выбора демонстрации ушли h264 (делал ровно то же, что «Авто»), vp8
-    // (запасной путь, а не выбор) и vp9 (не успевает на большом экране). Раз
-    // выбрать их больше нельзя, сохранённое значение НАДО перенести на «Авто»:
-    // иначе настройка молча продолжала бы действовать, а в интерфейсе её не
-    // было бы видно — человек искал бы причину не там.
-    m_screenCodec = s.value("screenCodec", "auto").toString();
-    if (!knownScreenCodec(m_screenCodec)) m_screenCodec = "auto";
+    // Ключа screenCodec здесь больше нет намеренно. Выбор кодека убран
+    // целиком: и у демонстрации, и у камеры порядок теперь определяют замеры,
+    // а не человек (см. VideoEncoder::open). Старое значение в файле настроек
+    // просто не читается — перенести его некуда, а действовать невидимо для
+    // человека настройка не должна.
     m_screenAudio = s.value("screenAudio", false).toBool();
     m_screenVolume = qBound(0, s.value("screenVolume", 100).toInt(), 200);
     m_uiSounds = s.value("uiSounds", true).toBool();
@@ -186,15 +177,6 @@ void MediaSettings::setUiSounds(bool on) {
     m_uiSounds = on;
     save("uiSounds", on);
     emit uiSoundsChanged();
-}
-
-// Кодек: "auto" | "h264" | "vp8" | "vp9". Чужое значение молча игнорируем —
-// в настройках оно взяться не может, а из чужого файла настроек может.
-void MediaSettings::setScreenCodec(const QString& c) {
-    if (m_screenCodec == c || !knownScreenCodec(c)) return;
-    m_screenCodec = c;
-    save("screenCodec", c);
-    emit screenCodecChanged();
 }
 
 void MediaSettings::setScreenAudio(bool on) {

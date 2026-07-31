@@ -1,7 +1,6 @@
 #include "VideoEngine.h"
 #include "VideoSendWorker.h"
 #include "VideoRecvWorker.h"
-#include "VideoEncoder.h"          // проверка доступности аппаратного HEVC
 #include "ScreenCapturer.h"
 #include "AudioEngine.h"
 #include "MediaStats.h"
@@ -36,8 +35,9 @@ static const double kScreenRateLevels[] = { 1.0, 0.7, 0.5, 0.35, 0.25 };
 static const int kScreenRateLevelCount =
     int(sizeof(kScreenRateLevels) / sizeof(kScreenRateLevels[0]));
 
-// Человекочитаемое имя кодека — определение ниже, рядом с разбором настроек.
+// Имена кодеков — определения ниже, рядом с лестницами.
 static QString codecName(int proto);
+static QString stepCodecName(bool screen, int step);
 
 VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
                          ScreenSources* sources, AudioEngine* audio,
@@ -168,12 +168,6 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
             [this](int c, int w, int h, bool hw) { noteEncoderOpened(true, c, w, h, hw); });
     // Занятость воркеров движок спрашивает напрямую (VideoSendWorker::busy) —
     // сигнала об освобождении больше нет, см. комментарий там.
-    // Выбранного кодека в сборке не оказалось — сказать человеку, а не менять
-    // молча. Полосу называем: у камеры и экрана настройки разные.
-    connect(m_worker, &VideoSendWorker::codecFallback, this,
-            [this](int req, int act) { noteCodecFallback(false, req, act); });
-    connect(m_scrWorker, &VideoSendWorker::codecFallback, this,
-            [this](int req, int act) { noteCodecFallback(true, req, act); });
     m_encThread->start();
     m_scrThread->start();
 
@@ -184,19 +178,13 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
         m_scrCapture = new ScreenCapturer;
     }, Qt::BlockingQueuedConnection);
 
-    // Есть ли аппаратный HEVC — спрашиваем ЗДЕСЬ ЖЕ и по той же причине:
-    // Media Foundation откажет на STA-потоке, и на GUI мы получили бы ложное
-    // «нет». Не блокирующим вызовом: создание MFT занимает десятки миллисекунд,
-    // а окно к этому моменту уже должно рисоваться. Настройки узнают ответ по
-    // сигналу — до него пункт HEVC просто выглядит недоступным.
-    QMetaObject::invokeMethod(m_scrWorker, [this] {
-        const bool hevc = VideoEncoder::hardwareHevcAvailable();
-        const bool av1  = VideoEncoder::hardwareAv1Available();
-        QMetaObject::invokeMethod(this, [this, hevc, av1] {
-            if (m_hevcAvailable != hevc) { m_hevcAvailable = hevc; emit hevcAvailableChanged(); }
-            if (m_av1Available  != av1)  { m_av1Available  = av1;  emit av1AvailableChanged(); }
-        }, Qt::QueuedConnection);
-    }, Qt::QueuedConnection);
+    // Пробы «есть ли аппаратный HEVC» здесь больше нет, и она не переехала —
+    // она стала не нужна. Спрашивали её ради настроек: пункт, которого машина
+    // не тянет, полагалось показывать погашенным. Настройки кодека больше нет,
+    // а лестница в VideoEncoder::open разбирается сама — не открылся hevc_mf,
+    // молча берём следующую ступень. Заодно ушли десятки миллисекунд на
+    // создание пробного MFT при каждом запуске.
+    //
     // Кадр приезжает с потока пула WGC — сюда queued, потому что дальше идут
     // превью (только GUI-поток) и пейсер.
     connect(m_scrCapture, &ScreenCapturer::frameReady,
@@ -210,9 +198,8 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
     m_scrRepeatTimer = new QTimer(this);
     connect(m_scrRepeatTimer, &QTimer::timeout, this, &VideoEngine::onScreenRepeat);
 
-    // Выбор кодека: воркеру он нужен до первого кадра, дальше — по изменению.
-    connect(settings, &MediaSettings::screenCodecChanged, this, &VideoEngine::applyCodecPrefs);
-    applyCodecPrefs();
+    // Ступени лестниц: воркерам они нужны до первого кадра.
+    applyCodecSteps();
 
     // Сторож замёрзших плиток: раз в секунду проверяем, у кого кадры иссякли.
     // Работает всегда — вне конференции m_peers пуст, обход бесплатен.
@@ -429,11 +416,13 @@ void VideoEngine::onJoinOk() {
     resetPeers();
     m_keyNext = true;
     m_scrKeyNext = true;
-    // Новая комната — новые участники: запрет на выбранный кодек мог быть
-    // нужен там, а здесь его понимают все. Пробуем выбор человека заново.
-    if (m_scrForceAuto) {
-        m_scrForceAuto = false;
-        applyCodecPrefs();
+    // Новая комната — новые участники: спуск по лестнице был нужен ТАМ, из-за
+    // конкретного человека с конкретным браузером. Здесь его может не быть
+    // вовсе, поэтому начинаем сверху заново. Хуже от этого никому: если новый
+    // состав тоже не поймёт, он скажет об этом первым же кадром.
+    if (m_scrStep || m_camStep) {
+        m_scrStep = m_camStep = 0;
+        applyCodecSteps();
     }
 }
 
@@ -514,25 +503,31 @@ void VideoEngine::onBinaryFrame(const QByteArray& d) {
 
 // Кто-то из участников не понимает кодек, которым мы вещаем.
 //
-// Молчать нельзя: у него пусто, а мы об этом не знаем. Меняем кодек на «Авто»
-// (H.264 — его понимают все) и говорим человеку, что и почему поменялось.
+// Молчать нельзя: у него пусто, а мы об этом не знаем. Спускаемся на ступень
+// ниже по лестнице этой полосы и говорим человеку, что и почему поменялось.
+// Спуск действует до конца комнаты; в новой (onJoinOk) начинаем сверху.
 //
-// Сохранённую настройку при этом НЕ трогаем: человек выбрал AV1 осознанно, и
-// переписывать его выбор из-за одного участника — воровство решения. Действует
-// только эта сессия; в новой комнате (onJoinOk) подмена снимается, потому что
-// там другие участники и запрет может быть уже не нужен.
+// Проверяем, что жалуются именно на НАШ кодек. Сервер рассылает жалобу всем
+// вещающим сразу, и без этой сверки чужая беда роняла бы качество и нам:
+// участник без HEVC жалуется на ведущего, а понижается заодно и тот, кто и так
+// шёл в H.264.
 void VideoEngine::onCodecUnsupported(quint8 band, quint8 codec) {
-    // Камера и так идёт «Авто» (H.264 -> VP8), понижать её некуда.
-    if (band != Proto::SCREEN_CODED) return;
+    const bool screen = (band == Proto::SCREEN_CODED);
     // Жалоба на полосу, которой мы не вещаем, — не наша: её прислали соседу.
-    if (!m_scrCapturing) return;
-    if (m_scrForceAuto) return;                  // уже вернулись, второй раз незачем
+    if (screen ? !m_scrCapturing : !(m_live && m_camOn)) return;
 
-    m_scrForceAuto = true;
-    applyCodecPrefs();
-    emit codecNotice(QStringLiteral(
-        "Участник не понимает %1 — демонстрация переключена на H.264.")
-                         .arg(codecName(codec)));
+    const quint8 mine = screen ? m_scrCodec : m_camCodec;
+    if (!mine || mine != codec) return;          // жалуются не на нас
+
+    int& step = screen ? m_scrStep : m_camStep;
+    if (step >= 2) return;                       // ниже VP8 ступеней нет
+    ++step;
+    applyCodecSteps();
+
+    emit codecNotice(QStringLiteral("%1: участник не понимает %2 — перешли на %3.")
+                         .arg(screen ? QStringLiteral("Демонстрация")
+                                     : QStringLiteral("Камера"),
+                              codecName(codec), stepCodecName(screen, step)));
 }
 
 // Жалоба наружу: сервер разошлёт её всем, как и просьбу об опорном кадре.
@@ -552,18 +547,44 @@ void VideoEngine::onDecoded(QHash<quint32, Peer>& peers, quint32 sender,
     Peer& p = peers[sender];
     if (!p.sink) return;               // плитка исчезла, пока кадр ехал
 
-    // Синхронизация губ: звук доходит до ушей позже картинки (джиттер-буфер
+    // Синхронизация со звуком: он доходит до ушей позже картинки (джиттер-буфер
     // плюс буфер звуковой карты), поэтому кадр, обогнавший свой звук,
     // придерживаем до его метки. Верхняя граница отсекает бессмыслицу
-    // (сбитые часы, чужая шкала) — тогда рисуем сразу, как раньше.
-    // Экран губами не шевелит: придерживать его под звук незачем, а на «Эко»
-    // (5 к/с) это давало бы заметный лаг курсора. Рисуем сразу.
-    const qint64 ph = (m_audio && !screen) ? m_audio->playheadMs(sender) : 0;
+    // (сбитые часы, чужая шкала) — тогда рисуем сразу.
+    //
+    // Держим ОБЕ полосы, каждую по своим часам. Раньше экран не держали вовсе,
+    // и рассуждение было такое: экран губами не шевелит, а на низкой частоте
+    // задержка была бы заметна по курсору. Но у демонстрации есть собственный
+    // звук (Proto::SCREEN_AUDIO) — фонограмма видео, звук игры, — и он идёт
+    // через тот же джиттер-буфер, что голос. Картинка при этом шла напрямую,
+    // и расходились они ровно так же, как губы с микрофоном: на буфер звука
+    // плюс конвейер аппаратного кодировщика (два кадра, ~33 мс при 60 к/с).
+    //
+    // Курсору это не вредит, потому что часы демонстрации существуют только
+    // пока звук демонстрации ИДЁТ. Не передаём звук экрана — screenPlayheadMs
+    // вернёт 0, и кадр, как раньше, уйдёт на отрисовку немедленно.
+    const qint64 ph = !m_audio ? 0
+                    : screen   ? m_audio->screenPlayheadMs(sender)
+                               : m_audio->playheadMs(sender);
     const qint64 lead = ph ? tsMs - ph : 0;
     if (lead > 30 && lead < 1200) {
         m_stats->noteSyncHold(lead);      // на столько картинка ждёт свой звук
         p.holdQ.append({ vf, tsMs });
-        if (p.holdQ.size() > 12) p.holdQ.removeFirst();   // очередь не копим
+        // Глубина очереди у полос разная, и считать её надо в миллисекундах, а
+        // не в кадрах. Держим мы на время буфера звука (прибл. 60 мс запаса
+        // джиттера плюс столько же в звуковой карте), а сколько это кадров —
+        // зависит от частоты: у камеры на 24 к/с это три-четыре кадра, у
+        // демонстрации на 60 к/с — восемь. Прежние 12 на двоих подходили
+        // камере и были тесноваты экрану: переполнение выбрасывает САМЫЙ
+        // СТАРЫЙ кадр, то есть тот, который вот-вот показывать.
+        //
+        // Верхнюю границу всё же держим в кадрах, а не во времени: кадр 4К в
+        // NV12 весит 12 МБ, и очередь «на 1200 мс» при 60 к/с — это почти
+        // гигабайт. Переполнение не ломает картинку, а лишь роняет отдельные
+        // кадры, оставляя её в согласии со звуком, — это приемлемая расплата,
+        // а гигабайт нет.
+        const int cap = screen ? 16 : 12;
+        while (p.holdQ.size() > cap) p.holdQ.removeFirst();
         if (!m_holdTimer->isActive()) m_holdTimer->start();
         return;
     }
@@ -584,21 +605,30 @@ void VideoEngine::paint(Peer& p, quint32 sender, const QVideoFrame& vf, bool scr
     }
 }
 
-// Отдаём придержанные кадры, как только звук до них дотянулся.
+// Отдаём придержанные кадры, как только звук до них дотянулся. Обе полосы —
+// каждая по своим часам: у голоса свой джиттер-буфер, у звука демонстрации
+// свой, и их запасы не совпадают.
 void VideoEngine::drainHeld() {
     bool anyLeft = false;
-    for (auto it = m_peers.begin(); it != m_peers.end(); ++it) {
-        Peer& p = it.value();
-        while (!p.holdQ.isEmpty()) {
-            const qint64 ph = m_audio ? m_audio->playheadMs(it.key()) : 0;
-            // Звук пропал (мик выключили) — держать больше не за что.
-            const qint64 lead = ph ? p.holdQ.first().ts - ph : 0;
-            if (lead > 30) break;                  // ещё рано
-            const Held h = p.holdQ.takeFirst();
-            paint(p, it.key(), h.frame, false);   // придерживаем только камеру
+    const auto drain = [this, &anyLeft](QHash<quint32, Peer>& peers, bool screen) {
+        for (auto it = peers.begin(); it != peers.end(); ++it) {
+            Peer& p = it.value();
+            while (!p.holdQ.isEmpty()) {
+                const qint64 ph = !m_audio ? 0
+                                : screen   ? m_audio->screenPlayheadMs(it.key())
+                                           : m_audio->playheadMs(it.key());
+                // Звук пропал (мик выключили, звук экрана отключили) — держать
+                // больше не за что: ph == 0 обнуляет lead, и кадр уходит.
+                const qint64 lead = ph ? p.holdQ.first().ts - ph : 0;
+                if (lead > 30) break;                  // ещё рано
+                const Held h = p.holdQ.takeFirst();
+                paint(p, it.key(), h.frame, screen);
+            }
+            if (!p.holdQ.isEmpty()) anyLeft = true;
         }
-        if (!p.holdQ.isEmpty()) anyLeft = true;
-    }
+    };
+    drain(m_peers, false);
+    drain(m_screenPeers, true);
     if (!anyLeft) m_holdTimer->stop();
 }
 
@@ -840,18 +870,7 @@ void VideoEngine::failScreen(const QString& text) {
     emit screenError(text);
 }
 
-// ---------- выбор кодека ----------
-
-// Идентификатор из настроек -> байт кодека протокола. Незнакомое и "auto" -> 0
-// (порядок по умолчанию: H.264, при неудаче VP8).
-static quint8 protoOfCodec(const QString& id) {
-    if (id == "h264") return Proto::CODEC_H264;
-    if (id == "vp8")  return Proto::CODEC_VP8;
-    if (id == "vp9")  return Proto::CODEC_VP9;
-    if (id == "hevc") return Proto::CODEC_HEVC;
-    if (id == "av1")  return Proto::CODEC_AV1;
-    return 0;
-}
+// ---------- лестницы кодеков ----------
 
 static QString codecName(int proto) {
     switch (proto) {
@@ -864,41 +883,43 @@ static QString codecName(int proto) {
     }
 }
 
-// Кодек живёт в воркере (энкодер держит состояние потока кадров), поэтому
-// настройка едет туда queued-вызовом. Смена кодека переоткрывает энкодер, а
-// приёмники пересоздают декодеры сами — они сверяют кодек каждого кадра.
-void VideoEngine::applyCodecPrefs() {
-    // У камеры кодек не выбирается вовсе: 0 значит «как по умолчанию» —
-    // H.264, при неудаче VP8. Настройки у неё больше нет, и это осознанно
-    // (см. SettingsVideo.qml): на кадре 720p24 разница между кодеками
-    // теряется, а совместимость важнее.
+// Как называется ступень — для сообщения человеку. Порядок обязан совпадать с
+// лестницами в VideoEncoder::open; если там что-то поменяется, поменять надо и
+// здесь, иначе мы скажем человеку неправду.
+static QString stepCodecName(bool screen, int step) {
+    if (screen)
+        return step <= 0 ? QStringLiteral("HEVC")
+             : step == 1 ? QStringLiteral("H.264")
+                         : QStringLiteral("VP8");
+    return step <= 0 ? QStringLiteral("VP9")
+         : step == 1 ? QStringLiteral("H.264")
+                     : QStringLiteral("VP8");
+}
+
+// Ступень живёт в воркере (энкодер держит состояние потока кадров), поэтому
+// едет туда queued-вызовом. Смена ступени переоткрывает энкодер, а приёмники
+// пересоздают декодеры сами — они сверяют кодек каждого кадра.
+void VideoEngine::applyCodecSteps() {
     if (m_worker)
-        QMetaObject::invokeMethod(m_worker, "setCodecPreference", Qt::QueuedConnection,
-                                  Q_ARG(int, 0));
-    // m_scrForceAuto — след от жалобы участника: он не понял выбранный кодек,
-    // и до конца этой комнаты вещаем тем, что понимают все.
-    const quint8 scr = m_scrForceAuto ? quint8(0)
-                                      : protoOfCodec(m_settings->screenCodec());
+        QMetaObject::invokeMethod(m_worker, "setCodecStep", Qt::QueuedConnection,
+                                  Q_ARG(int, m_camStep));
     if (m_scrWorker)
-        QMetaObject::invokeMethod(m_scrWorker, "setCodecPreference", Qt::QueuedConnection,
-                                  Q_ARG(int, scr));
+        QMetaObject::invokeMethod(m_scrWorker, "setCodecStep", Qt::QueuedConnection,
+                                  Q_ARG(int, m_scrStep));
 }
 
 void VideoEngine::noteEncoderOpened(bool screen, int codec, int width, int height,
                                     bool hardware) {
+    // Чем вещаем на самом деле — нужно не только «Диагностике». По этому же
+    // байту сверяется чужая жалоба (onCodecUnsupported): без него мы не знали
+    // бы, на наш кодек жалуются или на соседский.
+    (screen ? m_scrCodec : m_camCodec) = quint8(codec);
     // Пометка идёт только у аппаратного: «H.264» без уточнения и так означает
     // процессор, а строка в «Диагностике» и без того длинная.
     const QString name = hardware
         ? QStringLiteral("%1 (аппаратный)").arg(codecName(codec))
         : codecName(codec);
     m_stats->noteEncoder(screen, name, width, height);
-}
-
-void VideoEngine::noteCodecFallback(bool screen, int requested, int actual) {
-    emit codecNotice(QStringLiteral("%1: %2 недоступен, идёт %3")
-                         .arg(screen ? QStringLiteral("Демонстрация")
-                                     : QStringLiteral("Камера"),
-                              codecName(requested), codecName(actual)));
 }
 
 // Курсор дорисовывается только при показе МОНИТОРА (у захвата окна он свой) и

@@ -2,13 +2,16 @@
 #include "AudioWorker.h"
 #include "MediaStats.h"
 #include "../MediaSettings.h"
+#include "../ScreenSources.h"
 #include "../net/SignalingClient.h"
 #include "../net/SignalingLink.h"
 #include <QThread>
 
 AudioEngine::AudioEngine(SignalingClient* conf, MediaSettings* settings,
-                         MediaStats* stats, E2eCipher* cipher, QObject* parent)
-    : QObject(parent), m_conf(conf), m_settings(settings), m_stats(stats)
+                         ScreenSources* sources, MediaStats* stats,
+                         E2eCipher* cipher, QObject* parent)
+    : QObject(parent), m_conf(conf), m_settings(settings), m_sources(sources),
+      m_stats(stats)
 {
     // ---- поток звука ----
     m_thread = new QThread(this);
@@ -82,6 +85,12 @@ AudioEngine::AudioEngine(SignalingClient* conf, MediaSettings* settings,
     // настройка включена. Судья один — updateScreenAudio().
     connect(conf, &SignalingClient::screenChanged, this, &AudioEngine::updateScreenAudio);
     connect(settings, &MediaSettings::screenAudioChanged, this, &AudioEngine::updateScreenAudio);
+    // Сменили показываемое окно (или ушли с окна на монитор) — звук надо
+    // переснимать с другого процесса. Без этой подписки ведущий продолжал бы
+    // делиться звуком того, что уже не показывает.
+    if (sources)
+        connect(sources, &ScreenSources::selectedChanged, this,
+                &AudioEngine::updateScreenAudio);
 
     pushDevices();
     pushGains();
@@ -99,6 +108,7 @@ AudioEngine::~AudioEngine() {
 }
 
 qint64 AudioEngine::playheadMs(quint32 id) const { return m_worker->playheadMs(id); }
+qint64 AudioEngine::screenPlayheadMs(quint32 id) const { return m_worker->screenPlayheadMs(id); }
 
 int AudioEngine::peerVolume(qint64 id) const { return m_peerVolume.value(id, 100); }
 
@@ -178,8 +188,16 @@ void AudioEngine::updateScreenAudio() {
     const qint64 me = m_conf->myId();
     const bool sharing = me != 0 && m_conf->screenId() == me;
     const bool want = m_live && sharing && m_settings->screenAudio();
-    QMetaObject::invokeMethod(m_worker, [this, want] { m_worker->setScreenAudio(want); },
-                              Qt::QueuedConnection);
+    // Чей звук снимать, решает вид источника. Показываем окно — берём звук
+    // только его процесса: делиться музыкой из плеера, показывая документ,
+    // человек не просил. Показываем монитор — процесса-источника нет, снимаем
+    // всё, кроме себя (0). Спрашиваем каждый раз, а не запоминаем: источник
+    // меняется на лету, и на смену мы подписаны.
+    const quint32 pid = (want && m_sources && m_sources->isWindow())
+                        ? m_sources->selectedWindowPid() : 0;
+    QMetaObject::invokeMethod(m_worker, [this, want, pid] {
+        m_worker->setScreenAudio(want, pid);
+        }, Qt::QueuedConnection);
 }
 
 void AudioEngine::pushDevices() {

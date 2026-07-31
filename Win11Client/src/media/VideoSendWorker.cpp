@@ -167,10 +167,10 @@ int VideoSendWorker::achievedFps(int requestedFps) const {
 // монитора и своими ошибками в обоих. Теперь захват наш (ScreenCapturer), а
 // Windows.Graphics.Capture рисует курсор сама по флагу IsCursorCaptureEnabled.
 
-void VideoSendWorker::setCodecPreference(int protoCodec) {
-    const quint8 pref = quint8(protoCodec);
-    if (m_codecPref == pref) return;
-    m_codecPref = pref;
+void VideoSendWorker::setCodecStep(int step) {
+    const int s = qBound(0, step, 2);
+    if (m_codecStep == s) return;
+    m_codecStep = s;
     reset();                       // энкодер переоткроется на следующем кадре
 }
 
@@ -226,14 +226,10 @@ void VideoSendWorker::encodeFrame(const QVideoFrame& frame, int maxW, int maxH,
         || fpsStale || bitrateStale) {
         delete m_enc;
         m_enc = new VideoEncoder;
-        // Аппаратный кодировщик пускаем вперёд ТОЛЬКО на полосе демонстрации.
-        // У него конвейер глубиной два кадра — на 30 к/с это лишние ~66 мс. Для
-        // экрана это ничего не стоит (его кадры и так не придерживаются под
-        // звук), а вот лицу такая добавка идёт прямо в расхождение с голосом,
-        // и выигрывать там нечего: камера 720p и на процессоре кодируется за
-        // 3–5 мс, узким местом она никогда не была.
-        const bool allowHw = (m_msgType == Proto::SCREEN_CODED);
-        if (!m_enc->open(tw, th, useFps, bitrate, m_codecPref, allowHw)) {
+        // Полоса решает, по какой лестнице спускаться: у демонстрации она
+        // упирается в видеокарту, у камеры — в процессор (см. VideoEncoder::open).
+        const bool screen = (m_msgType == Proto::SCREEN_CODED);
+        if (!m_enc->open(tw, th, useFps, bitrate, screen, m_codecStep)) {
             delete m_enc;                  // энкодеров нет — молча не вещаем
             m_enc = nullptr;
             return;
@@ -241,10 +237,6 @@ void VideoSendWorker::encodeFrame(const QVideoFrame& frame, int maxW, int maxH,
         m_openedFps = useFps;
         m_openedBitrate = bitrate;
         m_openedAtMs = tsMs;
-        // Выбранного кодека в сборке не оказалось — вещаем запасным, но так,
-        // чтобы человек об этом узнал, а не гадал, почему настройка «не работает».
-        if (m_codecPref && m_enc->protoCodec() != m_codecPref)
-            emit codecFallback(m_codecPref, m_enc->protoCodec());
         emit encoderOpened(m_enc->protoCodec(), tw, th, m_enc->isHardware());
         m_frames = 0;
         m_keyNext = true;

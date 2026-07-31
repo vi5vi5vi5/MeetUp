@@ -51,6 +51,15 @@ ScreenAudioCapture::ScreenAudioCapture(QObject* parent) : QObject(parent) {}
 
 ScreenAudioCapture::~ScreenAudioCapture() { stop(); }
 
+void ScreenAudioCapture::setTarget(quint32 pid) {
+    if (m_targetPid.load() == pid) return;
+    m_targetPid = pid;
+    // Идём — значит клиент WASAPI уже активирован со старой целью, и поменять
+    // её можно только пересозданием. Стоим — новую цель подхватит ближайший
+    // start(), и трогать нечего.
+    if (m_running.load()) { stop(); start(); }
+}
+
 void ScreenAudioCapture::start() {
     if (m_running.load()) return;
     // Прошлый поток мог завершиться сам (не поднялся захват) — тогда объект
@@ -85,12 +94,25 @@ void ScreenAudioCapture::run() {
         return;
     }
 
+    // Цель снимаем один раз, на входе: дальше она не меняется — смена цели
+    // проходит через setTarget, а он перезапускает поток целиком.
+    const DWORD target = DWORD(m_targetPid.load());
+
     AUDIOCLIENT_ACTIVATION_PARAMS params{};
     params.ActivationType = AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK;
-    params.ProcessLoopbackParams.TargetProcessId = GetCurrentProcessId();
-    // Всё, кроме нас: иначе собеседники услышали бы сами себя эхом.
-    params.ProcessLoopbackParams.ProcessLoopbackMode =
-        PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE;
+    if (target) {
+        // Показываем одно окно — берём звук только его дерева процессов.
+        // Себя исключать не нужно: нас в это дерево никто не включал.
+        params.ProcessLoopbackParams.TargetProcessId = target;
+        params.ProcessLoopbackParams.ProcessLoopbackMode =
+            PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE;
+    } else {
+        // Показываем монитор — всё, кроме нас: иначе собеседники услышали бы
+        // сами себя эхом из наших динамиков.
+        params.ProcessLoopbackParams.TargetProcessId = GetCurrentProcessId();
+        params.ProcessLoopbackParams.ProcessLoopbackMode =
+            PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE;
+    }
 
     PROPVARIANT activateParams{};
     activateParams.vt = VT_BLOB;
@@ -149,7 +171,9 @@ void ScreenAudioCapture::run() {
         return;
     }
 
-    qInfo() << "ScreenAudioCapture: пошёл, 48000 Гц, стерео -> моно";
+    qInfo() << "ScreenAudioCapture: пошёл, 48000 Гц, стерео -> моно,"
+            << (target ? QStringLiteral("только процесс %1").arg(target)
+                       : QStringLiteral("всё, кроме нас"));
 
     QByteArray mono;                     // накопитель моно-сэмплов до целого кадра
     mono.reserve(kFrameSamples * 2 * 4);

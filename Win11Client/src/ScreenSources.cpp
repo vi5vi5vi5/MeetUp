@@ -276,6 +276,97 @@ void* ScreenSources::selectedWindowHandle() const {
 #endif
 }
 
+#ifdef Q_OS_WIN
+namespace {
+// Поиск настоящего окна упакованного приложения — см. большой комментарий ниже.
+struct CoreWindowHunt {
+    QString title;      // заголовок оболочки: у настоящего окна он тот же
+    DWORD   host = 0;   // PID оболочки: настоящее окно живёт НЕ в нём
+    DWORD   found = 0;
+};
+
+BOOL CALLBACK huntCoreWindow(HWND h, LPARAM param) {
+    auto* c = reinterpret_cast<CoreWindowHunt*>(param);
+    wchar_t cls[64] = {};
+    if (GetClassNameW(h, cls, 64) <= 0
+        || wcscmp(cls, L"Windows.UI.Core.CoreWindow") != 0) return TRUE;
+    wchar_t txt[256] = {};
+    const int n = GetWindowTextW(h, txt, 256);
+    if (n <= 0 || QString::fromWCharArray(txt, n) != c->title) return TRUE;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(h, &pid);
+    if (pid && pid != c->host) { c->found = pid; return FALSE; }
+    return TRUE;
+}
+} // namespace
+#endif
+
+// Процесс, который на самом деле ИГРАЕТ звук выбранного окна.
+//
+// Наивный GetWindowThreadProcessId годится не всегда. У приложений из Store
+// (UWP, всё, что упаковано) видимое окно принадлежит ApplicationFrameHost.exe —
+// это общая оболочка рамки, звука у неё нет вовсе, и захват по её PID дал бы
+// ровную тишину. Настоящее окно приложения — своего процесса, класса
+// Windows.UI.Core.CoreWindow, с тем же заголовком; в списке источников его не
+// видно, потому что DWM его прячет (DWMWA_CLOAKED), и наш же фильтр usable()
+// такие окна отбрасывает.
+//
+// Где оно лежит — вопрос версии Windows, и полагаться на одну схему нельзя.
+// Классический приём «перебрать детей оболочки и взять чужого по процессу» на
+// Windows 11 НЕ работает: проверено пробой (scratchpad/pidprobe) — внутри
+// оболочки лежат только её собственные ApplicationFrameTitleBarWindow и
+// ApplicationFrameInputSinkWindow, а CoreWindow приложения оказался отдельным
+// окном верхнего уровня. Поэтому две попытки подряд: сперва дети (вдруг
+// сработает — на старых сборках так и было), затем поиск по паре
+// «класс + заголовок» среди окон верхнего уровня. Второй способ на этой машине
+// раскрыл «Настройки» до SystemSettings.exe.
+//
+// 0 означает «не выяснили»; вызывающий понимает это как «снимать всё, кроме
+// нас самих», то есть ровно прежнее поведение. Оно менее прицельно, но человек
+// хотя бы слышит звук — а вот тишина выглядела бы поломкой.
+quint32 ScreenSources::selectedWindowPid() const {
+#ifdef Q_OS_WIN
+    HWND h = static_cast<HWND>(selectedWindowHandle());
+    if (!h) return 0;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(h, &pid);
+    if (!pid) return 0;
+
+    wchar_t cls[64] = {};
+    if (GetClassNameW(h, cls, 64) <= 0
+        || wcscmp(cls, L"ApplicationFrameWindow") != 0)
+        return quint32(pid);                 // обычное окно Win32 — уже верно
+
+    // Попытка 1: настоящее окно внутри оболочки.
+    struct Kids { DWORD host, found; } kids{ pid, 0 };
+    EnumChildWindows(h, [](HWND c, LPARAM p) -> BOOL {
+        auto* k = reinterpret_cast<Kids*>(p);
+        DWORD cp = 0;
+        GetWindowThreadProcessId(c, &cp);
+        if (cp && cp != k->host) { k->found = cp; return FALSE; }
+        return TRUE;
+        }, reinterpret_cast<LPARAM>(&kids));
+    if (kids.found) return quint32(kids.found);
+
+    // Попытка 2: отдельное окно верхнего уровня с тем же заголовком.
+    wchar_t txt[256] = {};
+    const int n = GetWindowTextW(h, txt, 256);
+    if (n <= 0) return 0;
+    CoreWindowHunt hunt;
+    hunt.title = QString::fromWCharArray(txt, n);
+    hunt.host = pid;
+    EnumWindows(huntCoreWindow, reinterpret_cast<LPARAM>(&hunt));
+    if (hunt.found) return quint32(hunt.found);
+
+    // Не выяснили. Лучше общесистемный звук, чем тишина.
+    qInfo() << "ScreenSources: процесс упакованного окна не определён,"
+               " звук снимем со всей системы";
+    return 0;
+#else
+    return 0;
+#endif
+}
+
 // id приходит как "<key>/<nonce>": nonce нужен лишь для того, чтобы QML
 // перезапросил картинку после refresh(), в поиске по кэшу он не участвует.
 QImage ScreenThumbProvider::requestImage(const QString& id, QSize* size,

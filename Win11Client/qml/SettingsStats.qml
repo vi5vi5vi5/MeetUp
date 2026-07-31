@@ -176,7 +176,7 @@ Column {
         }
         Metric {
             width: (parent.width - 10) / 2
-            caption: "Подстройка губ"
+            caption: "Подстройка под звук"
             value: String(Stats.syncHoldMs)
             unit: "мс"
             sub: Stats.syncHoldMs > 0 ? "картинка ждёт свой звук" : "видео идёт без задержки"
@@ -272,10 +272,10 @@ Column {
                      + Stats.txScrKbps + " кбит/с"
                      + (Stats.txScrAudio ? " (со звуком)" : "")
                      + " · пропуск " + Stats.scrDropPercent + "%"))
-        lines.push("Подстройка губ: " + Stats.syncHoldMs + " мс")
+        lines.push("Подстройка под звук: " + Stats.syncHoldMs + " мс")
         lines.push("Настройки: камера " + AV.camQuality
                    + ", экран " + (AV.screenRes === "src" ? "источник" : AV.screenRes + "p")
-                   + "/" + AV.screenFps + "к/с/" + AV.screenCodec
+                   + "/" + AV.screenFps + "к/с"
                    + "/" + (AV.screenBitrate === "auto" ? "битрейт авто"
                                                         : (AV.screenBitrate / 1000) + " Мбит/с")
                    + ", звук демонстрации " + (AV.screenAudio ? "вкл" : "выкл")

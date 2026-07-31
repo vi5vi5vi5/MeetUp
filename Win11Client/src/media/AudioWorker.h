@@ -43,6 +43,10 @@ public:
     // придерживают. По этому значению VideoEngine синхронизирует губы.
     // Зовётся с GUI-потока — читает снимок под мьютексом.
     qint64 playheadMs(quint32 id) const;
+    // То же для полосы демонстрации. Отдельные часы, а не общие: голос и
+    // фонограмма идут разными потоками, со своими очередями и своими метками,
+    // и картинку экрана надо равнять по ЕГО звуку, а не по чужому голосу.
+    qint64 screenPlayheadMs(quint32 id) const;
 
 public slots:
     void init();         // поток стартовал: COM, таймеры, захват звука машины
@@ -54,7 +58,9 @@ public slots:
     void setDevices(const QAudioDevice& input, const QAudioDevice& output);
     void setCapture(bool on);        // микрофон: снимать или нет
     void setPlayback(bool on);       // вывод: играть или нет
-    void setScreenAudio(bool on);    // звук демонстрации: снимать или нет
+    // Звук демонстрации: снимать или нет и чей именно (0 — всё, кроме нас;
+    // иначе PID окна, которое показываем). См. ScreenAudioCapture.
+    void setScreenAudio(bool on, quint32 pid);
     void setBitrate(int bps);        // Opus голоса — на лету, без пересоздания
     void setGains(qreal volume, qreal sensitivity, qreal screenVolume);
     void setOutputMuted(bool muted);
@@ -122,6 +128,8 @@ private:
     int  sinkQueuedMs() const;                  // сколько звука лежит в QAudioSink
     void publishPlayheads();                    // обновить снимок часов
     void forgetPlayhead(quint32 id);
+    // Арифметика часов, одна на обе полосы (см. playheadMs).
+    static qint64 headOf(const QHash<quint32, Playhead>& map, QMutex& lock, quint32 id);
     void setScreenLive(bool on);
     void destroyPeers(QHash<quint32, Peer>& peers);
     void setLocked(Peer& p, quint32 sender, bool locked);
@@ -143,6 +151,7 @@ private:
     qint64 m_selfSpokeAt = 0;           // прореживание «говорит» для себя
 
     ScreenAudioCapture* m_scrCapture = nullptr;   // захват звука машины
+    quint32 m_scrPid = 0;                         // чей звук снимаем (0 — всё, кроме нас)
     OpusEncoder* m_scrEnc = nullptr;              // свой кодер: музыка, не голос
     qint64 m_scrClockMs = 0;                      // монотонные метки этой полосы
     bool m_scrLive = false;                       // звук демонстрации приходит
@@ -163,5 +172,6 @@ private:
     QTimer* m_pumpTimer = nullptr;
 
     mutable QMutex m_phLock;
-    QHash<quint32, Playhead> m_playheads;
+    QHash<quint32, Playhead> m_playheads;      // голос
+    QHash<quint32, Playhead> m_scrPlayheads;   // звук демонстрации
 };
