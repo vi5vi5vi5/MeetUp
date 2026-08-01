@@ -6,6 +6,7 @@
 #include <QList>
 #include <QMutex>
 #include <memory>
+#include "SpeechGate.h"
 
 class QAudioSink;
 class QAudioSource;
@@ -100,6 +101,7 @@ private:
         qint64 lastTs = 0;          // метка последнего принятого чанка
         qint64 lastTsAt = 0;        // когда он к нам пришёл (локальные мс)
         qint64 lastSpokeAt = 0;     // когда в последний раз зажигали «говорит»
+        SpeechGate gate;            // «говорит» по превышению над ЕГО фоном
         // Адаптивный запас. Держать всегда «на всякий случай» побольше — значит
         // всегда разговаривать с задержкой; поэтому запас растёт только когда
         // буфер реально опустел, и медленно сползает обратно, когда тихо.
@@ -161,6 +163,7 @@ private:
     qint64 m_micLevelAt = 0;            // прореживание индикатора уровня
     qint64 m_selfSpokeAt = 0;           // прореживание «говорит» для себя
     bool m_selfSpeech = false;          // речь идёт: нижний порог VAD держит её
+    SpeechGate m_selfGate;              // …когда шумодава нет и VAD взять негде
 
     ScreenAudioCapture* m_scrCapture = nullptr;   // захват звука машины
     quint32 m_scrPid = 0;                         // чей звук снимаем (0 — всё, кроме нас)

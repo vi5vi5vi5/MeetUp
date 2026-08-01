@@ -20,14 +20,39 @@ The media pipeline (see `docs/ROADMAP.md`).
   the conference format.
 
   The same call also returns a **speech probability, and that — not the RMS —
-  drives the "speaking" highlight.** The old level threshold was measuring the
-  wrong quantity: loudness is not speech, so it both missed quiet sentences
-  (below the threshold) and accepted any loud enough thud. Two thresholds
-  rather than one, because a single one flickers at the boundary on every
-  breath between words: the upper one lights the highlight, the lower one only
-  sustains it. The level meter stays on RMS — it answers "how loud", which is
-  a different and honestly-answered question. With suppression switched off
-  there is no probability to read, and the old level threshold is what remains.
+  drives the "speaking" highlight** for the local tile. The old level threshold
+  was measuring the wrong quantity: loudness is not speech, so it both missed
+  quiet sentences (below the threshold) and accepted any loud enough thud. Two
+  thresholds rather than one, because a single one flickers at the boundary on
+  every breath between words: the upper one lights the highlight, the lower one
+  only sustains it. The level meter stays on RMS — it answers "how loud", which
+  is a different and honestly-answered question.
+
+  **Where no probability is available, `SpeechGate` answers instead**: for
+  remote participants (their audio arrives encoded, and running every one of
+  them through RNNoise would cost a percent of a core per person) and for
+  ourselves when suppression is switched off. It does not compare loudness to a
+  fixed number — that lies in both directions at once, deaf to a quiet person
+  on a distant mic and lit permanently by a noisy room — but to *that speaker's
+  own* noise floor, estimated as the **minimum frame over a 2 s window**. The
+  minimum specifically: speech is intermittent, its gaps *are* the floor,
+  whereas an average would be dragged along by the speech itself.
+
+  That last part was arrived at the hard way, and the note is here so nobody
+  re-derives it: the first implementation used exponential smoothing that only
+  rose while silent — a guard against a long sentence pulling the floor up to
+  itself. Scenario testing showed the guard turns into a permanent latch. Let
+  the background rise at once (an air conditioner starts), the gate says
+  "speech", and that same "speech" forbids the floor from ever following, so it
+  never recovers. A windowed minimum has no such state; the cost is a bounded
+  ~4 s of false highlight after an abrupt background change, which is the right
+  trade against *forever*.
+
+  On the receive path one more signal is free and better than any measurement
+  of ours: a payload of **two bytes or fewer is Opus DTX** — the sender's own
+  verdict on the sender's own signal. The floor keeps being fed from those
+  frames anyway, since they decode to comfort noise, which is exactly the level
+  of that person's room.
 
   Cost, measured over 60 s of audio on this machine: **0.27 ms per 10 ms frame**
   (0.55 ms per conference frame, ~2.7 % of one core) and **+10 ms** of
