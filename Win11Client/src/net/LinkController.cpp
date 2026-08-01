@@ -59,7 +59,10 @@ void LinkController::setNotice(const QString& text) {
 // enter(), а не joinByCode(): проверять комнату отдельным запросом незачем —
 // обо всех отказах расскажет сам сокет, и ровно теми же словами, что вебу.
 void LinkController::enterRoom(const QString& code) {
-    m_rooms->enter(code, m_auth->displayName());
+    QString name = m_auth->displayName();
+    if (name.isEmpty()) name = m_forcedName;   // аккаунт главнее ярлыка
+    m_forcedName.clear();                      // одноразовое
+    m_rooms->enter(code, name);
 }
 
 // Схема + хост + порт в сравнимом виде. Хост обязательно в ACE: с пустым
@@ -137,6 +140,11 @@ QString LinkController::switchNotice() const {
     return s;
 }
 
+void LinkController::openAs(const QString& text, const QString& name) {
+    m_forcedName = name.trimmed();
+    open(text);
+}
+
 void LinkController::open(const QString& text) {
     const QVariantMap r = parse(text);
     if (!r.value("ok").toBool()) { setError(r.value("error").toString()); return; }
@@ -147,7 +155,9 @@ void LinkController::open(const QString& text) {
     const QString code = r.value("code").toString();
 
     if (r.value("sameServer").toBool()) {
-        setSuggestedName("");        // подсказывать нечего: либо аккаунт, либо гейт
+        // Подсказывать нечего: либо аккаунт, либо гейт спросит. Исключение —
+        // имя из ярлыка: его гейт и должен показать уже заполненным.
+        setSuggestedName(m_auth->displayName().isEmpty() ? m_forcedName : QString());
         setNotice("");
         enterRoom(code);
         return;
@@ -158,6 +168,7 @@ void LinkController::open(const QString& text) {
     // только локально: кука прежнего сервера лежит отдельно (SessionCookieJar)
     // и нужна, чтобы возврат не спрашивал пароль.
     m_homeName = m_auth->displayName();
+    if (m_homeName.isEmpty()) m_homeName = m_forcedName;   // ярлык на чужой сервер
     setHomeServer(m_api->baseUrl());
     m_wantCode = code;
     m_restoring = false;

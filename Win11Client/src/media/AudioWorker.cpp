@@ -1,6 +1,7 @@
 #include "AudioWorker.h"
 #include "ScreenAudioCapture.h"
 #include "Denoiser.h"
+#include "AutoGain.h"
 #include "../net/Protocol.h"
 #include "../crypto/E2eCipher.h"
 #include <QAudioSource>
@@ -36,6 +37,30 @@ static const int kPrebufMin = 3;        // 60 мс — как было всег�
 static const int kPrebufMax = 8;        // 160 мс — потолок разумной задержки
 static const int kPlcMaxRun = 5;        // до 100 мс подряд досочиняем кадры
 static const qint64 kCalmMs = 5000;     // столько играем ровно — и ужимаем запас
+
+// Громкость кадра двумя числами: среднее (RMS) и наибольший сэмпл, оба в долях
+// полной шкалы. Один проход: оба нужны в одном и том же месте и об одном и том
+// же кадре — среднее ведёт автоусиление к цели, пик держит лимитер.
+static void frameStats(const opus_int16* s, int n, qreal* rms, qreal* peak) {
+    double sumSq = 0;
+    int mx = 0;
+    for (int i = 0; i < n; ++i) {
+        const int v = qAbs(int(s[i]));
+        if (v > mx) mx = v;
+        sumSq += double(s[i]) * s[i];
+    }
+    *rms = qSqrt(sumSq / n) / 32768.0;
+    *peak = mx / 32768.0;
+}
+
+// Ручная чувствительность: постоянный множитель на весь кадр. Ступенек на
+// границах кадров здесь не бывает — число меняется, только когда человек тянет
+// ползунок, и между такими событиями проходят не миллисекунды.
+static void applyGain(opus_int16* s, int n, qreal g) {
+    if (qFuzzyCompare(g, qreal(1.0))) return;
+    for (int i = 0; i < n; ++i)
+        s[i] = opus_int16(qBound<qint32>(-32768, qint32(s[i] * g), 32767));
+}
 
 static QAudioFormat confFormat() {
     QAudioFormat f;
@@ -177,6 +202,23 @@ void AudioWorker::setDenoise(bool on) {
     else if (!on && m_denoiser) m_denoiser.reset();
 }
 
+void AudioWorker::setAutoGain(bool on) {
+    if (m_wantAgc == on) return;
+    m_wantAgc = on;
+    if (!m_source) return;
+    if (on && !m_agc) {
+        // Стартуем с текущей ручной чувствительности, а не с единицы: включение
+        // тумблера не должно быть слышно скачком громкости, дальше AutoGain
+        // сам приведёт множитель куда надо. Сразу же говорим ползунку, где мы, —
+        // иначе он показывал бы прошлое значение до первого прореженного тика.
+        m_agc = std::make_unique<AutoGain>(m_sensGain);
+        m_agcGainAt = 0;
+        emit agcGain(m_sensGain);
+    } else if (!on && m_agc) {
+        m_agc.reset();
+    }
+}
+
 void AudioWorker::setGains(qreal volume, qreal sensitivity, qreal screenVolume) {
     m_volGain = volume;
     m_sensGain = sensitivity;
@@ -225,6 +267,7 @@ void AudioWorker::startCapture() {
     opus_encoder_ctl(m_enc, OPUS_SET_DTX(1));
 
     if (m_wantDenoise) m_denoiser = std::make_unique<Denoiser>();
+    if (m_wantAgc) m_agc = std::make_unique<AutoGain>(m_sensGain);
 
     m_pcm.clear();
     m_audioClockMs = 0;           // часы меток начнутся с первой пачки
@@ -245,9 +288,12 @@ void AudioWorker::stopCapture() {
         m_enc = nullptr;
     }
     m_denoiser.reset();           // рвём поток сэмплов — рвём и его состояние
+    m_agc.reset();                // …и накопленный множитель вместе с ним:
+                                  // следующий микрофон может быть совсем другим
     m_pcm.clear();                // недособранный хвост кадра — в мусор
     m_audioClockMs = 0;
     m_micLevelAt = 0;
+    m_agcGainAt = 0;
     m_selfSpeech = false;         // иначе следующий захват стартует «говорящим»
     emit micLevel(0);             // индикатор в настройках гаснет
 }
@@ -256,10 +302,6 @@ void AudioWorker::stopCapture() {
 void AudioWorker::onCaptured() {
     if (!m_mic || !m_enc) return;
     m_pcm += m_mic->readAll();
-
-    // Чувствительность из настроек (0..2) — гейн до кодека, чтобы у
-    // собеседников голос стал реально тише/громче (как у веба).
-    const qreal gain = m_sensGain;
 
     // Метки времени. Устройство отдаёт сэмплы пачками, и если проштамповать
     // всю пачку одним «сейчас», у приёмника поедут аудио-часы — а по ним он
@@ -285,20 +327,14 @@ void AudioWorker::onCaptured() {
         // и считать её нечем.
         const float vad = m_denoiser ? m_denoiser->process(samples, kFrameSamples) : -1.f;
 
-        double sumSq = 0;
-        for (int i = 0; i < kFrameSamples; ++i) {
-            const qint32 v = qBound<qint32>(-32768, qint32(samples[i] * gain), 32767);
-            samples[i] = opus_int16(v);
-            sumSq += double(v) * v;
-        }
-        // RMS по нормализованным сэмплам — индикатор уровня в настройках
-        // и подсветка своей плитки (порог 0.02, как в методичке §6.4).
-        // Оба адресата живут на GUI-потоке, поэтому будить его на каждый
-        // двадцатимиллисекундный кадр незачем. 60 мс, а не 100: у самих
-        // настроек стоит ещё один фильтр в 100 мс, и два одинаковых порога
-        // гасили бы через раз — полоска обновлялась бы вдвое реже обещанного.
-        const qreal level = qSqrt(sumSq / kFrameSamples) / 32768.0;
-        if (nowMs - m_micLevelAt >= 60) { m_micLevelAt = nowMs; emit micLevel(level); }
+        // Громкость ИСХОДНОГО кадра, до всякого усиления. Именно о ней
+        // спрашивают оба следующих шага: детектор речи — «громче ли это, чем
+        // здесь обычно», автоусиление — «насколько человек не дотягивает до
+        // цели». Мерить после гейна значило бы спрашивать их про свою же
+        // работу: автоусиление увидело бы, что цель уже достигнута, и застыло
+        // бы на том множителе, с которого начало.
+        qreal rms = 0, peak = 0;
+        frameStats(samples, kFrameSamples, &rms, &peak);
 
         // Говорим ли мы — решает вероятность речи, а не громкость. Порог по
         // RMS мерил не то: громкость и речь — разные вещи, и он одинаково
@@ -313,15 +349,46 @@ void AudioWorker::onCaptured() {
         // Шумодав выключен — вероятности нет, и остаётся громкость. Но не
         // абсолютным порогом, а превышением над своей же шумовой полкой:
         // см. SpeechGate, там про то, почему фиксированное число тут врёт.
-        // Полоска уровня выше остаётся по RMS: она показывает, насколько
+        // Полоска уровня ниже остаётся по RMS: она показывает, насколько
         // громко, и это честно — вопрос там другой.
         const bool speech = vad < 0
-            ? m_selfGate.feed(level)
+            ? m_selfGate.feed(rms)
             : (m_selfSpeech ? vad > 0.20f : vad > 0.60f);
         m_selfSpeech = speech;
         if (speech && nowMs - m_selfSpokeAt >= 150) {
             m_selfSpokeAt = nowMs;      // подсветка держится 450 мс — хватает
             emit selfSpeaking();
+        }
+
+        // Усиление: либо считает автоусиление, либо ползунок из настроек. Не
+        // вместе — иначе ползунок, который сам же и показывает результат
+        // автоусиления, входил бы в собственную обратную связь.
+        //
+        // Ответ на вопрос «идёт ли речь» автоусилению обязателен: без него оно
+        // в паузах видит «слишком тихо» и за пару секунд вытягивает шумовую
+        // полку на передний план. Здесь он уже посчитан строкой выше и
+        // достаётся даром: настройки не дают включить автоусиление без
+        // шумоподавления (см. MediaSettings::autoGain), поэтому у m_agc всегда
+        // есть вероятность от RNNoise — та самая, что вернул вызов, чистивший
+        // кадр. Сам AutoGain об этом не знает и одинаково примет любой ответ.
+        if (m_agc) m_agc->process(samples, kFrameSamples, rms, peak, speech);
+        else       applyGain(samples, kFrameSamples, m_sensGain);
+
+        // Индикатор уровня и множитель автоусиления — на GUI-поток. Будить его
+        // на каждый двадцатимиллисекундный кадр незачем: у полоски 60 мс (не
+        // 100, потому что у самих настроек стоит ещё один фильтр в 100 мс, и
+        // два одинаковых порога гасили бы через раз), у ползунка 100 — он и
+        // движется медленно. Уровень считаем повторно и после усиления: полоска
+        // показывает то, что реально уходит собеседникам.
+        if (nowMs - m_micLevelAt >= 60) {
+            m_micLevelAt = nowMs;
+            qreal outRms = 0, outPeak = 0;
+            frameStats(samples, kFrameSamples, &outRms, &outPeak);
+            emit micLevel(outRms);
+        }
+        if (m_agc && nowMs - m_agcGainAt >= 100) {
+            m_agcGainAt = nowMs;
+            emit agcGain(m_agc->gain());
         }
 
         const int bytes = opus_encode(m_enc, samples, kFrameSamples,

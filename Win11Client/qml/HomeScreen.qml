@@ -95,6 +95,9 @@ Item {
                 font.letterSpacing: 3
                 font.weight: Font.Bold
             }
+            // Обновление — здесь же, у знака: место видное, но не на дороге.
+            // Пока обновления нет, ширина нулевая, и шапка выглядит как прежде.
+            UpdatePill { anchors.verticalCenter: parent.verticalCenter }
         }
 
         // Адресная строка конференции — см. AuthScaffold: ширина считается от

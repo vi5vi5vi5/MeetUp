@@ -15,6 +15,7 @@ class QTimer;
 class ScreenAudioCapture;
 class E2eCipher;
 class Denoiser;
+class AutoGain;
 struct OpusEncoder;   // C-структуры из opus.h — вперёд объявляются как struct
 struct OpusDecoder;
 
@@ -69,6 +70,10 @@ public slots:
     // QAudioSource: тумблер, который на полсекунды глушит разговор ради
     // перезапуска устройства, никто трогать не станет.
     void setDenoise(bool on);
+    // Автоусиление микрофона. Пока включено, чувствительность из настроек не
+    // применяется вовсе: множитель считает AutoGain, а ползунок показывает
+    // то, что он насчитал. Переключается на лету, как и шумоподавление.
+    void setAutoGain(bool on);
     void setGains(qreal volume, qreal sensitivity, qreal screenVolume);
     void setOutputMuted(bool muted);
     // Личная громкость участника (множитель 0..2). Только голос: у звука
@@ -84,6 +89,10 @@ signals:
     void packetReady(const QByteArray& frame);   // готовый кадр v2 -> транспорт
     void txAudio(bool screen, int bytes);        // -> MediaStats
     void micLevel(qreal level);                  // -> индикатор в настройках
+    // Множитель, который сейчас держит автоусиление (1.0 = «как есть»).
+    // Прорежен до ~10 Гц: ползунок в настройках не обязан знать про каждый
+    // двадцатимиллисекундный кадр, а QSettings — тем более (см. MediaSettings).
+    void agcGain(qreal gain);
     void selfSpeaking();                         // мы говорим (подсветка плитки)
     void speaking(qint64 id);                    // говорит участник
     void screenLive(bool on);                    // звук демонстрации идёт
@@ -147,6 +156,7 @@ private:
     bool m_comReady = false;            // COM на этом потоке подняли мы
     bool m_wantCapture = false, m_wantPlayback = false, m_wantScreenAudio = false;
     bool m_wantDenoise = true;          // настройка; сам объект живёт с захватом
+    bool m_wantAgc = true;              // то же для автоусиления
     bool m_outputMuted = false;
     int  m_bitrate = 32000;
     qreal m_volGain = 1.0, m_sensGain = 1.0, m_scrVolGain = 1.0;
@@ -158,9 +168,14 @@ private:
     // непрерывный поток сэмплов; живёт ровно столько же, сколько захват.
     // Только микрофон: у полосы демонстрации там музыка, а не голос.
     std::unique_ptr<Denoiser> m_denoiser;
+    // Автоусиление. Тоже с памятью (текущий множитель, шумовая полка) и тоже
+    // только про микрофон: фонограмма демонстрации — это чужой сведённый звук,
+    // и выравнивать его по речевой цели незачем.
+    std::unique_ptr<AutoGain> m_agc;
     OpusEncoder* m_enc = nullptr;       // кодер (жив вместе с захватом)
     qint64 m_audioClockMs = 0;          // монотонные часы меток отправки
     qint64 m_micLevelAt = 0;            // прореживание индикатора уровня
+    qint64 m_agcGainAt = 0;             // …и множителя автоусиления
     qint64 m_selfSpokeAt = 0;           // прореживание «говорит» для себя
     bool m_selfSpeech = false;          // речь идёт: нижний порог VAD держит её
     SpeechGate m_selfGate;              // …когда шумодава нет и VAD взять негде

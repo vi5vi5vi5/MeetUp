@@ -30,6 +30,16 @@ class MediaSettings : public QObject {
     // — худший вид сюрприза.
     Q_PROPERTY(bool noiseSuppression READ noiseSuppression WRITE setNoiseSuppression
                NOTIFY noiseSuppressionChanged)
+    // Автоусиление микрофона (см. media/AutoGain.h). По умолчанию включено —
+    // как autoGainControl:true у веб-клиента, по той же причине, что и выше.
+    // Работает ТОЛЬКО вместе с шумоподавлением, поэтому читается не сама
+    // настройка, а «выбрано и разрешено»; подробности у autoGain().
+    Q_PROPERTY(bool autoGain READ autoGain WRITE setAutoGain NOTIFY autoGainChanged)
+    // Множитель, который СЕЙЧАС держит автоусиление, в тех же процентах, что и
+    // ползунок чувствительности. Только чтение и только в памяти: значение
+    // живёт двадцать миллисекунд, и хранить его между запусками так же
+    // бессмысленно, как хранить показание вольтметра.
+    Q_PROPERTY(int agcSensitivity READ agcSensitivity NOTIFY agcSensitivityChanged)
     // Пресеты качества отправки: "low" | "med" | "high".
     Q_PROPERTY(QString camQuality READ camQuality WRITE setCamQuality NOTIFY camQualityChanged)
     Q_PROPERTY(QString audioQuality READ audioQuality WRITE setAudioQuality NOTIFY audioQualityChanged)
@@ -77,6 +87,13 @@ public:
     int volume() const { return m_volume; }
     int sensitivity() const { return m_sensitivity; }
     bool noiseSuppression() const { return m_noiseSuppression; }
+    // Выбор человека И разрешение его применить. Без шумоподавления усиливать
+    // пришлось бы фон вместе с голосом, и автоусиление упирается в собственный
+    // предохранитель по шумовой полке, то есть почти ничего не делает —
+    // тумблер, который включается и не работает, хуже недоступного.
+    // Сам выбор при этом не переписывается: вернут шумодав — вернётся и оно.
+    bool autoGain() const { return m_autoGain && m_noiseSuppression; }
+    int agcSensitivity() const { return m_agcSensitivity; }
     QString camQuality() const { return m_camQuality; }
     QString audioQuality() const { return m_audioQuality; }
     QString screenRes() const { return m_screenRes; }
@@ -97,6 +114,7 @@ public:
     void setVolume(int v);
     void setSensitivity(int v);
     void setNoiseSuppression(bool on);
+    void setAutoGain(bool on);
     void setCamQuality(const QString& q);
     void setAudioQuality(const QString& q);
     void setScreenRes(const QString& r);
@@ -138,6 +156,10 @@ public:
 
     // AudioEngine сообщает RMS захвата; уведомления QML прорежены до ~10 Гц.
     void reportMicLevel(qreal level);
+    // …и множитель автоусиления (1.0 = «как есть»). Прореживание здесь не
+    // нужно — оно уже сделано на потоке звука, где известно, сколько прошло
+    // кадров; сюда приходит готовое значение примерно раз в 100 мс.
+    void reportAgcGain(qreal gain);
 
 signals:
     void devicesChanged();
@@ -147,6 +169,8 @@ signals:
     void volumeChanged();
     void sensitivityChanged();
     void noiseSuppressionChanged();
+    void autoGainChanged();
+    void agcSensitivityChanged();
     void camQualityChanged();
     void audioQualityChanged();
     void screenResChanged();
@@ -163,12 +187,16 @@ signals:
 
 private:
     void save(const QString& key, const QVariant& value);
+    // Автоусиление погасло — ползунок должен показать ручное значение, а не
+    // застыть на последнем, что насчитал AutoGain.
+    void resetAgcReadout();
 
     QMediaDevices* m_devices = nullptr;   // источник сигналов о смене устройств
 
     QString m_micId, m_camId, m_outId;
     int m_volume = 100, m_sensitivity = 100;
     bool m_noiseSuppression = true;
+    bool m_autoGain = true;
     QString m_camQuality = "med", m_audioQuality = "med";
     QString m_screenRes = "720";
     int m_screenFps = 30;
@@ -181,4 +209,5 @@ private:
 
     qreal m_micLevel = 0;
     qint64 m_micLevelAt = 0;              // прореживание micLevelChanged
+    int m_agcSensitivity = 100;           // проценты; в QSettings не попадает
 };

@@ -51,6 +51,10 @@ public:
     Q_INVOKABLE QVariantMap parse(const QString& text) const;
     // Разобрать и действовать: войти, либо переключить сервер и позвать гостем.
     Q_INVOKABLE void open(const QString& text);
+    // То же, но с именем со стороны (аргумент командной строки, см. Cli).
+    // Действует на один вход и только пока своего имени нет: под аккаунтом
+    // человек входит под аккаунтом, что бы ни было написано в ярлыке.
+    Q_INVOKABLE void openAs(const QString& text, const QString& name);
     // Конференция закрыта — вернуть прежний сервер, если мы уходили на чужой.
     Q_INVOKABLE void roomLeft();
     Q_INVOKABLE void clearError() { setError(""); }
@@ -91,5 +95,6 @@ private:
     QString m_homeServer;      // куда возвращаться после чужой конференции
     QString m_homeName;        // имя из аккаунта, который был открыт до ухода
     QString m_wantCode;        // код комнаты, ждущий ответа checkSession()
+    QString m_forcedName;      // имя из ярлыка: живёт до ближайшего входа
     bool m_restoring = false;  // checkSession() спрошен ради возврата домой
 };

@@ -13,7 +13,9 @@
 #include "net/ChatImages.h"
 #include "net/PersonalRoomController.h"
 #include "net/LinkController.h"
+#include "net/UpdateChecker.h"
 #include "SysBridge.h"
+#include "Cli.h"
 #include "HistoryStore.h"
 #include "MediaSettings.h"
 #include "ScreenSources.h"
@@ -37,6 +39,15 @@ int main(int argc, char *argv[])
     // Qt.application.version в разделе настроек «О программе».
     app.setApplicationVersion(QStringLiteral(APP_VERSION));
     QQuickStyle::setStyle("Basic");
+
+    // Хвосты прошлого обновления. Именно здесь, до всего остального: во время
+    // подмены эти файлы были заняты уходящим экземпляром, и снять их мог
+    // только следующий запуск — то есть мы (см. UpdateChecker).
+    UpdateChecker::sweepOldFiles();
+
+    // Чем открыться: ярлык с комнатой, возврат после обновления или ничего.
+    Cli cli;
+    cli.parse(app.arguments());
 
     // QUrl «красиво» декодирует punycode-домены (мит-ап.рф) обратно в юникод,
     // а QWebSocket берёт хост для Host-заголовка ровно из url.host() —
@@ -75,6 +86,7 @@ int main(int argc, char *argv[])
     // Звуки интерфейса. Держит av (выключатель и устройство вывода) и audio —
     // уведомления молчат, когда снят звук конференции.
     UiSounds sfx(&av, &audio);
+    UpdateChecker updates;                 // GitHub Releases; см. UpdateChecker.h
 
     // Движок QML объявлен ПОСЛЕ screens: провайдер миниатюр принадлежит
     // движку и держит указатель на screens, а разрушается движок первым.
@@ -103,6 +115,9 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("Crypto", &crypto);
     // Звуки интерфейса — Sfx.play("toggle-on") и далее по каталогу.
     engine.rootContext()->setContextProperty("Sfx", &sfx);
+    // Обновление клиента — Updates; аргументы командной строки — Cli.
+    engine.rootContext()->setContextProperty("Updates", &updates);
+    engine.rootContext()->setContextProperty("Cli", &cli);
 
     
 

@@ -34,6 +34,9 @@ AudioEngine::AudioEngine(SignalingClient* conf, MediaSettings* settings,
     connect(m_worker, &AudioWorker::micLevel, this, [this](qreal level) {
         m_settings->reportMicLevel(level);
         });
+    connect(m_worker, &AudioWorker::agcGain, this, [this](qreal gain) {
+        m_settings->reportAgcGain(gain);
+        });
     connect(m_worker, &AudioWorker::selfSpeaking, this, [this] {
         m_conf->markSelfSpeaking();
         });
@@ -81,6 +84,7 @@ AudioEngine::AudioEngine(SignalingClient* conf, MediaSettings* settings,
     connect(settings, &MediaSettings::sensitivityChanged, this, &AudioEngine::pushGains);
     connect(settings, &MediaSettings::screenVolumeChanged, this, &AudioEngine::pushGains);
     connect(settings, &MediaSettings::noiseSuppressionChanged, this, &AudioEngine::pushDenoise);
+    connect(settings, &MediaSettings::autoGainChanged, this, &AudioEngine::pushAutoGain);
 
     // Звук демонстрации: захватываем, только пока слот демонстрации наш и
     // настройка включена. Судья один — updateScreenAudio().
@@ -96,6 +100,7 @@ AudioEngine::AudioEngine(SignalingClient* conf, MediaSettings* settings,
     pushDevices();
     pushGains();
     pushDenoise();
+    pushAutoGain();
     const int bps = m_settings->audioBitrate();
     QMetaObject::invokeMethod(m_worker, [this, bps] { m_worker->setBitrate(bps); },
                               Qt::QueuedConnection);
@@ -221,5 +226,11 @@ void AudioEngine::pushGains() {
 void AudioEngine::pushDenoise() {
     const bool on = m_settings->noiseSuppression();
     QMetaObject::invokeMethod(m_worker, [this, on] { m_worker->setDenoise(on); },
+                              Qt::QueuedConnection);
+}
+
+void AudioEngine::pushAutoGain() {
+    const bool on = m_settings->autoGain();
+    QMetaObject::invokeMethod(m_worker, [this, on] { m_worker->setAutoGain(on); },
                               Qt::QueuedConnection);
 }

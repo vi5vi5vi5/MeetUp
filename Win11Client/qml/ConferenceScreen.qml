@@ -266,6 +266,27 @@ Item {
         Hotkeys.setActive(hotkeysActive)
     }
 
+    // Комната закрыта паролем, а пароль у нас есть — из ярлыка или из того,
+    // что мы сюда же и вернулись после обновления. Сервер просит его уже
+    // ПОСЛЕ того, как мы представились, поэтому здесь, на смене фазы, а не при
+    // входе.
+    //
+    // Ровно один раз за запуск: takePassword() отдаёт и забывает. Иначе, во-первых,
+    // неверный пароль ушёл бы в бесконечный круг (сервер снова говорит «gate»),
+    // во-вторых, пароль от одной комнаты подставлялся бы молча в следующую.
+    property bool _cliPassTried: false
+    Connections {
+        target: Conf
+        function onPhaseChanged() {
+            if (Conf.phase !== "gate" || root._cliPassTried) return
+            const p = Cli.takePassword()
+            if (p === "") return
+            root._cliPassTried = true
+            gatePass.text = p        // видно, что подставлено, — и можно поправить
+            Conf.submitPassword(p)
+        }
+    }
+
     // Пришли по ссылке с ключом шифрования — сказать об этом один раз, когда
     // гейт уже позади: под ним уведомление всё равно не видно.
     onStartedChanged: if (started && Link.pendingKey !== "")

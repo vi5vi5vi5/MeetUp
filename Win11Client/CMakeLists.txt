@@ -104,8 +104,11 @@ qt_add_executable(Win11Client
     src/net/ChatModel.cpp
     src/net/PersonalRoomController.cpp
     src/net/LinkController.cpp
+    src/net/UpdateChecker.cpp
+    src/Cli.cpp
     src/media/AudioEngine.cpp
     src/media/AudioWorker.cpp
+    src/media/AutoGain.cpp
     src/media/Denoiser.cpp
     src/media/ScreenAudioCapture.cpp
     src/media/VideoDecoder.cpp
@@ -146,6 +149,7 @@ qt_add_qml_module(Win11Client
         qml/SettingSwitch.qml
         qml/SettingsCombo.qml
         qml/PercentSlider.qml
+        qml/UpdatePill.qml
         qml/KeyBind.qml
         qml/Card.qml
         qml/Badge.qml
@@ -232,6 +236,13 @@ qt_add_qml_module(Win11Client
 # Версия одна на весь проект: CMake → QML (Qt.application.version в разделе
 # «О программе»). Разъезжающиеся номера в интерфейсе и в сборке — классика.
 target_compile_definitions(Win11Client PRIVATE APP_VERSION="${PROJECT_VERSION}")
+
+# Откуда клиент берёт обновления: репозиторий GitHub в виде "владелец/имя".
+# Вынесено в переменную, а не вшито в код, ровно ради форков: тот, кто соберёт
+# свой клиент, должен обновляться из своего репозитория, а не из чужого.
+# Пустое значение выключает проверку целиком (см. UpdateChecker::check).
+set(UPDATE_REPO "vi5vi5vi5/MeetUp" CACHE STRING "GitHub repo for client updates (owner/name)")
+target_compile_definitions(Win11Client PRIVATE UPDATE_REPO="${UPDATE_REPO}")
 
 set_target_properties(Win11Client PROPERTIES
     WIN32_EXECUTABLE ON

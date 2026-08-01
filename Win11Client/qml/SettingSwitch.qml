@@ -5,6 +5,8 @@ import MeetUp
 // справа. Пояснение здесь не украшение — половина настроек непонятна без
 // одной фразы о том, что именно изменится.
 // soon: true — место занято, бэкенда нет: строка приглушается и не нажимается.
+// Так же выглядит и строка, которой снаружи задали enabled: false, — настройка,
+// недоступная из-за другой настройки, читается ровно как «пока нельзя».
 Item {
     id: root
 
@@ -17,7 +19,7 @@ Item {
     width: parent ? parent.width : 0
     implicitHeight: Math.max(col.implicitHeight, sw.height)
     height: implicitHeight
-    opacity: soon ? 0.62 : 1
+    opacity: (soon || !enabled) ? 0.62 : 1
     enabled: !soon
 
     Column {

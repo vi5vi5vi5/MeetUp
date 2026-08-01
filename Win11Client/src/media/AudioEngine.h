@@ -75,6 +75,7 @@ private:
     void pushDevices();                 // выбранные устройства -> воркеру
     void pushGains();                   // громкость/чувствительность -> воркеру
     void pushDenoise();                 // шумоподавление -> воркеру
+    void pushAutoGain();                // автоусиление -> воркеру
     void forgetPeerVolumes();           // сброс личных громкостей (новая комната)
     void setScreenLive(bool on);
 

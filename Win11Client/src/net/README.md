@@ -53,5 +53,75 @@ Planned units:
   the server's 600 000 cap), run off the GUI thread because decoding a phone
   photo takes hundreds of milliseconds.
 
+- **`UpdateChecker`** (QML: `Updates`) — client self-update from **GitHub
+  Releases**, not from the MeetUp server: the server is upgraded on its own
+  schedule and its version answers a different question, plus GitHub's CDN
+  serves the 46 MB archive instead of someone's home box. The repo is a CMake
+  cache variable (`UPDATE_REPO`), so a fork updates from the fork; empty
+  disables checking outright.
+
+  The install rests on one Windows property: a running `.exe` and loaded
+  `.dll`s **cannot be deleted but can be renamed**. So the old files move to
+  `<name>.old-<timestamp>`, the new ones unpack into their place, the app
+  restarts, and the next launch sweeps the tails (`sweepOldFiles`, called from
+  `main` before anything else — during the swap they were still held by the
+  departing process). No separate `updater.exe` exists or is needed. Verified
+  against a live process: delete fails, rename succeeds, the replacement lands
+  on the freed name, and the tail clears once the process exits. Replacement is
+  all-or-nothing — a half-updated folder is a broken program with no obvious
+  way back — so renames and copies are tracked and rolled back on any failure.
+
+  Two details that look like trivia and are not. **The release tag is
+  `Win11Client_1.05`**, so the version cannot be read by stripping a leading
+  `v`: the first number in that string is the `11` of `Win11`. `versionFromTag`
+  takes the *last* dotted group instead — product names have no dots, versions
+  do. And **`tar.exe` is invoked by absolute path** (`%SystemRoot%\System32`),
+  because it must be the bsdtar that ships with Windows and understands zip;
+  the GNU tar that arrives with Git for Windows may well come first in `PATH`
+  and answers "This does not look like a tar archive".
+
+  There is deliberately no manifest signature. Integrity rests on HTTPS to
+  `api.github.com` and to the file, on refusing to follow a redirect anywhere
+  but GitHub, and on the size matching what the API promised.
+
+  Two entry points, both one button walking through every step (check →
+  download → restart), because which state the program is in is not the user's
+  problem: the pill beside the wordmark on the home screen, and **Settings →
+  About**, which is reachable *from a call*. That second one is why
+  `SignalingClient::restartArgs` exists — restarting mid-conference has to come
+  back to the same room, and that means name, server, `#k=` key and, for a
+  locked room, the password. It is assembled in C++ because all of it already
+  lives there and the password then never enters QML at all. An empty list
+  means "not in a room", and the caller falls back to just the server address.
+
+- **`../Cli`** (QML: `Cli`) — what to open on launch, serving two purposes at
+  once: a shortcut that drops straight into a room
+  (`--server`, `--room`, `--name`, `--key`, `--phrase`, or a whole invite link
+  as a positional argument), and the return trip after an update, which
+  restarts the client with where it was. Order of precedence: an explicit room
+  wins over any stored account session; failing that, a server alone just
+  switches there and signs in with the saved cookie; anything else passed
+  without either is an error stated on screen, because a shortcut that silently
+  opens the wrong thing is worse than one that explains itself. An empty
+  command line is an ordinary launch and says nothing.
+
+  **A locked room** needs `--password`. Without it the shortcut still gets all
+  the way to the gate card and stops there asking for it, which is correct but
+  not what a shortcut promises. The server only demands the password *after* we
+  have introduced ourselves, so it is submitted on the phase change to `gate`,
+  not at entry — and exactly once, via `takePassword()`, which hands it over and
+  forgets it. Once matters twice over: a wrong password would otherwise loop
+  forever (the server just says `gate` again), and a password meant for one room
+  would silently be offered to the next one entered in the same session.
+
+  Arguments are parsed with `parse()` rather than `process()`: the latter kills
+  the process on an unknown key after printing to a console a GUI program may
+  not have, leaving a person staring at nothing instead of a window. The room
+  path goes through `LinkController::openAs`, which already knows how to switch
+  servers, enter as a guest and pick up `#k=` — the CLI just assembles the link.
+  The E2E key in an argument is visible in the process list; that is the
+  accepted price for a shortcut that opens an encrypted room without typing the
+  phrase, and the key still never touches disk.
+
 Connection rule: `wss://<host>/ws` when the server origin is https, otherwise
 `ws://<host>:9000`; REST rides the same scheme+host.

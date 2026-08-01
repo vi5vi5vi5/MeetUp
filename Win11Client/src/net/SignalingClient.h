@@ -72,6 +72,13 @@ public:
     Q_INVOKABLE void open(const QString& roomCode, const QString& name);
     // Отправить пароль после гейта и повторить join (личная комната).
     Q_INVOKABLE void submitPassword(const QString& password);
+    // Чем перезапуститься, чтобы вернуться в ЭТУ комнату: имя, пароль (если
+    // комната закрытая) и адрес. Собирается здесь, а не в QML, потому что
+    // здесь всё это уже лежит — и пароль наружу не выходит вовсе.
+    // link — готовая ссылка с ключом шифрования, когда он есть (её знает
+    // Crypto.inviteWithKey); пусто — соберём адрес и код сами.
+    // Пустой список означает «мы не в комнате».
+    Q_INVOKABLE QStringList restartArgs(const QString& link) const;
     // Локальные микрофон/камера -> разослать участникам (state). Необязательно.
     Q_INVOKABLE void setLocalState(bool mic, bool cam);
     // Выйти из комнаты (закрыть сокет без реконнекта).

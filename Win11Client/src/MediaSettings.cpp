@@ -3,6 +3,7 @@
 #include <QSettings>
 #include <QDateTime>
 #include <QKeySequence>
+#include <QtMath>
 
 // Идентификатор устройства в настройках: id() устройства — бинарный QByteArray,
 // в QSettings и QML он ездит как base64-строка.
@@ -28,6 +29,11 @@ MediaSettings::MediaSettings(QObject* parent) : QObject(parent) {
     m_volume = qBound(0, s.value("volume", 100).toInt(), 200);
     m_sensitivity = qBound(0, s.value("sens", 100).toInt(), 200);
     m_noiseSuppression = s.value("noiseSuppression", true).toBool();
+    m_autoGain = s.value("autoGain", true).toBool();
+    // Ползунок при включённом автоусилении показывает не сохранённое число, а
+    // то, что насчитает AutoGain на живом звуке. До первого кадра показать
+    // нечего — берём ручное значение, с него автоусиление и стартует.
+    m_agcSensitivity = m_sensitivity;
     const QStringList levels{"low", "med", "high"};
     m_camQuality = s.value("qCam", "med").toString();
     if (!levels.contains(m_camQuality)) m_camQuality = "med";
@@ -178,6 +184,27 @@ void MediaSettings::setNoiseSuppression(bool on) {
     m_noiseSuppression = on;
     save("noiseSuppression", on);
     emit noiseSuppressionChanged();
+    // Автоусиление гаснет и загорается вместе с шумоподавлением (см.
+    // autoGain()). Сообщить об этом надо, только если человек его выбирал:
+    // иначе ничего и не изменилось.
+    if (m_autoGain) {
+        resetAgcReadout();
+        emit autoGainChanged();
+    }
+}
+
+void MediaSettings::setAutoGain(bool on) {
+    if (m_autoGain == on) return;
+    m_autoGain = on;
+    save("autoGain", on);
+    resetAgcReadout();
+    emit autoGainChanged();
+}
+
+void MediaSettings::resetAgcReadout() {
+    if (autoGain() || m_agcSensitivity == m_sensitivity) return;
+    m_agcSensitivity = m_sensitivity;
+    emit agcSensitivityChanged();
 }
 
 void MediaSettings::setUiSounds(bool on) {
@@ -312,4 +339,13 @@ void MediaSettings::reportMicLevel(qreal level) {
     m_micLevelAt = now;
     m_micLevel = level;
     emit micLevelChanged();
+}
+
+void MediaSettings::reportAgcGain(qreal gain) {
+    // Округляем до шага ползунка: иначе ручка ходила бы на полделения туда-сюда
+    // там, где автоусиление, по сути, стоит на месте.
+    const int percent = qBound(0, int(qRound(gain * 100 / 5.0)) * 5, 10000);
+    if (m_agcSensitivity == percent) return;
+    m_agcSensitivity = percent;
+    emit agcSensitivityChanged();
 }

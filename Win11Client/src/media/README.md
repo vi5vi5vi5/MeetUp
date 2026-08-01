@@ -69,6 +69,103 @@ The media pipeline (see `docs/ROADMAP.md`).
   still transmitted when Opus shrinks it to a single byte — dropping it would
   punch a hole at the receiver, and a hole there widens the jitter buffer by
   2 chunks, which would pay for the saved bandwidth in conversation delay.
+
+  **Auto-gain** (`AutoGain`) is the next stage, after suppression and *instead
+  of* the sensitivity slider — never on top of it, since the slider is what
+  displays the result and multiplying the two would close a feedback loop
+  through the UI. It answers a different question than the denoiser: not "is
+  this voice", but "is it the loudness the far end should get". Target is a
+  fixed −20 dBFS on the envelope, which measures out at ≈ −23 dBov of
+  long-term speech; it is deliberately not a setting, being exactly the knob
+  nobody knows how to turn and everybody can get wrong.
+
+  Three parts, all three load-bearing:
+  - The **slow part** walks the speech level to the target, and walks
+    asymmetrically: ~2 s upward (haste is audible as background swelling into
+    the gaps between phrases) against ~0.2 s downward (delay is audible as
+    clipping, which nothing downstream can undo). It moves in the **log
+    domain**, so a given coefficient means a fixed number of dB per second
+    regardless of where the gain currently sits; in linear gain the same
+    coefficient would crawl near unity and bolt near 8×.
+
+    "Speech level" here is an **envelope** — a recent maximum with a slow decay
+    — and never the RMS of the current frame. This is the one mistake that
+    broke the class outright, and the note is here so nobody re-derives it: the
+    first version was driven by per-frame RMS and crept to +17 dB on live
+    speech within twenty seconds. Inside a phrase the quiet frames *outnumber*
+    the loud ones — word tails, breaths, gaps between words — and the same VAD
+    marks them as speech, since its lower threshold exists precisely to stop
+    the highlight flickering on every breath. Each of those frames honestly
+    reports "20 dB short", and although the descent is nine times faster than
+    the climb, there are enough of them to drag the equilibrium to the ceiling.
+    A recent maximum has no such bias: it answers "how loudly is this person
+    speaking", not "how loud is this particular 20 ms". The envelope is
+    additionally only updated on frames that clear the noise floor by 12 dB —
+    the VAD flag alone would let a long stretch of speech-without-voice pull it
+    down, and the gain up after it.
+  - The **limiter** holds the peak. Gain raised for a quiet talker turns a
+    sudden laugh into Int16 overflow, so the frame's peak is measured *before*
+    the frame is amplified — 20 ms of look-ahead that costs nothing, because
+    the frame is already buffered whole. Both ends of the per-sample gain ramp
+    are clamped to what that peak allows, which makes the saturation in the
+    apply loop a guard rather than a mechanism. Attack is instant, release
+    ~0.1 s: an instant release would make the limiter itself the pumping.
+  - The **noise floor** caps how far the gain may rise (so a quiet room is not
+    pulled up until every fly is audible) and sets the bar a frame must clear
+    to count as voice at all. It is the minimum over a 150-frame window, taken
+    across **every** frame rather than only the pauses — and that distinction
+    is the whole point. Measuring it only where "there is no speech" makes it
+    depend on the speech detector, and it is needed precisely where the
+    detector is wrong: with suppression off and a window open, `SpeechGate`
+    read the street as speech, so pauses never occurred, the floor was never
+    measured, both limits switched off, and the gain climbed to the ceiling
+    amplifying the street — seen in the field at 1500 %. That configuration is
+    no longer reachable (auto-gain now requires suppression, below), but
+    nothing here got simpler: RNNoise is wrong too, just less often. Same
+    mistake as the first `SpeechGate`: "only update when the detector says X"
+    breaks exactly when the detector says X wrongly. Speech is intermittent enough
+    that a 3–6 s minimum lands in a gap between words anyway. The cap never
+    goes below unity: a noisy room is a reason not to amplify, not a reason to
+    make the person quieter.
+
+    Until the first window closes there is no floor — a minimum over three
+    frames is not a noise estimate — so for that first second **the gain is
+    held** at whatever it started from. That second is the only time both
+    limits are off, and quiet room noise is indistinguishable from a very
+    quiet person; letting the gain move would buy a 2.4× swell that the floor
+    then takes straight back.
+
+  The gain is applied as a **linear ramp inside the frame**, not as a step at
+  the frame boundary; fifty steps a second are audible as a rasp.
+
+  **The speech decision is what makes the whole thing possible**, and it is
+  already computed one line above for the highlight — RNNoise's probability
+  when suppression is on, `SpeechGate` when it is off. Without it auto-gain
+  reads a pause as "too quiet" and spends two seconds hoisting the noise floor
+  into the foreground; the gain is therefore frozen whenever speech is absent.
+  This is also why the level meter is measured twice per reported frame: once
+  before gain (that is what the gate and the AGC are asking about) and once
+  after (that is what the far end actually receives).
+
+  **Auto-gain requires noise suppression** and its switch is disabled without
+  it (`MediaSettings::autoGain` returns the choice *and* the permission). Not a
+  dependency for tidiness: with a live room floor the noise ceiling pins the
+  gain near unity, so the feature would switch on and do nothing, and a switch
+  that does nothing is worse than one that is visibly unavailable. The stored
+  choice is not overwritten — turning suppression back on restores auto-gain
+  with it. The cost of the rule is the clean-room case: someone with a quiet
+  room and a good mic who dislikes what RNNoise does to timbre now cannot have
+  auto-gain alone.
+
+  On the UI side the slider **becomes an indicator** while auto-gain is on:
+  non-interactive, driven by `MediaSettings::agcSensitivity`. That value is
+  runtime-only and never reaches QSettings — the gain is recomputed every 20 ms,
+  and persisting it would be fifty disk writes a second to store the reading of
+  a voltmeter. It is reported at ~10 Hz from the audio thread and rounded to the
+  slider's own 5 % step, and it reports the **slow part only**: a handle
+  following the limiter would show tremor instead of sensitivity. The scale
+  stays 0–200 %, so past 2× the handle sits pinned at the right edge while the
+  caption keeps printing the true figure.
 - **M3 Video receive** (`VideoEngine` + `VideoRecvWorker` + `VideoDecoder`) —
   FFmpeg (libavcodec) decode of H.264/HEVC/VP8/VP9/AV1, keyframe and
   `KEYFRAME_REQ` handling, render into tiles via `QVideoSink`. Decoding is
@@ -218,7 +315,7 @@ The media pipeline (see `docs/ROADMAP.md`).
   a focused window.
 
 - **M8 Settings** also owns the voice-processing switches in `SettingsAudio.qml`.
-  Only noise suppression is wired; **echo cancellation and auto-gain are still
+  Noise suppression and auto-gain are wired; **echo cancellation is still
   `soon: true`**, and that is not laziness about a "better denoiser". An echo
   canceller is a different problem: it needs a second, reference signal (what
   went to the speakers), an estimate of the round-trip delay, and non-linear

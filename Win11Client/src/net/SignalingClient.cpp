@@ -383,6 +383,22 @@ void SignalingClient::setScreenShare(bool on) {
     sendJson({ {"type","screen"}, {"on", on} });
 }
 
+QStringList SignalingClient::restartArgs(const QString& link) const {
+    if (m_roomCode.isEmpty()) return {};
+    QStringList a;
+    if (!m_name.isEmpty()) a << "--name" << m_name;
+    // Пароль храним и так — для повторного join после обрыва связи. Здесь он
+    // нужен ровно за тем же: перезапуск ради обновления с точки зрения комнаты
+    // ничем не отличается от разрыва.
+    if (!m_roomPass.isEmpty()) a << "--password" << m_roomPass;
+    if (!link.isEmpty()) {
+        a << link;                       // в ссылке уже есть и адрес, и ключ
+    } else {
+        a << "--server" << m_api->baseUrl() << "--room" << m_roomCode;
+    }
+    return a;
+}
+
 void SignalingClient::submitPassword(const QString& password) {
     m_roomPass = password;
     setError("");
