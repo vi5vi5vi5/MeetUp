@@ -39,11 +39,28 @@ void ConferenceRoom::broadcastJson(const QJsonObject &obj, ClientSession *except
             s->sendJson(obj);
 }
 
-void ConferenceRoom::broadcastBinary(const QByteArray &data, ClientSession *except) const
+// Ретрансляция медиакадра.
+//
+// dropIfBusy решает судьбу получателя, чей канал уже́ потока. Раньше выбора не
+// было: сервер отдавал кадр всем подряд, и у отстающего очередь росла без
+// границы — прямо в памяти сервера. Ронять её было некому, поэтому кадры
+// доезжали все, но со всё большим опозданием: через минуту такой демонстрации
+// человек смотрел прошлое и не мог понять, почему «интернет вроде есть».
+//
+// Ронять видеокадры при этом безопасно ровно потому, что приёмник умеет
+// попросить опорный (KEYFRAME_REQ): пропуск лечится сам и стоит секунды
+// заглушки вместо минуты растущего отставания. А вот звук и служебные
+// сообщения не роняем никогда — они мелкие, и терять их незачем.
+void ConferenceRoom::broadcastBinary(const QByteArray &data, ClientSession *except,
+                                     bool dropIfBusy) const
 {
-    for (ClientSession *s : m_sessions)
-        if (s != except)
-            s->sendBinary(data);
+    for (ClientSession *s : m_sessions) {
+        if (s == except)
+            continue;
+        if (dropIfBusy && s->pendingBytes() > kSlowClientBytes)
+            continue;
+        s->sendBinary(data);
+    }
 }
 
 QJsonArray ConferenceRoom::participantsJson() const

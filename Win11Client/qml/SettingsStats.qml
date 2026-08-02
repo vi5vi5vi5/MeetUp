@@ -23,6 +23,13 @@ Column {
         return many
     }
 
+    // Сколько миллисекунд отведено на кадр при такой частоте. Число само по
+    // себе бесполезно, а рядом с ценой кадра отвечает на весь вопрос: успевает
+    // машина или нет.
+    function frameBudget(fps) {
+        return fps > 0 ? (1000 / fps).toFixed(1) : "—"
+    }
+
     component Metric: Rectangle {
         id: cell
         property string caption: ""
@@ -182,6 +189,48 @@ Column {
             sub: Stats.syncHoldMs > 0 ? "картинка ждёт свой звук" : "видео идёт без задержки"
             idle: Stats.syncHoldMs === 0
         }
+        // Цена кадра. Смотреть сюда надо, когда картинка рвётся, а канал при
+        // этом свободен: в бюджет кадра (16.7 мс при 60 к/с, 33 при 30) обязаны
+        // укладываться оба числа, и пик — в первую очередь. Не укладывается —
+        // виноват не интернет, а машина.
+        Metric {
+            width: (parent.width - 10) / 2
+            caption: "Кодирование · экран"
+            value: Stats.txScrFormat === "" ? "—" : Stats.txScrEncodeMs.toFixed(1)
+            unit: Stats.txScrFormat === "" ? "" : "мс"
+            sub: Stats.txScrFormat === "" ? "демонстрации нет"
+               : "пик " + Stats.txScrEncodePeakMs.toFixed(1) + " мс · бюджет "
+                 + page.frameBudget(Stats.txScrFps) + " мс"
+            idle: Stats.txScrFormat === ""
+        }
+        Metric {
+            width: (parent.width - 10) / 2
+            caption: "Разбор · экран"
+            value: Stats.rxScrDecoder === "" ? "—" : Stats.rxScrDecodeMs.toFixed(1)
+            unit: Stats.rxScrDecoder === "" ? "" : "мс"
+            sub: Stats.rxScrDecoder === "" ? "чужой демонстрации нет"
+               : Stats.rxScrDecoder + " · пик "
+                 + Stats.rxScrDecodePeakMs.toFixed(1) + " мс"
+            idle: Stats.rxScrDecoder === ""
+        }
+        Metric {
+            width: (parent.width - 10) / 2
+            caption: "Кодирование · камера"
+            value: Stats.txCamFormat === "" ? "—" : Stats.txCamEncodeMs.toFixed(1)
+            unit: Stats.txCamFormat === "" ? "" : "мс"
+            sub: Stats.txCamFormat === "" ? "камера выключена"
+               : "бюджет " + page.frameBudget(Stats.txCamFps) + " мс"
+            idle: Stats.txCamFormat === ""
+        }
+        Metric {
+            width: (parent.width - 10) / 2
+            caption: "Разбор · камеры"
+            value: Stats.rxCamDecoder === "" ? "—" : Stats.rxCamDecodeMs.toFixed(1)
+            unit: Stats.rxCamDecoder === "" ? "" : "мс"
+            sub: Stats.rxCamDecoder === "" ? "камер участников не видно"
+                                           : Stats.rxCamDecoder
+            idle: Stats.rxCamDecoder === ""
+        }
     }
 
     // Пропуски отдельной строкой, а не клеткой: это не «сколько», а «почему»,
@@ -266,12 +315,24 @@ Column {
         lines.push("Голос: " + Stats.txVoiceKbps + " кбит/с")
         lines.push("Камера: " + (Stats.txCamFormat === "" ? "выключена"
                    : Stats.txCamFormat + " · " + Stats.txCamFps + " к/с · "
-                     + Stats.txCamKbps + " кбит/с · пропуск " + Stats.camDropPercent + "%"))
+                     + Stats.txCamKbps + " кбит/с · пропуск " + Stats.camDropPercent + "%"
+                     + " · кодирование " + Stats.txCamEncodeMs.toFixed(1) + " мс"
+                     + " при бюджете " + page.frameBudget(Stats.txCamFps) + " мс"))
         lines.push("Демонстрация: " + (Stats.txScrFormat === "" ? "нет"
                    : Stats.txScrFormat + " · " + Stats.txScrFps + " к/с · "
                      + Stats.txScrKbps + " кбит/с"
                      + (Stats.txScrAudio ? " (со звуком)" : "")
-                     + " · пропуск " + Stats.scrDropPercent + "%"))
+                     + " · пропуск " + Stats.scrDropPercent + "%"
+                     + " · кодирование " + Stats.txScrEncodeMs.toFixed(1) + " мс"
+                     + " (пик " + Stats.txScrEncodePeakMs.toFixed(1) + ")"
+                     + " при бюджете " + page.frameBudget(Stats.txScrFps) + " мс"))
+        // Приёмная сторона. Строка декодера здесь важнее прочего: программный
+        // разбор — самая частая причина рваной чужой картинки при живом канале.
+        lines.push("Разбор чужой демонстрации: " + (Stats.rxScrDecoder === "" ? "нет"
+                   : Stats.rxScrDecoder + " · " + Stats.rxScrDecodeMs.toFixed(1) + " мс"
+                     + " (пик " + Stats.rxScrDecodePeakMs.toFixed(1) + ")"))
+        lines.push("Разбор камер участников: " + (Stats.rxCamDecoder === "" ? "нет"
+                   : Stats.rxCamDecoder + " · " + Stats.rxCamDecodeMs.toFixed(1) + " мс"))
         lines.push("Подстройка под звук: " + Stats.syncHoldMs + " мс")
         lines.push("Настройки: камера " + AV.camQuality
                    + ", экран " + (AV.screenRes === "src" ? "источник" : AV.screenRes + "p")

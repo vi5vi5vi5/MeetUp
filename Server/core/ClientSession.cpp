@@ -35,6 +35,13 @@ void ClientSession::sendBinary(const QByteArray &data)
     m_socket->sendBinaryMessage(data);
 }
 
+qint64 ClientSession::pendingBytes() const
+{
+    // Сервер за TLS не отвечает — его терминирует nginx перед нами, — поэтому
+    // здесь обычный TCP, и bytesToWrite() показывает ровно то, что нужно.
+    return m_socket->bytesToWrite();
+}
+
 void ClientSession::close()
 {
     m_socket->close();

@@ -6,6 +6,7 @@
 #include <atomic>
 
 class QWebSocket;
+class QTimer;
 
 // Транспорт сигналинга: одно WebSocket-соединение с комнатой, живущее на
 // ОТДЕЛЬНОМ потоке. Состояние комнаты (участники, чат, фазы) осталось в
@@ -30,6 +31,8 @@ public:
     // ---- читается с ЛЮБОГО потока ----
     bool isConnected() const { return m_connected.load(std::memory_order_relaxed); }
     // Неотправленный остаток в сокете (байты) — backpressure §5.5.
+    // Про то, почему это не просто «сколько положили минус сколько ушло», —
+    // см. комментарий у m_wireQueued в .cpp.
     qint64 bufferedBytes() const { return m_buffered.load(std::memory_order_relaxed); }
     // Входящие байты: прочитать и обнулить. Так их забирает MediaStats раз в
     // секунду — считать их сигналом на каждый кадр значило бы будить GUI-поток
@@ -63,9 +66,16 @@ signals:
 private:
     void onBinary(const QByteArray& frame);
     void detachSocket();        // отвязать и отпустить текущий сокет
+    void resyncQueue();         // снять накопленную ошибку оценки (см. .cpp)
 
     QWebSocket* m_ws = nullptr;
     std::atomic<bool>   m_connected{ false };
     std::atomic<qint64> m_buffered{ 0 };
     std::atomic<qint64> m_rxBytes{ 0 };
+    // Всё, что относится к оценке очереди, живёт на потоке транспорта и
+    // атомиками не защищено: пишут только слоты этого объекта.
+    qint64 m_wireQueued = 0;    // положили в сокет, но ОС ещё не забрала
+    qint64 m_wirePut = 0;       // …то же за окно ресинхрона: сколько положили
+    qint64 m_wireOut = 0;       // …и сколько за то же окно ушло
+    qint64 m_resyncAt = 0;      // когда сверялись в последний раз
 };

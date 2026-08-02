@@ -113,6 +113,13 @@ private:
     struct Held {
         QVideoFrame frame;
         qint64 ts = 0;                 // метка отправителя, мс
+        qint64 at = 0;                 // когда придержали (локальные мс)
+    };
+
+    // Ограничитель просьб об опорном кадре — свой на каждую полосу.
+    struct KeyReq {
+        qint64 lastAt = 0;             // когда отправили последнюю
+        QTimer* timer = nullptr;       // отложенная просьба (см. requestKeyframe)
     };
 
     // Приёмная сторона одного участника. Декодер и нормализатор пикселей живут
@@ -136,7 +143,9 @@ private:
     void onJoinOk();
     void onLeft();
     void sweepStale();                 // сторож: >5 с без кадров — заглушка
-    void requestKeyframe();            // KEYFRAME_REQ, не чаще 1 раза в секунду
+    // KEYFRAME_REQ по одной полосе, не чаще раза в секунду. band —
+    // Proto::VIDEO_CODED или Proto::SCREEN_CODED.
+    void requestKeyframe(quint8 band);
     // Готовый кадр от воркера -> плитка. screen выбирает и полосу
     // (камера/экран), и то, какой сигнал уйдёт в QML.
     void onDecoded(QHash<quint32, Peer>& peers, quint32 sender,
@@ -158,7 +167,11 @@ private:
     void stopCapture();
     void restartCapture();             // смена камеры/качества на лету
     void onCamFrame(const QVideoFrame& frame);
-    void forceKeyframe();              // пометить следующий кадр опорным (≤1 в 500 мс)
+    // Пометить следующий кадр полосы опорным (≤1 в 500 мс). Полос две, и
+    // просьба про одну из них не должна поднимать вторую: опорный кадр
+    // демонстрации весит в сотню раз больше кадра камеры.
+    void forceKeyframe(quint8 band);
+    void forceKeyframeAll();           // обе полосы (новичок в комнате, реконнект)
     void setPreviewActive(bool on);
 
     // ---- демонстрация экрана (отправка) ----
@@ -187,6 +200,9 @@ private:
     void complainCodec(quint8 band, quint8 codec);
     // Кодировщик полосы открылся: какой кодек и какой кадр — в «Диагностику».
     void noteEncoderOpened(bool screen, int codec, int width, int height, bool hardware);
+    // …и то же про декодер входящей полосы. Числа расходятся: вещаем мы одним
+    // кодеком, а принимаем тем, который выбрал отправитель.
+    void noteDecoderOpened(bool screen, int codec, int width, int height, bool hardware);
 
     SignalingClient* m_conf;           // не владеем
     MediaSettings* m_settings;         // не владеем
@@ -195,8 +211,8 @@ private:
     MediaStats* m_stats;               // не владеем: складываем туда числа
     QHash<quint32, Peer> m_peers;      // ключ — sender из заголовка кадра
     QHash<quint32, Peer> m_screenPeers;    // та же схема для полосы экрана
-    qint64 m_lastKeyReqAt = 0;
-    QTimer* m_keyReqTimer = nullptr;   // просьба, отложенная ограничителем частоты
+    KeyReq m_keyReqCam, m_keyReqScr;
+    KeyReq& keyReq(bool screen) { return screen ? m_keyReqScr : m_keyReqCam; }
     int m_attachSeq = 0;               // выдаёт номера привязок
     int m_previewToken = 0;            // текущая привязка self-превью
     int m_scrPreviewToken = 0;         // …и превью своей демонстрации
@@ -233,7 +249,7 @@ private:
     bool m_camOn = false;              // тумблер камеры (по умолчанию выкл.)
     bool m_previewActive = false;
     bool m_keyNext = false;            // форсировать опорный на следующем кадре
-    qint64 m_lastForceAt = 0;          // rate-limit форс-keyframe (500 мс)
+    qint64 m_lastForceCamAt = 0;       // rate-limit форс-keyframe (500 мс)
     // Срок следующего кадра, а не «когда был прошлый». Разница не косметическая:
     // при пороге «прошло не меньше периода» кадр, приехавший на пару миллисекунд
     // раньше срока, выбрасывался ЦЕЛИКОМ, и следующий приезжал только через
@@ -271,6 +287,7 @@ private:
     VideoSendWorker* m_scrWorker = nullptr;         // живёт на m_scrThread
     bool m_screenPreviewActive = false;
     bool m_scrKeyNext = false;
+    qint64 m_lastForceScrAt = 0;       // см. m_lastForceCamAt
     qint64 m_scrNextDueMs = 0;         // см. m_nextDueMs
     // Срок следующего кадра ПРЕВЬЮ своей демонстрации. Раньше превью писалось
     // до гейта частоты, то есть на каждый кадр захвата: при настройке «5 к/с»

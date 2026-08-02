@@ -431,7 +431,11 @@ void ConferenceServer::onBinary(ClientSession *session, const QByteArray &data)
     out.append(char((id >> 24) & 0xFF));
     out.append(data.mid(1));                // flags(1) + codec(1) + timestamp_ms(8) + payload
 
-    room->broadcastBinary(out, session);
+    // Видео можно не досылать тому, кто захлебнулся; звук и служебные кадры
+    // (просьба об опорном, жалоба на кодек) идут всегда.
+    const bool video = (type == kMsgVideoCoded || type == kMsgVideoJpeg
+                        || type == kMsgScreenCoded || type == kMsgScreenJpeg);
+    room->broadcastBinary(out, session, video);
 }
 
 void ConferenceServer::onDisconnected(ClientSession *session)

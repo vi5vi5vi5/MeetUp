@@ -191,16 +191,37 @@ The media pipeline (see `docs/ROADMAP.md`).
   publishes **two** playhead maps (voice and screen) and the video engine picks
   by band. The cursor does not pay for this: the screen playhead exists only
   while screen audio is actually flowing, and otherwise reads 0, which paints
-  immediately as before. Queue depth is 16 frames for screen against 12 for
-  camera — the hold is a duration, and 60 fps fits fewer milliseconds into the
-  same frame count than 24 fps does; the cap stays counted in frames rather
-  than milliseconds because a 4K NV12 frame is 12 MB and "1200 ms at 60 fps"
-  would be most of a gigabyte.
+  immediately as before.
+
+  **Overflow paints, it does not drop.** The queue is capped by a memory budget
+  (`kHoldBudgetBytes`, 64 MB per peer per band — a 4K NV12 frame is 12 MB, so
+  "16 frames" means wildly different things at 720p and at 4K) and by wall
+  duration (`kSyncHoldMaxMs`). When either cap is hit, the head goes **to the
+  sink**, not to the bin. Dropping it was a trap that cost the whole screen
+  share: the head is the frame due next, so once the hold exceeded the queue's
+  capacity — 267 ms at 60 fps with the old 16-frame cap — *every* frame was
+  evicted before it ripened and the picture stopped entirely, while bytes kept
+  arriving at full bitrate and the sender reported 0 % drops. Now the cap is a
+  ceiling on compensation rather than a cliff: past it the picture runs with
+  the sync error the queue could not absorb, which is the right trade. A stalled
+  playhead is covered too — `drainHeld` releases anything held longer than
+  `kSyncHoldMaxMs` regardless of what the audio clock says.
 - **M4 Video send** (`VideoEngine` + `VideoEncoder`) — `QCamera` → sws_scale →
-  encoder, even dimensions, keyframe every ~72 frames + forced on
-  `KEYFRAME_REQ` / `participant_joined` → v2 packets, with backpressure (drop
-  video frames above 1.5 MB queued in the socket). Self tile gets the raw
-  camera preview.
+  encoder, even dimensions, keyframe every 3 s (camera) or 30 s (screen) plus
+  forced on `KEYFRAME_REQ` / `participant_joined` → v2 packets, with
+  backpressure (drop video frames above 1.5 MB queued in the socket). Self tile
+  gets the raw camera preview.
+
+  **The cadence is a clock, not a frame count**, and `KEYFRAME_REQ` names its
+  band. Both are the same lesson from opposite ends: a screen keyframe is a
+  quarter-megabyte burst, so who triggers it and how often has to be
+  predictable. Counting frames made the period depend on the rate — "every 900
+  frames" is 15 s at 60 fps and a minute at 15. And a bandless request meant one
+  stalled camera receiver asking once a second fired a *screen* keyframe too,
+  which congested the link, stalled the audio behind it, made that receiver
+  worse, and had it ask again. The band travels as one byte of the payload;
+  an empty payload still means "both bands", which is what the web client sends
+  and what it understands.
 
   **There is no codec setting, in either band.** There was one, and removing it
   was a measurement result: a full sweep of every codec this build can encode,

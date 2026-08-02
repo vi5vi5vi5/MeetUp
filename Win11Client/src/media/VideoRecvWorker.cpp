@@ -3,6 +3,7 @@
 #include "../net/Protocol.h"
 #include "../crypto/E2eCipher.h"
 #include <QVideoFrameFormat>
+#include <QElapsedTimer>
 #include <QImage>
 #include <QTimer>
 #include <QDateTime>
@@ -37,6 +38,14 @@ void VideoRecvWorker::dropDecoder(Peer& p) {
     delete p.dec;
     p.dec = nullptr;
     if (p.sws) { sws_freeContext(p.sws); p.sws = nullptr; }
+    // Измерения относились к прошлому декодеру: у нового может быть и другой
+    // кодек, и другой размер кадра, и другой ответ про видеокарту.
+    p.announced = false;
+    p.decEmaUs = 0;
+    p.ivlEmaMs = 0;
+    p.prevAt = 0;
+    p.slowRun = 0;
+    p.complainedSlow = false;
 }
 
 void VideoRecvWorker::reset() {
@@ -79,7 +88,7 @@ void VideoRecvWorker::setWanted(quint32 sender, bool wanted) {
     // просим опорный кадр сразу, а не ждём общей каденции до трёх секунд.
     if (wanted && (!p.dec || p.awaitKey)) {
         setAwaitKey(p, sender, true);
-        emit keyframeNeeded();
+        emit keyframeNeeded(m_codedType);
     }
 }
 
@@ -114,13 +123,8 @@ void VideoRecvWorker::onFrame(const QByteArray& d) {
         // Раньше такой кадр отбрасывался молча, и это было худшим из
         // возможных поведений: у нас пусто, а отправитель уверен, что всё
         // хорошо. Теперь жалуемся — движок передаст жалобу ему, и он вернётся
-        // на кодек, который понимают все. Не чаще раза в две секунды: кадры
-        // идут потоком, а сообщение нужно одно.
-        const qint64 now = QDateTime::currentMSecsSinceEpoch();
-        if (now - m_lastCodecComplaintMs > 2000) {
-            m_lastCodecComplaintMs = now;
-            emit codecUnsupported(f.codec);
-        }
+        // на кодек, который понимают все.
+        complain(f.codec);
         return;
     }
 
@@ -158,6 +162,59 @@ void VideoRecvWorker::setLocked(Peer& p, quint32 sender, bool locked) {
     emit peerLocked(qint64(sender), locked);
 }
 
+void VideoRecvWorker::complain(quint8 codec) {
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (now - m_lastCodecComplaintMs <= 2000) return;
+    m_lastCodecComplaintMs = now;
+    emit codecUnsupported(codec);
+}
+
+// «Понимаю, но не тяну» — жалоба той же дорогой, что и «не понимаю вовсе».
+//
+// Разница между этими случаями есть, а вот последствие у них одно: зритель
+// остаётся без картинки. Программный разбор HEVC 1080p60 стоит 13 мс среднего
+// при выбросах под 108 — в кадровый бюджет 16.7 мс это не влезает, очередь
+// кадров начинает расти, и отставание уже не отдать: оно живёт до конца
+// потока. Отправитель по этой жалобе спустится на ступень (HEVC -> H.264 у
+// экрана, VP9 -> H.264 у камеры), а H.264 разбирает железом почти любая
+// машина — то есть лечится ровно то, что сломано.
+//
+// Жалуемся ТОЛЬКО про кодеки, ниже которых на лестнице есть куда идти.
+// Пожаловаться на H.264 или VP8 значило бы попросить отправителя перейти на
+// VP8, который ещё тяжелее, — то есть сделать хуже.
+void VideoRecvWorker::checkPace(Peer& p, quint8 codec, qint64 decUs, qint64 now) {
+    // Видеокарта разбирает — вопроса нет; ей эти кадры стоят доли миллисекунды.
+    if (p.complainedSlow || !p.dec || p.dec->isHardware()) return;
+    if (codec != Proto::CODEC_HEVC && codec != Proto::CODEC_AV1
+        && codec != Proto::CODEC_VP9) return;
+
+    p.decEmaUs = p.decEmaUs > 0 ? p.decEmaUs * 0.9 + double(decUs) * 0.1
+                                : double(decUs);
+    if (p.prevAt) {
+        const qint64 ivl = now - p.prevAt;
+        // Пауза длиннее секунды — это не «медленно», а «кадров не было»
+        // (статичный экран, свёрнутое окно): в среднее её брать нельзя.
+        if (ivl > 0 && ivl < 1000)
+            p.ivlEmaMs = p.ivlEmaMs > 0 ? p.ivlEmaMs * 0.9 + double(ivl) * 0.1
+                                        : double(ivl);
+    }
+    p.prevAt = now;
+    if (p.ivlEmaMs <= 0) return;
+
+    // Порог в 70 % интервала, а не 100: впритык — это уже поздно. Кадры
+    // приходят неровно, и полоса, съедающая семь десятых бюджета в среднем,
+    // на всплесках гарантированно копит очередь.
+    if (p.decEmaUs > p.ivlEmaMs * 1000.0 * 0.7) ++p.slowRun;
+    else                                        p.slowRun = 0;
+    if (p.slowRun < 90) return;                  // полторы секунды на 60 к/с
+
+    p.complainedSlow = true;
+    qWarning() << "VideoRecvWorker: кодек" << codec << "разбирается процессором"
+               << int(p.decEmaUs / 1000) << "мс при интервале"
+               << int(p.ivlEmaMs) << "мс — просим отправителя спуститься";
+    complain(codec);
+}
+
 void VideoRecvWorker::routeCoded(quint32 sender, quint8 flags, quint8 codec,
                                  quint64 ts, const QByteArray& payload) {
     Peer& p = m_peers[sender];
@@ -175,15 +232,26 @@ void VideoRecvWorker::routeCoded(quint32 sender, quint8 flags, quint8 codec,
     if (!p.dec || p.dec->codec() != codec) {
         dropDecoder(p);
         p.dec = new VideoDecoder;
-        if (!p.dec->open(codec)) { delete p.dec; p.dec = nullptr; return; }
+        if (!p.dec->open(codec)) {
+            // Кодек из списка известных, а декодера под него в сборке FFmpeg
+            // не оказалось. Раньше здесь стоял молчаливый выход — то есть тот
+            // самый худший случай, ради которого и заводили CODEC_UNSUPPORTED:
+            // у нас пусто, а отправитель уверен, что всё хорошо.
+            delete p.dec;
+            p.dec = nullptr;
+            complain(codec);
+            return;
+        }
         setAwaitKey(p, sender, true);
     }
 
     // Дельта-кадры до опорного — мусор: молча дропаем и просим keyframe.
     const bool isKey = (flags & Proto::FLAG_KEYFRAME) != 0;
-    if (p.awaitKey && !isKey) { emit keyframeNeeded(); return; }
+    if (p.awaitKey && !isKey) { emit keyframeNeeded(m_codedType); return; }
     setAwaitKey(p, sender, false);
 
+    QElapsedTimer clock;
+    clock.start();
     const AVFrame* frame = p.dec->decode(payload, ts);
 
     // Декодер сломался (битый поток?) — правило §5.4: пересоздать и ждать
@@ -191,14 +259,27 @@ void VideoRecvWorker::routeCoded(quint32 sender, quint8 flags, quint8 codec,
     if (p.dec->failed()) {
         dropDecoder(p);
         setAwaitKey(p, sender, true);
-        emit keyframeNeeded();
+        emit keyframeNeeded(m_codedType);
         return;
     }
     if (!frame) return;
 
     const QVideoFrame vf = convert(p, frame);
+    // Приведение пикселей считаем частью разбора: для зрителя это одна работа,
+    // и разносить её по двум числам значило бы прятать половину цены кадра.
+    const qint64 decUs = clock.nsecsElapsed() / 1000;
     if (!vf.isValid()) return;
-    p.lastAt = QDateTime::currentMSecsSinceEpoch();
+
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    p.lastAt = now;
+    // Аппаратность известна только после первого разобранного кадра — вот
+    // здесь и говорим, чем на самом деле разбираем.
+    if (!p.announced) {
+        p.announced = true;
+        emit decoderOpened(codec, frame->width, frame->height, p.dec->isHardware());
+    }
+    emit frameDecoded(decUs);
+    checkPace(p, codec, decUs, now);
     emit frameReady(sender, vf, qint64(ts));
 }
 

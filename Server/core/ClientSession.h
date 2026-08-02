@@ -54,6 +54,11 @@ public:
     void sendJson(const QJsonObject &obj);
     void sendBinary(const QByteArray &data);
 
+    // Сколько байт мы уже отдали сокету, а он ещё не сумел отправить. Это
+    // единственная честная мера того, поспевает ли КОНКРЕТНЫЙ получатель:
+    // канал у всех разный, а релеим мы всем одно и то же.
+    qint64 pendingBytes() const;
+
     // Вежливое закрытие сокета; disconnected придёт обычным путём.
     void close();
 

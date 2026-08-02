@@ -58,7 +58,11 @@ public:
 
     // Рассылка всем участникам; except (если задан) пропускается.
     void broadcastJson(const QJsonObject &obj, ClientSession *except = nullptr) const;
-    void broadcastBinary(const QByteArray &data, ClientSession *except = nullptr) const;
+    // dropIfBusy — можно ли пропустить это сообщение у получателя, который не
+    // успевает его забирать. Для видеокадров можно и нужно (см. .cpp), для
+    // звука и служебного — нельзя.
+    void broadcastBinary(const QByteArray &data, ClientSession *except = nullptr,
+                         bool dropIfBusy = false) const;
 
     // [{ "id": ..., "name": ..., "mic": ..., "cam": ... }, ...] по участникам.
     QJsonArray participantsJson() const;
@@ -83,4 +87,12 @@ private:
     // сообщений могла бы держать сотни мегабайт на комнату. Старые картинки
     // вытесняются (imageDropped), текст сообщений остаётся.
     static constexpr int kMaxHistoryImages = 24;
+
+    // Сколько неотправленного у получателя означает «он не поспевает». Порог
+    // не берётся из воздуха: полтора мегабайта — это около полутора секунд
+    // демонстрации на 8 Мбит/с, то есть заведомо больше любого разумного
+    // всплеска (даже опорный кадр 4K вчетверо меньше) и заведомо меньше того,
+    // что имеет смысл досылать: видео полуторасекундной давности не нужно
+    // никому. См. broadcastBinary.
+    static constexpr qint64 kSlowClientBytes = 1500000;
 };

@@ -23,6 +23,32 @@
 // Затор в сокете, после которого кадры КАМЕРЫ пропускаются (§5.5).
 static const qint64 kMaxBuffered = 1500000;
 
+// Синхронизация картинки со звуком: границы удержания.
+//
+// Ниже kSyncHoldMinMs держать нечего — столько кадр всё равно провисит в
+// очереди отрисовки. Выше kSyncHoldMaxMs — это уже не рассинхрон, а сбитые
+// часы или чужая шкала времени, и правильный ответ там «рисуй немедленно».
+static const qint64 kSyncHoldMinMs = 30;
+static const qint64 kSyncHoldMaxMs = 1200;
+
+// Сколько памяти отдаём под придержанные кадры ОДНОЙ полосы одного участника.
+//
+// Считать очередь в кадрах, как было раньше, нельзя: кадр 720p в NV12 весит
+// 1.4 МБ, а 4К — 12.4 МБ, и «шестнадцать кадров» означает в этих двух случаях
+// 22 МБ или 200. Считаем в байтах, а число кадров получается само.
+static const qint64 kHoldBudgetBytes = 64 * 1024 * 1024;
+
+// Сколько кадров влезает в этот бюджет. Нижняя граница — чтобы очередь была
+// осмысленной даже на кадре величиной с монитор; верхняя — чтобы на мелком
+// кадре не набрать очередь, которую всё равно нечем наполнить.
+static int holdCap(const QVideoFrame& vf) {
+    // NV12 и YUV420P — полтора байта на пиксель; других форматов сюда не
+    // приходит (см. VideoRecvWorker::convert).
+    const qint64 frameBytes =
+        qMax<qint64>(1, qint64(vf.width()) * qMax(1, vf.height()) * 3 / 2);
+    return int(qBound<qint64>(4LL, kHoldBudgetBytes / frameBytes, 32LL));
+}
+
 // Ступени качества демонстрации — множители пресетного битрейта.
 //
 // Ступени дискретные, а не плавная регулировка, и вот почему: сменить битрейт
@@ -72,10 +98,19 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
             [this](quint32 sender, const QVideoFrame& vf, qint64 ts) {
                 onDecoded(m_screenPeers, sender, vf, ts, true);
             });
-    // Ограничитель частоты просьб об опорном кадре общий на обе полосы —
-    // поэтому просят они через нас, а не сами.
+    // Ограничитель частоты просьб об опорном кадре живёт здесь, а не в
+    // воркерах: он свой на каждую полосу, но отправляет-то их один транспорт.
     connect(m_recv, &VideoRecvWorker::keyframeNeeded, this, &VideoEngine::requestKeyframe);
     connect(m_scrRecv, &VideoRecvWorker::keyframeNeeded, this, &VideoEngine::requestKeyframe);
+    // Сколько стоит разбор чужого кадра и чем мы его разбираем — в «Диагностику».
+    connect(m_recv, &VideoRecvWorker::frameDecoded, this,
+            [this](qint64 us) { m_stats->noteDecodeTime(false, us); });
+    connect(m_scrRecv, &VideoRecvWorker::frameDecoded, this,
+            [this](qint64 us) { m_stats->noteDecodeTime(true, us); });
+    connect(m_recv, &VideoRecvWorker::decoderOpened, this,
+            [this](int c, int w, int h, bool hw) { noteDecoderOpened(false, c, w, h, hw); });
+    connect(m_scrRecv, &VideoRecvWorker::decoderOpened, this,
+            [this](int c, int w, int h, bool hw) { noteDecoderOpened(true, c, w, h, hw); });
     // Не поняли чужой кодек — говорим об этом вслух: сервер разошлёт жалобу
     // всем, и вещающий сам вернётся на понятный всем H.264.
     connect(m_recv, &VideoRecvWorker::codecUnsupported, this,
@@ -106,7 +141,8 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
     connect(conf, &SignalingClient::phaseChanged,      this, &VideoEngine::onPhase);
     connect(conf, &SignalingClient::localStateChanged, this, &VideoEngine::onLocalState);
     // Новичок в комнате не должен ждать опорный кадр до 3 с (§4.2).
-    connect(conf, &SignalingClient::participantJoined, this, [this](qint64) { forceKeyframe(); });
+    connect(conf, &SignalingClient::participantJoined, this,
+            [this](qint64) { forceKeyframeAll(); });
     // Смена камеры или пресета качества — перезапуск захвата на лету.
     connect(settings, &MediaSettings::camIdChanged,      this, &VideoEngine::restartCapture);
     connect(settings, &MediaSettings::camQualityChanged, this, &VideoEngine::restartCapture);
@@ -159,6 +195,10 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
             [this](int bytes) { m_stats->noteTxVideo(false, bytes); });
     connect(m_scrWorker, &VideoSendWorker::packetSent, this,
             [this](int bytes) { m_stats->noteTxVideo(true, bytes); });
+    connect(m_worker, &VideoSendWorker::frameEncoded, this,
+            [this](qint64 us) { m_stats->noteEncodeTime(false, us); });
+    connect(m_scrWorker, &VideoSendWorker::frameEncoded, this,
+            [this](qint64 us) { m_stats->noteEncodeTime(true, us); });
     // Кодировщик открылся: кодек и размер кадра — в «Диагностику». Спрашивать
     // об этом настройки нельзя: там «Авто», а кадр может быть меньше пресета,
     // если камера столько не даёт.
@@ -208,10 +248,15 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
     connect(m_staleTimer, &QTimer::timeout, this, &VideoEngine::sweepStale);
     m_staleTimer->start();
 
-    // Отложенная просьба об опорном кадре (см. requestKeyframe).
-    m_keyReqTimer = new QTimer(this);
-    m_keyReqTimer->setSingleShot(true);
-    connect(m_keyReqTimer, &QTimer::timeout, this, &VideoEngine::requestKeyframe);
+    // Отложенная просьба об опорном кадре — своя на полосу (см. requestKeyframe).
+    m_keyReqCam.timer = new QTimer(this);
+    m_keyReqCam.timer->setSingleShot(true);
+    connect(m_keyReqCam.timer, &QTimer::timeout, this,
+            [this] { requestKeyframe(Proto::VIDEO_CODED); });
+    m_keyReqScr.timer = new QTimer(this);
+    m_keyReqScr.timer->setSingleShot(true);
+    connect(m_keyReqScr.timer, &QTimer::timeout, this,
+            [this] { requestKeyframe(Proto::SCREEN_CODED); });
 
     // Насос придержанных кадров (синхронизация губ). Работает только когда
     // есть что придерживать — в тишине не тикает.
@@ -362,6 +407,10 @@ void VideoEngine::detachScreen(qint64 id, int token) {
     if (token != it->token) return;
     it->sink = nullptr;
     it->token = 0;
+    // Придержанное — в мусор, как и у камеры (см. detach). Без этой строки
+    // кадры оставались висеть после того, как сцену свернули: рисовать их уже
+    // некуда, а держат они больше всех — до 64 МБ на участника.
+    it->holdQ.clear();
     tellWanted(true, quint32(id), false);
 }
 
@@ -401,12 +450,18 @@ void VideoEngine::resetPeers() {
     for (auto it = m_screenPeers.begin(); it != m_screenPeers.end(); ++it) {
         Peer& p = it.value();
         p.awaitKey = true;
+        // Кадры прошлой сессии несут метки прошлой шкалы: после реконнекта их
+        // lead выходит отрицательным, и они выплеснулись бы на сцену все разом
+        // — приветом из прошлого поверх начавшейся заново демонстрации.
+        p.holdQ.clear();
         if (p.active) {
             p.active = false;
             emit screenVideoChanged(qint64(it.key()), false);
         }
         if (p.sink) tellWanted(true, it.key(), true);
     }
+    m_stats->noteRxOff(false);
+    m_stats->noteRxOff(true);
 }
 
 // Каждый join_ok — в т.ч. РЕКОННЕКТ: декодеры отстали от потока навсегда,
@@ -456,36 +511,60 @@ void VideoEngine::onParticipantLeft(qint64 id) {
 // здесь остаётся только видимая часть: убрать с плитки застывший кадр.
 void VideoEngine::sweepStale() {
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    bool anyCam = false, anyScr = false;
     for (auto it = m_peers.begin(); it != m_peers.end(); ++it) {
         Peer& p = it.value();
-        if (!p.active || now - p.lastFrameAt <= 5000) continue;
-        p.active = false;
-        emit videoChanged(qint64(it.key()), false);
+        if (p.active && now - p.lastFrameAt > 5000) {
+            p.active = false;
+            emit videoChanged(qint64(it.key()), false);
+        }
+        anyCam = anyCam || p.active;
     }
     // Демонстрация на «Эко» идёт 5 к/с, но и там пауза в 5 с означает обрыв.
     for (auto it = m_screenPeers.begin(); it != m_screenPeers.end(); ++it) {
         Peer& p = it.value();
-        if (!p.active || now - p.lastFrameAt <= 5000) continue;
-        p.active = false;
-        emit screenVideoChanged(qint64(it.key()), false);
+        if (p.active && now - p.lastFrameAt > 5000) {
+            p.active = false;
+            emit screenVideoChanged(qint64(it.key()), false);
+        }
+        anyScr = anyScr || p.active;
     }
+    // Полосу нам больше не шлют — стереть строку декодера в «Диагностике»:
+    // «HEVC (аппаратный)» под пустой сценой читается как «идёт приём».
+    if (!anyCam) m_stats->noteRxOff(false);
+    if (!anyScr) m_stats->noteRxOff(true);
 }
 
 // ---------- приём ----------
 
-void VideoEngine::requestKeyframe() {
+// Просьба об опорном кадре ОДНОЙ полосы.
+//
+// Полоса едет в payload одним байтом — той же раскладкой, что у
+// CODEC_UNSUPPORTED. Это обратно совместимо в обе стороны: веб-клиент лишний
+// байт не читает и поднимет опорный кадр везде, как и раньше, а мы, получив
+// просьбу без байта, поступим так же (см. onBinaryFrame).
+//
+// Зачем разделять. Опорный кадр демонстрации 1080p — до четверти мегабайта,
+// кадр камеры — единицы килобайт. Пока просьба была общей, любая заминка у
+// приёмника камеры раз в секунду вышибала из отправителя четвертьмегабайтный
+// кадр экрана: канал захлёбывался, звук за ним вставал, приёмнику становилось
+// хуже — и он просил снова. Петля держалась, пока демонстрацию не перезапустят.
+void VideoEngine::requestKeyframe(quint8 band) {
+    const bool screen = (band == Proto::SCREEN_CODED);
+    KeyReq& rq = keyReq(screen);
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    const qint64 wait = 1000 - (now - m_lastKeyReqAt);
+    const qint64 wait = 1000 - (now - rq.lastAt);
     if (wait > 0) {
         // Не чаще раза в секунду (как веб) — но и НЕ терять просьбу: плитка,
         // родившаяся сразу после чужой просьбы, иначе ждала бы опорный кадр
         // по общей каденции, то есть до трёх секунд чёрного прямоугольника.
-        if (!m_keyReqTimer->isActive()) m_keyReqTimer->start(int(wait));
+        if (!rq.timer->isActive()) rq.timer->start(int(wait));
         return;
     }
-    m_lastKeyReqAt = now;
-    // Пустой payload, codec 0, ts 0 (§5.3). Сервер разошлёт всем вещающим.
-    m_conf->sendBinary(Proto::pack(Proto::KEYFRAME_REQ, 0, 0, 0, QByteArray()));
+    rq.lastAt = now;
+    // codec 0, ts 0 (§5.3), полоса — в payload. Сервер разошлёт всем вещающим.
+    m_conf->sendBinary(Proto::pack(Proto::KEYFRAME_REQ, 0, 0, 0,
+                                   QByteArray(1, char(band))));
 }
 
 // Из транспорта сюда доезжает только служебное: кадры видео разбирают воркеры
@@ -493,7 +572,13 @@ void VideoEngine::requestKeyframe() {
 void VideoEngine::onBinaryFrame(const QByteArray& d) {
     Proto::FrameV2 f;
     if (!Proto::unpack(d, f)) return;
-    if (f.type == Proto::KEYFRAME_REQ) { forceKeyframe(); return; }
+    if (f.type == Proto::KEYFRAME_REQ) {
+        // Пустой payload — просьба от того, кто полос не различает (веб или
+        // наша прошлая версия): поднимаем обе, как раньше.
+        if (f.payload.isEmpty()) forceKeyframeAll();
+        else                     forceKeyframe(quint8(f.payload.at(0)));
+        return;
+    }
     if (f.type == Proto::CODEC_UNSUPPORTED) {
         const quint8 band = f.payload.isEmpty() ? quint8(Proto::VIDEO_CODED)
                                                 : quint8(f.payload.at(0));
@@ -567,25 +652,37 @@ void VideoEngine::onDecoded(QHash<quint32, Peer>& peers, quint32 sender,
                     : screen   ? m_audio->screenPlayheadMs(sender)
                                : m_audio->playheadMs(sender);
     const qint64 lead = ph ? tsMs - ph : 0;
-    if (lead > 30 && lead < 1200) {
+    if (lead > kSyncHoldMinMs && lead < kSyncHoldMaxMs) {
         m_stats->noteSyncHold(lead);      // на столько картинка ждёт свой звук
-        p.holdQ.append({ vf, tsMs });
-        // Глубина очереди у полос разная, и считать её надо в миллисекундах, а
-        // не в кадрах. Держим мы на время буфера звука (прибл. 60 мс запаса
-        // джиттера плюс столько же в звуковой карте), а сколько это кадров —
-        // зависит от частоты: у камеры на 24 к/с это три-четыре кадра, у
-        // демонстрации на 60 к/с — восемь. Прежние 12 на двоих подходили
-        // камере и были тесноваты экрану: переполнение выбрасывает САМЫЙ
-        // СТАРЫЙ кадр, то есть тот, который вот-вот показывать.
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        p.holdQ.append({ vf, tsMs, now });
+
+        // Переполнение очереди отдаёт голову НА ОТРИСОВКУ, а не в мусор.
         //
-        // Верхнюю границу всё же держим в кадрах, а не во времени: кадр 4К в
-        // NV12 весит 12 МБ, и очередь «на 1200 мс» при 60 к/с — это почти
-        // гигабайт. Переполнение не ломает картинку, а лишь роняет отдельные
-        // кадры, оставляя её в согласии со звуком, — это приемлемая расплата,
-        // а гигабайт нет.
-        const int cap = screen ? 16 : 12;
-        while (p.holdQ.size() > cap) p.holdQ.removeFirst();
-        if (!m_holdTimer->isActive()) m_holdTimer->start();
+        // Здесь была ловушка, стоившая демонстрации целиком. Очередь
+        // ограничивалась числом кадров, а лишний кадр выбрасывался с головы —
+        // то есть ровно тот, который вот-вот показывать. Пока удержание
+        // укладывалось в ёмкость очереди, это работало; стоило ему её
+        // превысить — и кадр вылетал РАНЬШЕ, чем доживал до своего звука.
+        // Каждый. То есть не «часть кадров терялась», а картинка вставала
+        // насовсем: на 60 к/с и 16 кадрах ёмкость — 267 мс, а буфер звука на
+        // неровной сети спокойно доходит до 300–400.
+        //
+        // Снаружи это выглядело так: байты идут на полном битрейте, отправитель
+        // не роняет ни кадра, а у зрителя частота почти нулевая и сцена через
+        // пять секунд гаснет сторожем. Ровно та жалоба, с которой всё началось.
+        //
+        // Теперь ёмкость очереди — это ПОТОЛОК компенсации, а не обрыв: кадр,
+        // не дождавшийся звука, всё равно уходит на экран, просто раньше
+        // срока. Рассинхрон на десятки миллисекунд человек в худшем случае
+        // заметит; пропавшую картинку он не заметить не может.
+        const int cap = holdCap(vf);
+        while (p.holdQ.size() > cap
+               || p.holdQ.last().ts - p.holdQ.first().ts > kSyncHoldMaxMs) {
+            const Held h = p.holdQ.takeFirst();
+            paint(p, sender, h.frame, screen);
+        }
+        if (!p.holdQ.isEmpty() && !m_holdTimer->isActive()) m_holdTimer->start();
         return;
     }
 
@@ -610,7 +707,8 @@ void VideoEngine::paint(Peer& p, quint32 sender, const QVideoFrame& vf, bool scr
 // свой, и их запасы не совпадают.
 void VideoEngine::drainHeld() {
     bool anyLeft = false;
-    const auto drain = [this, &anyLeft](QHash<quint32, Peer>& peers, bool screen) {
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const auto drain = [this, now, &anyLeft](QHash<quint32, Peer>& peers, bool screen) {
         for (auto it = peers.begin(); it != peers.end(); ++it) {
             Peer& p = it.value();
             while (!p.holdQ.isEmpty()) {
@@ -620,7 +718,12 @@ void VideoEngine::drainHeld() {
                 // Звук пропал (мик выключили, звук экрана отключили) — держать
                 // больше не за что: ph == 0 обнуляет lead, и кадр уходит.
                 const qint64 lead = ph ? p.holdQ.first().ts - ph : 0;
-                if (lead > 30) break;                  // ещё рано
+                // Клапан на случай замерших часов звука: отправитель залип, а
+                // пакеты его прошлой секунды всё ещё подпирают playhead — и
+                // кадр ждёт события, которого уже не будет. Ждать дольше
+                // верхней границы удержания незачем ни при каких обстоятельствах.
+                if (lead > kSyncHoldMinMs
+                    && now - p.holdQ.first().at < kSyncHoldMaxMs) break;
                 const Held h = p.holdQ.takeFirst();
                 paint(p, it.key(), h.frame, screen);
             }
@@ -715,17 +818,23 @@ void VideoEngine::setPreviewActive(bool on) {
     emit previewActiveChanged();
 }
 
-// Просьба прислать опорный кадр (KEYFRAME_REQ, новичок, реконнект).
-// Rate-limit 500 мс — как у веба: спам запросов не роняет битрейт.
-void VideoEngine::forceKeyframe() {
-    if (!m_camera && !m_scrCapturing) return;
+// Нас попросили прислать опорный кадр (KEYFRAME_REQ, новичок, реконнект).
+// Rate-limit 500 мс на полосу — как у веба: спам запросов не роняет битрейт.
+void VideoEngine::forceKeyframe(quint8 band) {
+    const bool screen = (band == Proto::SCREEN_CODED);
+    // Полосой не вещаем — и поднимать нечего.
+    if (screen ? !m_scrCapturing : !m_camera) return;
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    if (now - m_lastForceAt < 500) return;
-    m_lastForceAt = now;
-    // Просьба одна на обе полосы: сервер рассылает KEYFRAME_REQ всем вещающим,
-    // и новичку одинаково нужны и опорный кадр камеры, и опорный кадр экрана.
-    m_keyNext = true;
-    m_scrKeyNext = true;
+    qint64& last = screen ? m_lastForceScrAt : m_lastForceCamAt;
+    if (now - last < 500) return;
+    last = now;
+    (screen ? m_scrKeyNext : m_keyNext) = true;
+}
+
+// Новичок вошёл в комнату — ему нужны опорные кадры всех полос сразу (§4.2).
+void VideoEngine::forceKeyframeAll() {
+    forceKeyframe(Proto::VIDEO_CODED);
+    forceKeyframe(Proto::SCREEN_CODED);
 }
 
 void VideoEngine::onCamFrame(const QVideoFrame& frame) {
@@ -920,6 +1029,19 @@ void VideoEngine::noteEncoderOpened(bool screen, int codec, int width, int heigh
         ? QStringLiteral("%1 (аппаратный)").arg(codecName(codec))
         : codecName(codec);
     m_stats->noteEncoder(screen, name, width, height);
+}
+
+// Чем разбираем чужую картинку. Здесь пометка про видеокарту стоит дороже, чем
+// на отправке: кодек выбирали не мы, а разбирать придётся нам, и программный
+// HEVC 1080p60 в кадровый бюджет не укладывается. Человеку, у которого «всё
+// дёргается», эта строка отвечает на вопрос сразу — а заодно объясняет
+// соседнее число, сколько миллисекунд стоит кадр.
+void VideoEngine::noteDecoderOpened(bool screen, int codec, int width, int height,
+                                    bool hardware) {
+    const QString name = hardware
+        ? QStringLiteral("%1 (аппаратный)").arg(codecName(codec))
+        : QStringLiteral("%1 (процессор)").arg(codecName(codec));
+    m_stats->noteDecoder(screen, name, width, height);
 }
 
 // Курсор дорисовывается только при показе МОНИТОРА (у захвата окна он свой) и

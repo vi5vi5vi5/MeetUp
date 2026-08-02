@@ -77,6 +77,12 @@ private:
     // и никто бы не понял, откуда он берётся.
     static constexpr quint8 kMsgScreenAudio = 8;
 
+    // Полосы видео. Их — и только их — можно уронить у получателя, который не
+    // успевает забирать (см. ConferenceRoom::broadcastBinary): пропущенный
+    // кадр он починит просьбой об опорном, а звук чинить нечем.
+    static constexpr quint8 kMsgVideoJpeg = 1;
+    static constexpr quint8 kMsgVideoCoded = 3;
+
     // Потолок картинки в чате (base64): клиент ужимает до ~480 тыс. символов,
     // лимит с запасом на накладные расходы E2E-шифрования.
     static constexpr int kMaxChatImageB64 = 600000;

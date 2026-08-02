@@ -3,6 +3,7 @@
 #include "../net/Protocol.h"
 #include "../crypto/E2eCipher.h"
 #include <QVideoFrameFormat>
+#include <QElapsedTimer>
 #include <QImage>
 #include <QThread>
 #include <QtMath>
@@ -44,17 +45,18 @@ static AVPixelFormat toAvPixFmt(QVideoFrameFormat::PixelFormat f) {
 
 VideoSendWorker::VideoSendWorker(quint8 msgType, E2eCipher* cipher, QObject* parent)
     : QObject(parent), m_msgType(msgType), m_cipher(cipher),
-      // Камера — опорный кадр раз в ~3 с (72 кадра при 24 к/с), как у веба.
+      // Каденс задан ВРЕМЕНЕМ, а не числом кадров, и это не косметика. Пока он
+      // считался кадрами (900 у экрана), реальный период зависел от частоты:
+      // «раз в тридцать секунд» превращалось в пятнадцать на 60 к/с и в минуту
+      // на 15 к/с. Всплеск в четверть мегабайта на канале, который и так еле
+      // тянет, надо ставить по часам — тогда он предсказуем.
       //
-      // Экран — раз в ~30 с (900 кадров при 30 к/с). Здесь было 240, то есть
-      // каждые восемь секунд, и это регулярно вредило: опорный кадр экрана —
-      // до четверти мегабайта, он одним всплеском пробивал порог затора, после
-      // чего кадры выбрасывались пачкой. А нужен он редко: транспорт у нас TCP,
-      // по дороге не теряется ничего, и приёмнику опорный кадр требуется только
-      // на входе в комнату (шлём сразу) или если его декодер сбился (просит
-      // сам, KEYFRAME_REQ). Тридцать секунд оставлены страховкой на случай, когда
-      // просьба почему-то не дошла, — чтобы картинка починилась сама.
-      m_keyEvery(msgType == Proto::SCREEN_CODED ? 900 : 72) {}
+      // Камера — раз в 3 с, как у веба. Экран — раз в 30 с: опорный кадр ему
+      // нужен редко (транспорт TCP, по дороге не теряется ничего), а
+      // приёмнику он требуется на входе в комнату (шлём сразу) или когда его
+      // декодер сбился — тогда он просит сам, KEYFRAME_REQ. Тридцать секунд
+      // оставлены страховкой на случай, если просьба почему-то не дошла.
+      m_keyEveryMs(msgType == Proto::SCREEN_CODED ? 30000 : 3000) {}
 
 VideoSendWorker::~VideoSendWorker() {
     delete m_enc;
@@ -67,8 +69,8 @@ void VideoSendWorker::reset() {
     if (m_sws) { sws_freeContext(m_sws); m_sws = nullptr; }
     m_swsSrcW = m_swsSrcH = m_swsDstW = m_swsDstH = 0;
     m_swsSrcFmt = m_swsDstFmt = -1;
-    m_frames = 0;
     m_keyNext = true;
+    m_lastKeyAtMs = 0;
     m_sendStartMs = 0;
     // Измерение частоты относится к прошлому потоку кадров: у нового источника
     // (другой монитор, другой пресет) она своя, и тащить туда старое среднее
@@ -175,10 +177,16 @@ void VideoSendWorker::setCodecStep(int step) {
 }
 
 // Обёртка: что бы внутри ни случилось, счётчик занятости должен вернуться к
-// нулю, — иначе движок перестанет слать кадры совсем.
+// нулю, — иначе движок перестанет слать кадры совсем. Здесь же засекаем цену
+// кадра: мерить надо снаружи encodeFrame, чтобы в замер попали ВСЕ его ранние
+// выходы, — иначе кадр, на котором кодировщик переоткрывался, в статистику не
+// попал бы, а он-то как раз и самый дорогой.
 void VideoSendWorker::encode(const QVideoFrame& frame, int maxW, int maxH,
                              int fps, int bitrate, bool forceKey, qint64 tsMs) {
+    QElapsedTimer clock;
+    clock.start();
     encodeFrame(frame, maxW, maxH, fps, bitrate, forceKey, tsMs);
+    emit frameEncoded(clock.nsecsElapsed() / 1000);
     m_inFlight.fetch_sub(1, std::memory_order_release);
 }
 
@@ -238,7 +246,7 @@ void VideoSendWorker::encodeFrame(const QVideoFrame& frame, int maxW, int maxH,
         m_openedBitrate = bitrate;
         m_openedAtMs = tsMs;
         emit encoderOpened(m_enc->protoCodec(), tw, th, m_enc->isHardware());
-        m_frames = 0;
+        m_lastKeyAtMs = 0;             // свежий кодировщик начинает с опорного
         m_keyNext = true;
     }
     if (forceKey) m_keyNext = true;
@@ -278,9 +286,10 @@ void VideoSendWorker::encodeFrame(const QVideoFrame& frame, int maxW, int maxH,
         sws_scale(m_sws, data, stride, 0, img.height(), dst->data, dst->linesize);
     }
 
-    const bool key = m_keyNext || (m_frames % m_keyEvery == 0);
+    const bool key = m_keyNext || m_lastKeyAtMs == 0
+                  || tsMs - m_lastKeyAtMs >= m_keyEveryMs;
     m_keyNext = false;
-    m_frames++;
+    if (key) m_lastKeyAtMs = tsMs;
 
     // PTS кодера — своя монотонная шкала; наружу в заголовке уходит время
     // съёмки (Date.now() отправителя) — общая шкала с аудио, по ней приёмник
