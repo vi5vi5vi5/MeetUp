@@ -95,6 +95,7 @@ qt_add_executable(Win11Client
     src/MediaSettings.cpp
     src/ScreenSources.cpp
     src/GlobalHotkeys.cpp
+    src/HotkeySpec.cpp
     src/net/ApiClient.cpp
     src/net/AuthController.cpp
     src/net/RoomController.cpp

@@ -1,10 +1,14 @@
 import QtQuick
 import MeetUp
 
-// Захват горячей клавиши. Клик по полю переводит его в «слушаю»: следующая
-// нажатая комбинация становится биндом. Backspace/Delete очищают, Esc отменяет.
-// Пока слушаем, onShortcutOverride перехватывает даже клавиши, которые иначе
-// сработали бы как глобальные сочетания (например F11), чтобы записать именно их.
+// Захват горячей клавиши. Клик по полю переводит его в «слушаю»: следующее
+// сочетание становится биндом. Backspace/Delete очищают, Esc отменяет.
+//
+// Само сочетание собирает не QML, а Hotkeys из сырого ввода: событие Qt не
+// различает сторону клавиши и об одиноком модификаторе не сообщает вовсе, а
+// «правый Ctrl» отдельным биндом — ровно то, ради чего всё и сделано. Отсюда
+// и порядок: аккорд из модификаторов приходит сигналом captured() на
+// отпускании, сочетание с обычной клавишей — сразу на нажатии.
 Item {
     id: kb
     property string label: ""
@@ -14,6 +18,12 @@ Item {
     width: parent ? parent.width : 0
     height: 38
     property bool listening: false
+
+    // Выйти из режима назначения, не назначив ничего.
+    function stopListening() {
+        Hotkeys.stopCapture()
+        kb.listening = false
+    }
 
     Text {
         anchors.left: parent.left
@@ -43,8 +53,8 @@ Item {
             width: parent.width - 20
             horizontalAlignment: Text.AlignHCenter
             elide: Text.ElideRight
-            text: kb.listening ? "Нажмите клавишу…"
-                : (kb.value !== "" ? kb.value : "Не задано")
+            text: kb.listening ? "Нажмите сочетание…"
+                : (kb.value !== "" ? Hotkeys.label(kb.value) : "Не задано")
             color: kb.listening ? Theme.accentInk
                 : (kb.value !== "" ? Theme.text : Theme.textFaint)
             font.family: Theme.uiFont
@@ -56,20 +66,29 @@ Item {
         Keys.onPressed: function (event) {
             if (!kb.listening) return
             event.accepted = true
-            if (event.key === Qt.Key_Escape) { kb.listening = false; return }
+            if (event.key === Qt.Key_Escape) { kb.stopListening(); return }
             if (event.key === Qt.Key_Backspace || event.key === Qt.Key_Delete) {
-                kb.picked(""); kb.listening = false; return
+                kb.stopListening(); kb.picked("")
             }
-            var seq = AV.sequenceFromEvent(event.key, event.modifiers)
-            if (seq !== "") { kb.picked(seq); kb.listening = false }
-            // одинокий модификатор/зарезервированная клавиша — ждём дальше
+            // Всё остальное соберёт Hotkeys — здесь его только не мешаем.
         }
         // Потерял фокус, не дослушав, — выходим из режима захвата.
-        onActiveFocusChanged: if (!activeFocus) kb.listening = false
+        onActiveFocusChanged: if (!activeFocus && kb.listening) kb.stopListening()
+
+        Connections {
+            target: Hotkeys
+            function onCaptured(seq) {
+                if (!kb.listening) return
+                kb.listening = false
+                kb.picked(seq)
+            }
+        }
 
         TapHandler {
             gesturePolicy: TapHandler.ReleaseWithinBounds
-            onTapped: { kb.listening = true; box.forceActiveFocus() }
+            // Фокус забираем ПЕРВЫМ: если слушало соседнее поле, оно потеряет
+            // фокус и снимет захват — сделай мы это после, оно сняло бы наш.
+            onTapped: { box.forceActiveFocus(); kb.listening = true; Hotkeys.startCapture() }
         }
         HoverHandler { cursorShape: Qt.PointingHandCursor }
     }

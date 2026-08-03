@@ -1,8 +1,8 @@
 #include "MediaSettings.h"
+#include "HotkeySpec.h"
 #include <QMediaDevices>
 #include <QSettings>
 #include <QDateTime>
-#include <QKeySequence>
 #include <QtMath>
 
 // Идентификатор устройства в настройках: id() устройства — бинарный QByteArray,
@@ -67,9 +67,12 @@ MediaSettings::MediaSettings(QObject* parent) : QObject(parent) {
     m_screenAudio = s.value("screenAudio", false).toBool();
     m_screenVolume = qBound(0, s.value("screenVolume", 100).toInt(), 200);
     m_uiSounds = s.value("uiSounds", true).toBool();
-    m_keyMic = s.value("keyMic").toString();
-    m_keySound = s.value("keySound").toString();
-    m_keyCam = s.value("keyCam").toString();
+    // Через normalize — в файле может лежать текст QKeySequence от прежней
+    // версии ("Ctrl+D", "Num+5"); что переносится, то переносится, остальное
+    // молча очищается и назначается заново.
+    m_keyMic = HotkeySpec::normalize(s.value("keyMic").toString());
+    m_keySound = HotkeySpec::normalize(s.value("keySound").toString());
+    m_keyCam = HotkeySpec::normalize(s.value("keyCam").toString());
     s.endGroup();
 
     // Горячее подключение/отключение устройств: списки в модалке живые.
@@ -260,37 +263,29 @@ void MediaSettings::setScreenVolume(int v) {
     save("screenVolume", v);
     emit screenVolumeChanged();
 }
+// Бинды приводим к каноническому виду на входе, а не при чтении: так в файле
+// настроек и в интерфейсе всегда одно и то же написание, откуда бы значение ни
+// пришло (см. HotkeySpec).
 void MediaSettings::setKeyMic(const QString& s) {
-    if (m_keyMic == s) return;
-    m_keyMic = s;
-    save("keyMic", s);
+    const QString v = HotkeySpec::normalize(s);
+    if (m_keyMic == v) return;
+    m_keyMic = v;
+    save("keyMic", v);
     emit keyMicChanged();
 }
 void MediaSettings::setKeySound(const QString& s) {
-    if (m_keySound == s) return;
-    m_keySound = s;
-    save("keySound", s);
+    const QString v = HotkeySpec::normalize(s);
+    if (m_keySound == v) return;
+    m_keySound = v;
+    save("keySound", v);
     emit keySoundChanged();
 }
 void MediaSettings::setKeyCam(const QString& s) {
-    if (m_keyCam == s) return;
-    m_keyCam = s;
-    save("keyCam", s);
+    const QString v = HotkeySpec::normalize(s);
+    if (m_keyCam == v) return;
+    m_keyCam = v;
+    save("keyCam", v);
     emit keyCamChanged();
-}
-
-QString MediaSettings::sequenceFromEvent(int key, int modifiers) const {
-    switch (key) {
-    case Qt::Key_Control: case Qt::Key_Shift: case Qt::Key_Alt:
-    case Qt::Key_Meta:    case Qt::Key_AltGr: case Qt::Key_unknown:
-    case Qt::Key_Escape:  case Qt::Key_F11:      // Esc/F11 держат полный экран
-        return QString();                         // одинокий модификатор — не бинд
-    default: break;
-    }
-    // Модификатор не обязателен — можно назначить одну клавишу. Пока окно в
-    // фокусе, бинды глушатся при вводе в чат, а глобально пользователь сам
-    // выбирает свободную клавишу (нумпад, F-клавиша…).
-    return QKeySequence(key | modifiers).toString(QKeySequence::PortableText);
 }
 
 void MediaSettings::setAudioQuality(const QString& q) {

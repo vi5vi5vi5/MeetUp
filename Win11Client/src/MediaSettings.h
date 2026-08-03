@@ -87,8 +87,9 @@ class MediaSettings : public QObject {
     // Звуки интерфейса: тумблеры, входящее сообщение, приход и уход участников.
     // По умолчанию включены — это подтверждение действия, а не украшение.
     Q_PROPERTY(bool uiSounds READ uiSounds WRITE setUiSounds NOTIFY uiSoundsChanged)
-    // Горячие клавиши (M8): переносимый текст QKeySequence ("Ctrl+D", "M", …);
-    // пустая строка — клавиша не назначена. Слушает ConferenceScreen.
+    // Горячие клавиши (M8): текст бинда в собственном формате — "RCtrl",
+    // "RCtrl+RShift", "Ctrl+D", "F9" (разбор и правила в src/HotkeySpec.h).
+    // Пустая строка — клавиша не назначена. Слушают GlobalHotkeys и настройки.
     Q_PROPERTY(QString keyMic   READ keyMic   WRITE setKeyMic   NOTIFY keyMicChanged)
     Q_PROPERTY(QString keySound READ keySound WRITE setKeySound NOTIFY keySoundChanged)
     Q_PROPERTY(QString keyCam   READ keyCam   WRITE setKeyCam   NOTIFY keyCamChanged)
@@ -155,11 +156,6 @@ public:
     void setKeyMic(const QString& s);
     void setKeySound(const QString& s);
     void setKeyCam(const QString& s);
-
-    // Собрать переносимый текст из клавиши и модификаторов, пришедших из
-    // QML-события (Qt::Key | Qt::KeyboardModifiers). Пусто — если это одинокий
-    // модификатор или зарезервированная клавиша (Esc/F11 держат полный экран).
-    Q_INVOKABLE QString sequenceFromEvent(int key, int modifiers) const;
 
     // ---- Для движков (не QML) ----
 
