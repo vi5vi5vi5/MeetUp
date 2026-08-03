@@ -57,6 +57,12 @@ class MediaStats : public QObject {
     // гадать. Пусто — эту полосу нам никто не шлёт.
     Q_PROPERTY(QString rxCamDecoder READ rxCamDecoder NOTIFY updated)
     Q_PROPERTY(QString rxScrDecoder READ rxScrDecoder NOTIFY updated)
+    // Кадры, принятые из сети, но ещё не разобранные. Ноль — декодер идёт
+    // вровень с потоком; устойчиво растущее число — он отстаёт, и всё, что
+    // здесь стоит, зритель увидит с этим опозданием. Рядом — сколько кадров
+    // выброшено, не дойдя до декодера (буфер приёма выключен).
+    Q_PROPERTY(int rxQueue READ rxQueue NOTIFY updated)
+    Q_PROPERTY(int rxDropped READ rxDropped NOTIFY updated)
 public:
     explicit MediaStats(SignalingClient* conf, QObject* parent = nullptr);
 
@@ -82,6 +88,8 @@ public:
     qreal rxScrDecodePeakMs() const { return m_scrDec.peak; }
     QString rxCamDecoder() const { return m_camDecoder; }
     QString rxScrDecoder() const { return m_scrDecoder; }
+    int rxQueue() const { return m_rxQueue; }
+    int rxDropped() const { return m_rxDropped; }
 
     // ---- со стороны движков ----
     void noteTxVideo(bool screen, int bytes);
@@ -99,6 +107,9 @@ public:
     // взялась ли за него видеокарта.
     void noteDecoder(bool screen, const QString& codec, int w, int h);
     void noteRxOff(bool screen);                // полосу нам больше не шлют
+    // Состояние очереди приёма — снимком раз в секунду: движок опрашивает
+    // атомики воркеров и приносит числа сюда (см. VideoEngine::sweepStale).
+    void noteRxQueue(int queued, int droppedSinceLast);
     // Видео придержано под свой звук. Счётчик общий на обе полосы: и губы под
     // микрофон, и картинка демонстрации под её фонограмму — механизм один и тот
     // же, а два числа в «Диагностике» разошлись бы там, где человеку нужно одно.
@@ -138,6 +149,9 @@ private:
     bool m_scrAudio = false, m_scrAudioSeen = false;
     Timing m_camEnc, m_scrEnc, m_camDec, m_scrDec;
     QString m_camDecoder, m_scrDecoder;
+    int m_rxQueue = 0;
+    int m_rxDropped = 0;       // за последнее окно
+    int m_rxDropAccum = 0;     // копится между тиками
 
     int m_rxFrames = 0;
     QSet<quint32> m_rxSenders;     // сколько разных потоков рисовалось за окно

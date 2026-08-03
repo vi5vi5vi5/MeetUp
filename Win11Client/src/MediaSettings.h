@@ -56,6 +56,26 @@ class MediaSettings : public QObject {
     // Дорисовывать ли курсор при показе монитора. Захват окна курсор рисует сам
     // (другой механизм), поэтому настройка влияет только на показ монитора.
     Q_PROPERTY(bool screenCursor READ screenCursor WRITE setScreenCursor NOTIFY screenCursorChanged)
+    // Кодек полосы: "auto" либо имя кодировщика из VideoEncoder::catalog()
+    // ("hevc_mf", "libvpx-vp9"…). Это ПРЕДПОЧТЕНИЕ, а не приказ: выбранный
+    // пробуется первым, но если он не открылся или получатель его не понял,
+    // работает обычная лестница — см. VideoEncoder::open. Проверять значение
+    // здесь незачем: незнакомое имя просто не найдётся в каталоге и молча
+    // означает «Авто».
+    Q_PROPERTY(QString screenCodec READ screenCodec WRITE setScreenCodec
+               NOTIFY screenCodecChanged)
+    Q_PROPERTY(QString camCodec READ camCodec WRITE setCamCodec NOTIFY camCodecChanged)
+    // Буферы конвейера. Включены — как было всегда: кадр, который не успели
+    // обработать, ждёт своей очереди. Выключены — такой кадр выбрасывается на
+    // месте, и отставание не может накопиться в принципе.
+    //
+    // Настройка нужна потому, что правильный ответ зависит от того, что важнее
+    // здесь и сейчас. Буфер сглаживает рывки на неровной сети и на тяжёлом
+    // кодеке; он же превращает разовую заминку в постоянное опоздание, которое
+    // уже не рассасывается — его видно, когда переключаешь кодек, а зритель
+    // ещё полминуты досматривает предыдущий.
+    Q_PROPERTY(bool rxBuffer READ rxBuffer WRITE setRxBuffer NOTIFY rxBufferChanged)
+    Q_PROPERTY(bool txBuffer READ txBuffer WRITE setTxBuffer NOTIFY txBufferChanged)
     // Передавать ли вместе с картинкой звук компьютера. По умолчанию выключено:
     // делиться звуком машины — осознанное решение, а не то, что включается само.
     Q_PROPERTY(bool screenAudio READ screenAudio WRITE setScreenAudio NOTIFY screenAudioChanged)
@@ -100,6 +120,14 @@ public:
     int screenFps() const { return m_screenFps; }
     QString screenBitrate() const { return m_screenBitrate; }
     bool screenCursor() const { return m_screenCursor; }
+    QString screenCodec() const { return m_screenCodec; }
+    void setScreenCodec(const QString& id);
+    QString camCodec() const { return m_camCodec; }
+    void setCamCodec(const QString& id);
+    bool rxBuffer() const { return m_rxBuffer; }
+    void setRxBuffer(bool on);
+    bool txBuffer() const { return m_txBuffer; }
+    void setTxBuffer(bool on);
     bool screenAudio() const { return m_screenAudio; }
     int screenVolume() const { return m_screenVolume; }
     bool uiSounds() const { return m_uiSounds; }
@@ -177,6 +205,10 @@ signals:
     void screenFpsChanged();
     void screenBitrateChanged();
     void screenCursorChanged();
+    void screenCodecChanged();
+    void camCodecChanged();
+    void rxBufferChanged();
+    void txBufferChanged();
     void screenAudioChanged();
     void screenVolumeChanged();
     void uiSoundsChanged();
@@ -202,6 +234,10 @@ private:
     int m_screenFps = 30;
     QString m_screenBitrate = "auto";
     bool m_screenCursor = true;
+    QString m_screenCodec = "auto";
+    QString m_camCodec = "auto";
+    bool m_rxBuffer = true;
+    bool m_txBuffer = true;
     bool m_screenAudio = false;
     int m_screenVolume = 100;
     bool m_uiSounds = true;

@@ -94,7 +94,11 @@ private:
     // %LOCALAPPDATA% — можно; установка в Program Files — нет, и об этом надо
     // сказать словами, а не молча свалиться на середине подмены.
     static bool canWriteToAppDir(QString* why);
+    // Запустится ли то, что мы собираемся поставить. Проверяется ДО подмены —
+    // на копии в распакованной папке (см. installAndRestart).
+    static bool binaryRuns(const QString& exePath);
 
+    bool m_installing = false;      // подмена уже идёт: второй раз нельзя
     QNetworkAccessManager* m_net;
     QTimer* m_poll;                 // редкая перепроверка: клиент живёт сутками
 

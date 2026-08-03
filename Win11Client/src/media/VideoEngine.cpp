@@ -1,6 +1,7 @@
 #include "VideoEngine.h"
 #include "VideoSendWorker.h"
 #include "VideoRecvWorker.h"
+#include "VideoEncoder.h"          // каталог кодировщиков для настроек
 #include "ScreenCapturer.h"
 #include "AudioEngine.h"
 #include "MediaStats.h"
@@ -16,9 +17,18 @@
 #include <QCameraFormat>
 #include <QMediaCaptureSession>
 #include <QThread>
+#include <QThreadPool>
+#include <QPointer>
 #include <QDateTime>
 #include <QTimer>
 #include <QDebug>
+
+#ifdef Q_OS_WIN
+#  define WIN32_LEAN_AND_MEAN
+#  define NOMINMAX
+#  include <windows.h>
+#  include <objbase.h>     // CoInitializeEx: апартамент для пробы кодировщиков
+#endif
 
 // Затор в сокете, после которого кадры КАМЕРЫ пропускаются (§5.5).
 static const qint64 kMaxBuffered = 1500000;
@@ -88,8 +98,31 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
     connect(m_scrRecvThread, &QThread::finished, m_scrRecv, &QObject::deleteLater);
 
     SignalingLink* link = conf->mediaLink();
-    connect(link, &SignalingLink::videoFrame, m_recv, &VideoRecvWorker::onFrame);
-    connect(link, &SignalingLink::videoFrame, m_scrRecv, &VideoRecvWorker::onFrame);
+    // Кадр из транспорта -> поток декодирования, но НЕ напрямую сигналом.
+    //
+    // Прямое соединение сигнал-слот здесь было единственной причиной, по
+    // которой приём мог отстать навсегда: очередь событий Qt ничем не
+    // ограничена, и кадры, которые декодер не успевает разбирать, копились в
+    // ней без счёта. Виднее всего это на кодеке потяжелее: переключаешь
+    // демонстрацию с AV1 обратно на HEVC, а зритель ещё полминуты досматривает
+    // AV1 — очередь-то никуда не делась.
+    //
+    // Поэтому решение «брать или не брать» принимается ЗДЕСЬ, на потоке
+    // транспорта, до постановки в очередь (VideoRecvWorker::offer). Разобрать
+    // очередь задним числом нельзя — в неё можно только не класть.
+    //
+    // Заодно расходятся полосы: раньше оба воркера получали все кадры и
+    // отбрасывали чужие сами, то есть каждый кадр демонстрации будил ещё и
+    // поток камеры.
+    connect(link, &SignalingLink::videoFrame, this, [this](const QByteArray& d) {
+        const quint8 type = d.isEmpty() ? 0 : quint8(d[0]);
+        const bool screen = (type == Proto::SCREEN_CODED || type == Proto::SCREEN_JPEG);
+        VideoRecvWorker* w = screen ? m_scrRecv : m_recv;
+        quint32 gen = 0;
+        if (!w->offer(&gen)) return;                 // кадр выброшен, не доехав
+        QMetaObject::invokeMethod(w, [w, d, gen] { w->onFrame(d, gen); },
+                                  Qt::QueuedConnection);
+    }, Qt::DirectConnection);
     connect(m_recv, &VideoRecvWorker::frameReady, this,
             [this](quint32 sender, const QVideoFrame& vf, qint64 ts) {
                 onDecoded(m_peers, sender, vf, ts, false);
@@ -227,8 +260,25 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
     //
     // Кадр приезжает с потока пула WGC — сюда queued, потому что дальше идут
     // превью (только GUI-поток) и пейсер.
-    connect(m_scrCapture, &ScreenCapturer::frameReady,
-            this, &VideoEngine::onScreenCapFrame, Qt::QueuedConnection);
+    // Кадр захвата -> GUI-поток, с тем же фильтром перед очередью, что и на
+    // приёме (см. подписку на videoFrame выше). Соединение прямое: решение
+    // «класть или не класть» обязано приниматься на потоке пула WGC, до того
+    // как кадр займёт место в очереди GUI. Кадр 4К весит 12 МБ, и десяток
+    // таких в очереди — это не только задержка, но и память.
+    connect(m_scrCapture, &ScreenCapturer::frameReady, this,
+            [this](const QVideoFrame& f) {
+                if (!m_capBuffered.load(std::memory_order_relaxed)
+                    && m_capInFlight.load(std::memory_order_acquire) > 0)
+                    return;                          // предыдущий ещё не разобран
+                m_capInFlight.fetch_add(1, std::memory_order_release);
+                const quint32 gen = m_capGeneration.load(std::memory_order_acquire);
+                QMetaObject::invokeMethod(this, [this, f, gen] {
+                    m_capInFlight.fetch_sub(1, std::memory_order_release);
+                    // Сброс случился, пока кадр стоял в очереди, — он мусор.
+                    if (gen != m_capGeneration.load(std::memory_order_acquire)) return;
+                    onScreenCapFrame(f);
+                }, Qt::QueuedConnection);
+            }, Qt::DirectConnection);
     connect(m_scrCapture, &ScreenCapturer::failed, this,
             [this](const QString& text) { failScreen(text); }, Qt::QueuedConnection);
     connect(m_scrCapture, &ScreenCapturer::suspendedChanged,
@@ -238,8 +288,16 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
     m_scrRepeatTimer = new QTimer(this);
     connect(m_scrRepeatTimer, &QTimer::timeout, this, &VideoEngine::onScreenRepeat);
 
-    // Ступени лестниц: воркерам они нужны до первого кадра.
+    // Кодек: выбор человека и ступень лестницы — воркерам до первого кадра.
+    connect(settings, &MediaSettings::screenCodecChanged, this, &VideoEngine::applyCodecChoice);
+    connect(settings, &MediaSettings::camCodecChanged, this, &VideoEngine::applyCodecChoice);
     applyCodecSteps();
+    applyCodecChoice();
+
+    // Буферы конвейера: приём и захват (см. applyBufferSettings).
+    connect(settings, &MediaSettings::rxBufferChanged, this, &VideoEngine::applyBufferSettings);
+    connect(settings, &MediaSettings::txBufferChanged, this, &VideoEngine::applyBufferSettings);
+    applyBufferSettings();
 
     // Сторож замёрзших плиток: раз в секунду проверяем, у кого кадры иссякли.
     // Работает всегда — вне конференции m_peers пуст, обход бесплатен.
@@ -533,6 +591,16 @@ void VideoEngine::sweepStale() {
     // «HEVC (аппаратный)» под пустой сценой читается как «идёт приём».
     if (!anyCam) m_stats->noteRxOff(false);
     if (!anyScr) m_stats->noteRxOff(true);
+
+    // Заодно снимаем состояние очереди приёма. Здесь, а не сигналом с потоков
+    // декодирования: числа атомарные, читаются откуда угодно, а будить
+    // GUI-поток на каждый кадр ради счётчика — ровно та работа, от которой
+    // весь медиапуть и уводили.
+    const int queued = (m_recv ? m_recv->queued() : 0)
+                     + (m_scrRecv ? m_scrRecv->queued() : 0);
+    const int dropped = (m_recv ? m_recv->takeDropped() : 0)
+                      + (m_scrRecv ? m_scrRecv->takeDropped() : 0);
+    m_stats->noteRxQueue(queued, dropped);
 }
 
 // ---------- приём ----------
@@ -1017,6 +1085,66 @@ void VideoEngine::applyCodecSteps() {
                                   Q_ARG(int, m_scrStep));
 }
 
+// Выбор человека уезжает той же дорогой и с тем же следствием: кодировщик
+// держит состояние потока кадров, поэтому смена значит его переоткрытие.
+void VideoEngine::applyCodecChoice() {
+    if (m_worker)
+        QMetaObject::invokeMethod(m_worker, "setCodecChoice", Qt::QueuedConnection,
+                                  Q_ARG(QString, m_settings->camCodec()));
+    if (m_scrWorker)
+        QMetaObject::invokeMethod(m_scrWorker, "setCodecChoice", Qt::QueuedConnection,
+                                  Q_ARG(QString, m_settings->screenCodec()));
+}
+
+// Что эта машина умеет кодировать на самом деле.
+//
+// Спрашиваем не сборку FFmpeg, а железо: имя «hevc_mf» есть всегда, а
+// видеокарта под него — далеко не всегда, и разница между этими двумя ответами
+// и есть весь смысл пробы.
+//
+// Своим одноразовым потоком, а не на потоке демонстрации, хотя апартамент COM
+// там уже нужного вида. Причина простая: открытие каждого пробного MFT — это
+// десятки миллисекунд, шесть пунктов складываются в треть секунды, и всё это
+// время поток демонстрации не кодировал бы кадры. Настройки открывают в том
+// числе ПОСРЕДИ показа — как раз чтобы что-нибудь в нём поправить.
+//
+// Апартамент поднимаем сами: Media Foundation отвечает только в MTA, а
+// GUI-поток Qt всегда STA и дал бы ложное «нет» на каждый аппаратный пункт.
+void VideoEngine::probeCodecs() {
+    if (m_codecsProbed || m_codecProbeRunning) return;
+    m_codecProbeRunning = true;
+    QPointer<VideoEngine> self(this);
+    QThreadPool::globalInstance()->start([self] {
+#ifdef Q_OS_WIN
+        const bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
+#endif
+        QVariantList found;
+        QStringList names;
+        for (const VideoEncoder::Option& o : VideoEncoder::catalog()) {
+            if (!VideoEncoder::probe(o.id)) continue;
+            QVariantMap m;
+            m["id"] = o.id;
+            m["label"] = o.label;
+            m["hardware"] = o.hardware;
+            found.append(m);
+            names << o.id;
+        }
+        qInfo() << "VideoEngine: кодировщики этой машины:"
+                << (names.isEmpty() ? QStringLiteral("ни одного") : names.join(", "));
+#ifdef Q_OS_WIN
+        if (com) CoUninitialize();
+#endif
+        if (!self) return;
+        QMetaObject::invokeMethod(self, [self, found] {
+            if (!self) return;
+            self->m_codecOptions = found;
+            self->m_codecsProbed = true;
+            self->m_codecProbeRunning = false;
+            emit self->codecOptionsChanged();
+        }, Qt::QueuedConnection);
+    });
+}
+
 void VideoEngine::noteEncoderOpened(bool screen, int codec, int width, int height,
                                     bool hardware) {
     // Чем вещаем на самом деле — нужно не только «Диагностике». По этому же
@@ -1132,6 +1260,43 @@ int VideoEngine::screenBitrate(int presetBitrate, qint64 nowMs, qint64* queueBud
                 << "битрейт" << int(presetBitrate * kScreenRateLevels[m_scrRateLevel]);
     }
     return target;
+}
+
+// ---------- буферы конвейера ----------
+
+// Тумблеры из настроек — тем, кто держит очереди. Приёму нужен вызов на его
+// потоке? Нет: setBuffered — атомик, он для того и сделан, чтобы его можно
+// было трогать откуда угодно, не дожидаясь, пока декодер освободится.
+void VideoEngine::applyBufferSettings() {
+    const bool rx = m_settings->rxBuffer();
+    if (m_recv) m_recv->setBuffered(rx);
+    if (m_scrRecv) m_scrRecv->setBuffered(rx);
+    m_capBuffered.store(m_settings->txBuffer(), std::memory_order_relaxed);
+}
+
+// Выбросить всё, что уже принято, но не разобрано. Опорный кадр воркер
+// попросит сам, увидев смену поколения, — просить его отсюда рано: очередь
+// ещё не разошлась, и просьба ушла бы раньше, чем в ней появится смысл.
+void VideoEngine::flushReceive() {
+    if (m_recv) m_recv->flush();
+    if (m_scrRecv) m_scrRecv->flush();
+    // Придержанное под звук — тоже прошлое, и его никто не разбирает: оно уже
+    // декодировано и просто ждёт своей метки времени. Раз мы объявили прошлое
+    // мусором, ждать его тем более незачем.
+    for (auto it = m_peers.begin(); it != m_peers.end(); ++it) it->holdQ.clear();
+    for (auto it = m_screenPeers.begin(); it != m_screenPeers.end(); ++it) it->holdQ.clear();
+    qInfo() << "VideoEngine: очередь приёма сброшена вручную";
+}
+
+// То же на своей стороне: кадры, которые захват успел наснимать, пока
+// конвейер стоял, отправлять уже поздно.
+void VideoEngine::flushCapture() {
+    m_capGeneration.fetch_add(1, std::memory_order_release);
+    // Пейсер тоже сдвигаем: следующий снятый кадр должен уйти немедленно, а не
+    // ждать срока, назначенного выброшенному.
+    m_scrNextDueMs = 0;
+    m_scrLastFrame = QVideoFrame();
+    qInfo() << "VideoEngine: очередь захвата сброшена вручную";
 }
 
 void VideoEngine::setScreenPreviewActive(bool on) {

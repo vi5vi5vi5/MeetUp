@@ -106,34 +106,84 @@ bool VideoEncoder::tryOpen(const Candidate& cand,
     m_hardware = cand.hardware;
     m_width = width;
     m_height = height;
-    qInfo() << "VideoEncoder:" << cand.name << width << "x" << height
-            << fps << "fps" << bitrate << "bps"
-            << (cand.hardware ? "(hardware)" : "(software)");
+    // Сообщает об открытии не эта функция, а open(): сюда заходит ещё и проба
+    // доступности (probe), и её попытки в логе выглядели бы как настоящие
+    // запуски кодировщика — шесть штук подряд при каждом открытии настроек.
     return true;
 }
 
+// Аппаратный H.264 и программный H.264 — ДВА кандидата с одним и тем же
+// кодеком протокола. Поэтому отбор идёт по имени кодировщика: будь он по
+// Proto::CODEC_*, второй H.264 отбрасывался бы как дубликат — то есть
+// запасного пути у аппаратного не осталось бы вовсе.
+static const VideoEncoder::Candidate kHevcHw{ "hevc_mf",     Proto::CODEC_HEVC, AV_PIX_FMT_NV12,    true };
+static const VideoEncoder::Candidate kAv1Hw { "av1_mf",      Proto::CODEC_AV1,  AV_PIX_FMT_NV12,    true };
+static const VideoEncoder::Candidate kH264Hw{ "h264_mf",     Proto::CODEC_H264, AV_PIX_FMT_NV12,    true };
+static const VideoEncoder::Candidate kH264Sw{ "libopenh264", Proto::CODEC_H264, AV_PIX_FMT_YUV420P, false };
+static const VideoEncoder::Candidate kVp9   { "libvpx-vp9",  Proto::CODEC_VP9,  AV_PIX_FMT_YUV420P, false };
+static const VideoEncoder::Candidate kVp8   { "libvpx",      Proto::CODEC_VP8,  AV_PIX_FMT_YUV420P, false };
+
+// Все кандидаты в одном месте — по нему же строится и список в настройках.
+static const VideoEncoder::Candidate* const kAll[] = {
+    &kHevcHw, &kAv1Hw, &kH264Hw, &kH264Sw, &kVp9, &kVp8
+};
+
+static const VideoEncoder::Candidate* findCandidate(const QString& id) {
+    if (id.isEmpty()) return nullptr;
+    for (const VideoEncoder::Candidate* c : kAll)
+        if (id == QLatin1String(c->name)) return c;
+    return nullptr;
+}
+
+// Подписи человеку. «Видеокарта» и «процессор» здесь — не украшение: это
+// главное, что отличает две строки с одинаковым названием кодека, и главное,
+// что влияет на цену кадра.
+const QList<VideoEncoder::Option>& VideoEncoder::catalog() {
+    static const QList<Option> list = {
+        { QStringLiteral("hevc_mf"),     QStringLiteral("HEVC · видеокарта"),
+          Proto::CODEC_HEVC, true },
+        { QStringLiteral("av1_mf"),      QStringLiteral("AV1 · видеокарта"),
+          Proto::CODEC_AV1,  true },
+        { QStringLiteral("h264_mf"),     QStringLiteral("H.264 · видеокарта"),
+          Proto::CODEC_H264, true },
+        { QStringLiteral("libopenh264"), QStringLiteral("H.264 · процессор"),
+          Proto::CODEC_H264, false },
+        { QStringLiteral("libvpx-vp9"),  QStringLiteral("VP9 · процессор"),
+          Proto::CODEC_VP9,  false },
+        { QStringLiteral("libvpx"),      QStringLiteral("VP8 · процессор"),
+          Proto::CODEC_VP8,  false },
+    };
+    return list;
+}
+
+// Кадр для пробы маленький и частота низкая: нас интересует, поднимется ли
+// кодировщик вообще, а не сколько он стоит. Открытие MFT — это десятки
+// миллисекунд, и умножать их на размер кадра незачем.
+bool VideoEncoder::probe(const QString& id) {
+    const Candidate* c = findCandidate(id);
+    if (!c) return false;
+    VideoEncoder enc;
+    return enc.tryOpen(*c, 640, 360, 30, 1000000);
+}
+
 bool VideoEncoder::open(int width, int height, int fps, int bitrate,
-                        bool screen, int step) {
+                        bool screen, int step, const QString& preferred) {
     close();
     width &= ~1;                             // чётные размеры — правило §5.5
     height &= ~1;
     if (width < 2 || height < 2) return false;
-
-    // Аппаратный H.264 и программный H.264 — ДВА кандидата с одним и тем же
-    // кодеком протокола. Поэтому отбор дальше идёт по имени кодировщика: будь
-    // он по Proto::CODEC_*, второй H.264 отбрасывался бы как дубликат — то
-    // есть запасного пути у аппаратного не осталось бы вовсе.
-    static const Candidate kHevcHw{ "hevc_mf",     Proto::CODEC_HEVC, AV_PIX_FMT_NV12,    true };
-    static const Candidate kH264Hw{ "h264_mf",     Proto::CODEC_H264, AV_PIX_FMT_NV12,    true };
-    static const Candidate kH264Sw{ "libopenh264", Proto::CODEC_H264, AV_PIX_FMT_YUV420P, false };
-    static const Candidate kVp9   { "libvpx-vp9",  Proto::CODEC_VP9,  AV_PIX_FMT_YUV420P, false };
-    static const Candidate kVp8   { "libvpx",      Proto::CODEC_VP8,  AV_PIX_FMT_YUV420P, false };
 
     QList<Candidate> order;
     const auto add = [&order](const Candidate& c) {
         for (const Candidate& x : order) if (qstrcmp(x.name, c.name) == 0) return;
         order.append(c);
     };
+
+    // Выбор человека — нулевая ступень, впереди всей лестницы. Со ступени
+    // первой и ниже его больше не пробуем: туда нас отправила жалоба
+    // получателя, то есть ровно на этот кодек кто-то и пожаловался.
+    if (step <= 0)
+        if (const Candidate* c = findCandidate(preferred)) add(*c);
 
     // Лестница кодеков. Ступенька — это не предпочтение, а ответ на конкретное
     // событие: получатель прислал «не понимаю такой кодек», и мы спускаемся на
@@ -171,8 +221,15 @@ bool VideoEncoder::open(int width, int height, int fps, int bitrate,
         add(kVp8);
     }
 
-    for (const Candidate& c : order)
-        if (tryOpen(c, width, height, fps, bitrate)) return true;
+    for (const Candidate& c : order) {
+        if (!tryOpen(c, width, height, fps, bitrate)) continue;
+        qInfo() << "VideoEncoder:" << c.name << width << "x" << height
+                << fps << "fps" << bitrate << "bps"
+                << (c.hardware ? "(hardware)" : "(software)")
+                << (preferred.isEmpty() ? "" : "выбран человеком:")
+                << (preferred.isEmpty() ? QString() : preferred);
+        return true;
+    }
 
     qWarning() << "VideoEncoder: в сборке FFmpeg нет ни одного пригодного энкодера";
     return false;

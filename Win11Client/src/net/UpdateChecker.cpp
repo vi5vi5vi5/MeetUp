@@ -18,6 +18,12 @@
 #include <QRegularExpression>
 #include <QDebug>
 
+#ifdef Q_OS_WIN
+#  define WIN32_LEAN_AND_MEAN
+#  define NOMINMAX
+#  include <windows.h>          // SetErrorMode: см. binaryRuns
+#endif
+
 #ifndef UPDATE_REPO
 #  define UPDATE_REPO ""      // форк без своего репозитория просто не проверяет
 #endif
@@ -344,11 +350,49 @@ bool UpdateChecker::canWriteToAppDir(QString* why) {
     return false;
 }
 
+// Запускается ли собранная папка. Проверяем самым дешёвым и самым надёжным
+// способом: просим новый exe подняться и сразу выйти (--selftest в main).
+// Дойти до этой точки он может, только если загрузились все библиотеки, на
+// которые он ссылается, и поднялся платформенный плагин Qt, — а неполный или
+// собранный другим китом пакет обновления ломается именно здесь.
+bool UpdateChecker::binaryRuns(const QString& exePath) {
+    // Отсутствующая библиотека — это не тихий код возврата, а модальное окно
+    // «не найден такой-то .dll», которое ждёт человека. Нам оно ни к чему:
+    // ответ и так известен, а проверка повисла бы на весь таймаут с чужим
+    // диалогом поверх интерфейса. Режим ошибок наследуется дочерним процессом,
+    // поэтому ставим его вокруг запуска и сразу возвращаем как было.
+#ifdef Q_OS_WIN
+    const UINT prevMode = SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+#endif
+    QProcess p;
+    p.setProgram(exePath);
+    p.setArguments({QStringLiteral("--selftest")});
+    p.setWorkingDirectory(QFileInfo(exePath).absolutePath());
+    p.start();
+    bool ok = p.waitForStarted(10000);
+    if (ok && !p.waitForFinished(15000)) {           // завис — считаем негодным
+        p.kill();
+        p.waitForFinished(2000);
+        ok = false;
+    }
+    if (ok)
+        ok = (p.exitStatus() == QProcess::NormalExit && p.exitCode() == 0);
+#ifdef Q_OS_WIN
+    SetErrorMode(prevMode);
+#endif
+    return ok;
+}
+
 bool UpdateChecker::installAndRestart(const QStringList& args) {
     if (m_state != Ready || m_unpacked.isEmpty()) return false;
+    // Второй заход по живой подмене переставил бы файлы ещё раз и поднял второй
+    // экземпляр. Кнопок, ведущих сюда, две (пилюля и раздел «О программе»), и
+    // между нажатием и нашим уходом проходит заметное время.
+    if (m_installing) return false;
 
     QString why;
     if (!canWriteToAppDir(&why)) { fail(why); return false; }
+    m_installing = true;
 
     const QString appDir = QCoreApplication::applicationDirPath();
     const QString stamp = QString::number(QDateTime::currentSecsSinceEpoch());
@@ -357,7 +401,6 @@ bool UpdateChecker::installAndRestart(const QStringList& args) {
     const QDir src(m_unpacked);
     QDirIterator it(m_unpacked, QDir::Files, QDirIterator::Subdirectories);
     while (it.hasNext()) { it.next(); rel << src.relativeFilePath(it.filePath()); }
-    if (rel.isEmpty()) { fail("В архиве обновления нет файлов."); return false; }
 
     // Подмена должна быть или целиком, или никак: наполовину обновлённая папка
     // — это неработающая программа без внятного способа починиться.
@@ -368,6 +411,18 @@ bool UpdateChecker::installAndRestart(const QStringList& args) {
         for (int i = renamed.size() - 1; i >= 0; --i)
             QFile::rename(renamed[i].second, renamed[i].first);
     };
+    // Единственный выход из неудачи: вернуть папку как было, сказать причину и
+    // снять запрет на повторную попытку. Раньше сброса не было вовсе — а
+    // сорвавшаяся установка обязана оставлять рабочую программу, из которой
+    // можно попробовать ещё раз.
+    auto abort = [&](const QString& text) {
+        rollback();
+        m_installing = false;
+        fail(text);
+        return false;
+    };
+
+    if (rel.isEmpty()) return abort("В архиве обновления нет файлов.");
 
     for (const QString& r : rel) {
         const QString dst = appDir + "/" + r;
@@ -377,29 +432,36 @@ bool UpdateChecker::installAndRestart(const QStringList& args) {
             // переименовать — можно. Здесь всё и держится.
             const QString old = dst + ".old-" + stamp;
             QFile::remove(old);
-            if (!QFile::rename(dst, old)) {
-                rollback();
-                fail("Не удалось освободить файл " + r + ".");
-                return false;
-            }
+            if (!QFile::rename(dst, old))
+                return abort("Не удалось освободить файл " + r + ".");
             renamed.append({dst, old});
         }
-        if (!QFile::copy(src.filePath(r), dst)) {
-            rollback();
-            fail("Не удалось записать файл " + r + ".");
-            return false;
-        }
+        if (!QFile::copy(src.filePath(r), dst))
+            return abort("Не удалось записать файл " + r + ".");
         placed << dst;
     }
 
+    // Точка, до которой откат ещё возможен, — и последняя.
+    //
+    // Дальше мы уходим, а вернуться и всё исправить будет некому: следующий
+    // запуск первым делом сносит резервные копии (sweepOldFiles), потому что
+    // до сих пор считалось, что раз файлы легли, то программа работает. Это
+    // предположение и подвело: неполный пакет обновления кладётся успешно
+    // ФАЙЛ В ФАЙЛ, а запускаться перестаёт — и человек остаётся без рабочей
+    // программы и без возможности откатиться.
+    //
+    // Поэтому спрашиваем прямо: поднимись и выйди. Не поднялся — возвращаем
+    // папку как была, и у человека остаётся ровно то, что у него было.
+    if (!binaryRuns(QCoreApplication::applicationFilePath()))
+        return abort("Обновление скачалось, но новая версия не запускается — "
+                     "пакет собран неполным или не подходит этой системе. "
+                     "Оставили рабочую версию, ничего не изменилось.");
+
     // Стартуем новый экземпляр и уходим. Хвосты «*.old-…» снимет он сам при
     // запуске — сейчас они ещё заняты нами.
-    if (!QProcess::startDetached(QCoreApplication::applicationFilePath(), args, appDir)) {
-        rollback();
-        fail("Обновление установлено, но перезапустить программу не удалось. "
-             "Закройте её и откройте заново.");
-        return false;
-    }
+    if (!QProcess::startDetached(QCoreApplication::applicationFilePath(), args, appDir))
+        return abort("Обновление установлено, но перезапустить программу не "
+                     "удалось. Закройте её и откройте заново.");
     QTimer::singleShot(0, qApp, &QCoreApplication::quit);
     return true;
 }

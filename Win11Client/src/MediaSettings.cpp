@@ -55,11 +55,15 @@ MediaSettings::MediaSettings(QObject* parent) : QObject(parent) {
     m_screenBitrate = s.value("screenBitrate", "auto").toString();
     if (!knownScreenBitrate(m_screenBitrate)) m_screenBitrate = "auto";
     m_screenCursor = s.value("screenCursor", true).toBool();
-    // Ключа screenCodec здесь больше нет намеренно. Выбор кодека убран
-    // целиком: и у демонстрации, и у камеры порядок теперь определяют замеры,
-    // а не человек (см. VideoEncoder::open). Старое значение в файле настроек
-    // просто не читается — перенести его некуда, а действовать невидимо для
-    // человека настройка не должна.
+    // Кодеки. Значение — имя кодировщика FFmpeg; проверять его здесь не надо,
+    // незнакомое просто не найдётся в каталоге и сработает как «Авто». Ключи
+    // новые (codecScreen/codecCam), а не прежний screenCodec: у того значения
+    // были другого рода («auto», «hevc», «av1»), и прочитать их как имена
+    // кодировщиков значило бы тихо подсунуть человеку не тот выбор.
+    m_screenCodec = s.value("codecScreen", "auto").toString();
+    m_camCodec = s.value("codecCam", "auto").toString();
+    m_rxBuffer = s.value("rxBuffer", true).toBool();
+    m_txBuffer = s.value("txBuffer", true).toBool();
     m_screenAudio = s.value("screenAudio", false).toBool();
     m_screenVolume = qBound(0, s.value("screenVolume", 100).toInt(), 200);
     m_uiSounds = s.value("uiSounds", true).toBool();
@@ -170,6 +174,34 @@ void MediaSettings::setScreenBitrate(const QString& b) {
     m_screenBitrate = b;
     save("screenBitrate", b);
     emit screenBitrateChanged();
+}
+
+void MediaSettings::setScreenCodec(const QString& id) {
+    if (m_screenCodec == id) return;
+    m_screenCodec = id;
+    save("codecScreen", id);
+    emit screenCodecChanged();
+}
+
+void MediaSettings::setCamCodec(const QString& id) {
+    if (m_camCodec == id) return;
+    m_camCodec = id;
+    save("codecCam", id);
+    emit camCodecChanged();
+}
+
+void MediaSettings::setRxBuffer(bool on) {
+    if (m_rxBuffer == on) return;
+    m_rxBuffer = on;
+    save("rxBuffer", on);
+    emit rxBufferChanged();
+}
+
+void MediaSettings::setTxBuffer(bool on) {
+    if (m_txBuffer == on) return;
+    m_txBuffer = on;
+    save("txBuffer", on);
+    emit txBufferChanged();
 }
 
 void MediaSettings::setScreenCursor(bool on) {

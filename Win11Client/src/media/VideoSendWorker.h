@@ -51,6 +51,10 @@ public slots:
     // состояние потока кадров, — поэтому здесь же reset(); приёмники увидят
     // новый кодек и пересоздадут декодеры сами.
     void setCodecStep(int step);
+    // Кодек, выбранный человеком (id из VideoEncoder::catalog(); пусто или
+    // "auto" — как решит лестница). Как и ступень, требует переоткрытия
+    // кодировщика, поэтому здесь же reset().
+    void setCodecChoice(const QString& id);
 
 signals:
     // Готовый пакет v2 (уже упакован Proto::pack). Уходит ПРЯМО на поток
@@ -97,6 +101,7 @@ private:
     bool m_keyNext = true;
     qint64 m_sendStartMs = 0;      // база внутренней PTS-шкалы кодера
     int m_codecStep = 0;           // ступень лестницы кодеков, 0 = лучшее
+    QString m_codecChoice;         // выбор человека; пусто — «Авто»
     std::atomic<int> m_inFlight{ 0 };   // см. busy()
     // Измерение реальной частоты (см. achievedFps).
     qint64 m_lastEncodeMs = 0;

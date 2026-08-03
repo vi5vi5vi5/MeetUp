@@ -40,7 +40,8 @@ void VideoRecvWorker::dropDecoder(Peer& p) {
     if (p.sws) { sws_freeContext(p.sws); p.sws = nullptr; }
     // Измерения относились к прошлому декодеру: у нового может быть и другой
     // кодек, и другой размер кадра, и другой ответ про видеокарту.
-    p.announced = false;
+    p.annW = p.annH = 0;
+    p.annHw = false;
     p.decEmaUs = 0;
     p.ivlEmaMs = 0;
     p.prevAt = 0;
@@ -98,7 +99,69 @@ void VideoRecvWorker::setAwaitKey(Peer& p, quint32 sender, bool awaiting) {
     emit awaitKeyChanged(sender, awaiting);
 }
 
-void VideoRecvWorker::onFrame(const QByteArray& d) {
+// Пускать ли кадр в очередь. Зовётся с потока транспорта — см. объявление.
+bool VideoRecvWorker::offer(quint32* generation) {
+    if (generation) *generation = m_generation.load(std::memory_order_acquire);
+    if (m_buffered.load(std::memory_order_relaxed)) {
+        m_inFlight.fetch_add(1, std::memory_order_release);
+        return true;
+    }
+    // Буфер выключен: место ровно на один кадр. Если предыдущий ещё не
+    // разобран, этот не встаёт в очередь, а выбрасывается здесь же — то есть
+    // отставание не может накопиться в принципе. Расплата известна: декодер
+    // теряет кусок потока и попросит опорный кадр, а это секунда заглушки
+    // вместо минуты растущего опоздания.
+    int expected = 0;
+    if (!m_inFlight.compare_exchange_strong(expected, 1,
+                                            std::memory_order_acq_rel,
+                                            std::memory_order_relaxed)) {
+        m_dropped.fetch_add(1, std::memory_order_relaxed);
+        // Отметить дыру в потоке обязательно. Декодер о выброшенном кадре не
+        // узнает никак, а следующая дельта опирается на то, чего он не видел:
+        // получилась бы рассыпающаяся картинка вместо честной паузы до
+        // опорного кадра. Флаг снимет сам воркер, на своём потоке.
+        m_gap.store(true, std::memory_order_release);
+        return false;
+    }
+    return true;
+}
+
+// Очередь была выброшена (сбросом или переполнением без буфера): декодеры
+// стоят на середине потока, и дельты им теперь не годятся.
+void VideoRecvWorker::restartAfterFlush() {
+    for (auto it = m_peers.begin(); it != m_peers.end(); ++it)
+        if (it->wanted) setAwaitKey(*it, it.key(), true);
+    emit keyframeNeeded(m_codedType);
+}
+
+void VideoRecvWorker::onFrame(const QByteArray& d, quint32 generation) {
+    // Счётчик отпускаем в любом случае и первым делом: что бы дальше ни
+    // случилось, место для следующего кадра должно освободиться.
+    struct Release {
+        std::atomic<int>* n;
+        ~Release() { n->fetch_sub(1, std::memory_order_release); }
+    } release{ &m_inFlight };
+
+    // Кадр из прошлой жизни: между постановкой в очередь и этим моментом
+    // сработал сброс. Декодировать его незачем — ради этого сброс и затевался.
+    const quint32 now = m_generation.load(std::memory_order_acquire);
+    if (generation != now) return;
+
+    // Первый кадр после сброса — здесь же и чиним поток: декодеры остались на
+    // середине выброшенного куска, и дельты им теперь не годятся. Делать это
+    // в самом flush() нельзя, он зовётся с чужого потока.
+    if (m_seenGeneration != now) {
+        m_seenGeneration = now;
+        m_gap.store(false, std::memory_order_relaxed);
+        restartAfterFlush();
+    } else if (m_gap.exchange(false, std::memory_order_acq_rel)) {
+        // Кадр (или несколько) выброшен в offer из-за выключенного буфера.
+        restartAfterFlush();
+    }
+    onFrameBody(d);
+}
+
+void VideoRecvWorker::onFrameBody(const QByteArray& d) {
     // Транспорт вещает обе полосы обоим воркерам, и чужое надо отбросить ДО
     // разбора: unpack копирует payload себе, а кадр демонстрации 4K — это
     // сотни килобайт, которые второй воркер скопировал бы только чтобы
@@ -273,10 +336,16 @@ void VideoRecvWorker::routeCoded(quint32 sender, quint8 flags, quint8 codec,
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     p.lastAt = now;
     // Аппаратность известна только после первого разобранного кадра — вот
-    // здесь и говорим, чем на самом деле разбираем.
-    if (!p.announced) {
-        p.announced = true;
-        emit decoderOpened(codec, frame->width, frame->height, p.dec->isHardware());
+    // здесь и говорим, чем на самом деле разбираем. И повторяем всякий раз,
+    // когда ответ меняется: ведущий волен переключить разрешение посреди
+    // демонстрации, а решение видеокарты взяться за поток зависит в том числе
+    // от размера кадра.
+    const bool hw = p.dec->isHardware();
+    if (p.annW != frame->width || p.annH != frame->height || p.annHw != hw) {
+        p.annW = frame->width;
+        p.annH = frame->height;
+        p.annHw = hw;
+        emit decoderOpened(codec, frame->width, frame->height, hw);
     }
     emit frameDecoded(decUs);
     checkPace(p, codec, decUs, now);

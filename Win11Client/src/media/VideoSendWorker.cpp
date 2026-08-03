@@ -176,6 +176,15 @@ void VideoSendWorker::setCodecStep(int step) {
     reset();                       // энкодер переоткроется на следующем кадре
 }
 
+void VideoSendWorker::setCodecChoice(const QString& id) {
+    // «Авто» и «ничего не выбрано» — одно и то же состояние; хранить его двумя
+    // разными строками значило бы сравнивать их потом в каждом месте.
+    const QString v = (id == QLatin1String("auto")) ? QString() : id;
+    if (m_codecChoice == v) return;
+    m_codecChoice = v;
+    reset();
+}
+
 // Обёртка: что бы внутри ни случилось, счётчик занятости должен вернуться к
 // нулю, — иначе движок перестанет слать кадры совсем. Здесь же засекаем цену
 // кадра: мерить надо снаружи encodeFrame, чтобы в замер попали ВСЕ его ранние
@@ -237,7 +246,7 @@ void VideoSendWorker::encodeFrame(const QVideoFrame& frame, int maxW, int maxH,
         // Полоса решает, по какой лестнице спускаться: у демонстрации она
         // упирается в видеокарту, у камеры — в процессор (см. VideoEncoder::open).
         const bool screen = (m_msgType == Proto::SCREEN_CODED);
-        if (!m_enc->open(tw, th, useFps, bitrate, screen, m_codecStep)) {
+        if (!m_enc->open(tw, th, useFps, bitrate, screen, m_codecStep, m_codecChoice)) {
             delete m_enc;                  // энкодеров нет — молча не вещаем
             m_enc = nullptr;
             return;

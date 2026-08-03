@@ -180,6 +180,23 @@ The media pipeline (see `docs/ROADMAP.md`).
   straight from the socket thread; only the finished `QVideoFrame` crosses to
   the GUI thread, because `QVideoSink` belongs to the tile.
 
+  **Both hand-off queues are bounded on purpose, and the bound is a setting.**
+  A frame crosses two thread boundaries by Qt's event queue — socket thread →
+  decode thread on the way in, WGC pool thread → GUI thread on the way out — and
+  a Qt event queue has no limit at all. Whenever the far side is slower than the
+  stream, that queue *is* the backlog, and it never drains: switch the screen
+  share from AV1 back to HEVC and the viewer keeps grinding through queued AV1
+  for another half minute. The queue cannot be emptied after the fact, so the
+  decision is made before a frame is posted, on the producing thread —
+  `VideoRecvWorker::offer()` inbound, the same in-flight counter around
+  `onScreenCapFrame` outbound. With buffering on (default) it always accepts;
+  with buffering off it accepts only when the previous frame is done and drops
+  the rest on the spot, which also raises a gap flag so the decoder asks for a
+  keyframe instead of rendering deltas onto a picture it never saw. Both
+  switches live in settings (`rxBuffer` / `txBuffer`), with a manual flush
+  beside each: flushing bumps a generation counter, so everything already
+  queued is recognised as stale and thrown away undecoded.
+
   **A/V sync holds both bands, each against its own clock.** Audio reaches the
   ear later than video reaches the eye — jitter prebuffer plus the sink's own
   queue, roughly 60–120 ms — so a frame that has overtaken its sound waits in
@@ -223,14 +240,10 @@ The media pipeline (see `docs/ROADMAP.md`).
   an empty payload still means "both bands", which is what the web client sends
   and what it understands.
 
-  **There is no codec setting, in either band.** There was one, and removing it
-  was a measurement result: a full sweep of every codec this build can encode,
-  at 720p/1080p/1440p/4K, produced the same top answer on every resolution, and
-  the only reason to move off it is a receiver saying it cannot decode — which
-  the program learns before the user could. What replaces the setting is a
-  **ladder per band**, walked downward only by `Proto::CODEC_UNSUPPORTED`
-  (`VideoEncoder::open`), and reset to the top on the next `join_ok` because the
-  next room holds different people:
+  **The codec is chosen automatically, and can be overridden.** The automatic
+  answer is a **ladder per band**, walked downward only by
+  `Proto::CODEC_UNSUPPORTED` (`VideoEncoder::open`), and reset to the top on the
+  next `join_ok` because the next room holds different people:
   - **screen: HEVC → H.264 → VP8**, hardware first. HEVC costs the same to
     encode as H.264 on this card (2.4 vs 2.2 ms at 1440p) and a third of the
     bandwidth at equal quality (4158 vs 10832 kbit/s at 1080p). H.264 is the
@@ -239,11 +252,25 @@ The media pipeline (see `docs/ROADMAP.md`).
     software encoder measured (3.6 ms at 1080p against openh264's 16.3) and
     browsers decode it. Hardware is withheld deliberately, see below.
 
+  The override sits in front of that ladder as a **rung zero**: the encoder
+  named in `MediaSettings::screenCodec` / `camCodec` is tried first, and if it
+  will not open — or a receiver complains about it — the ladder carries on
+  exactly as before. So the setting is a preference, never a way to end up with
+  no picture at all. The list offered in settings comes from `probeCodecs()`,
+  which actually opens each candidate at 640×360 on a throwaway MTA thread
+  (Media Foundation answers nowhere else, and the screen thread must not stall
+  mid-share for the third of a second this costs). Hardware and software
+  variants of the same codec are separate entries, because the difference
+  between them is the whole point of asking.
+
   A complaint is only acted on when the codec named in it is the one *this*
   band is currently sending (`m_scrCodec` / `m_camCodec`): the server fans
   `CODEC_UNSUPPORTED` out to every sender, and without that check one
   participant's missing HEVC would demote a second presenter who was already
-  on H.264.
+  on H.264. Complaints now also come from the receive side for a codec that is
+  *understood but not affordable* — a software decoder eating more than 70 % of
+  the frame interval for 1.5 s straight asks the sender to step down, since
+  falling behind by a growing margin looks exactly like not decoding at all.
 
   One measured trap is worth repeating because it cost the screen band its
   frame rate for a long time: **`scenario=display_remoting` must not be set on

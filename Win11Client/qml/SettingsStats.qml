@@ -13,6 +13,7 @@ Column {
     spacing: 16
 
     property bool _copied: false
+    property bool _rxFlushed: false
 
     // «1 поток · 2 потока · 5 потоков». Русские числительные — та мелочь,
     // по которой видно, писали интерфейс или переводили.
@@ -280,6 +281,73 @@ Column {
                 }
             }
         }
+    }
+
+    // Очередь приёма. Это единственное место, где видно, что декодер отстаёт:
+    // байты идут, кадры приходят, а показывается прошлое — потому что всё
+    // принятое стоит здесь и ждёт своей очереди на разбор.
+    Field {
+        width: parent.width
+        label: "Буфер приёма"
+        hint: AV.rxBuffer
+            ? "Кадр, который декодер не успел разобрать, ждёт своей очереди. Сглаживает рывки, но разовая заминка превращается в постоянное опоздание: переключите кодек — и собеседник ещё долго будет досматривать предыдущий."
+            : "Кадр, пришедший раньше, чем разобран предыдущий, выбрасывается сразу. Отставание не накапливается никогда, платим отдельными пропущенными кадрами и паузой до следующего опорного."
+
+        // Field кладёт содержимое в Item, а не в колонку: без своей Column
+        // тумблер, кнопка и подпись легли бы друг на друга.
+        Column {
+            width: parent.width
+            spacing: 8
+
+            SettingSwitch {
+                width: parent.width
+                label: "Буферизовать приём"
+                description: "Выключите, если картинка идёт с растущим опозданием."
+                checked: AV.rxBuffer
+                onToggled: function (v) { AV.rxBuffer = v }
+            }
+
+            Row {
+                width: parent.width
+                spacing: 8
+
+                Rectangle {
+                    width: (parent.width - 8) / 2
+                    height: 34
+                    radius: Theme.radiusSm
+                    color: Theme.surface2
+                    border.width: 1
+                    // Очередь длиннее полусекунды на любой разумной частоте —
+                    // это уже видимое опоздание, а не рабочий запас.
+                    border.color: Stats.rxQueue > 15 ? Theme.danger : Theme.border
+                    Text {
+                        anchors.centerIn: parent
+                        text: "В очереди · " + Stats.rxQueue
+                        color: Stats.rxQueue > 0 ? Theme.text : Theme.textFaint
+                        font.family: Theme.uiFont
+                        font.pixelSize: Theme.textXs
+                        font.weight: Font.Medium
+                    }
+                }
+                AppButton {
+                    width: (parent.width - 8) / 2
+                    text: page._rxFlushed ? "Сброшено" : "Сбросить буфер"
+                    variant: page._rxFlushed ? "primary" : "secondary"
+                    size: "sm"
+                    onClicked: { Media.flushReceive(); page._rxFlushed = true; rxFlushed.restart() }
+                }
+            }
+
+            Text {
+                width: parent.width
+                visible: !AV.rxBuffer && Stats.rxDropped > 0
+                text: "Выброшено кадров за секунду: " + Stats.rxDropped
+                color: Theme.textFaint
+                font.family: Theme.uiFont
+                font.pixelSize: Theme.text2xs
+            }
+        }
+        Timer { id: rxFlushed; interval: 1600; onTriggered: page._rxFlushed = false }
     }
 
     Field {

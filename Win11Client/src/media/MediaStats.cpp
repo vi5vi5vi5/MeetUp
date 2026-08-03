@@ -70,6 +70,13 @@ void MediaStats::noteDecoder(bool screen, const QString& codec, int w, int h) {
     emit updated();
 }
 
+// Длина очереди — мгновенная (её нельзя усреднить: важно именно то, сколько
+// стоит прямо сейчас), а выброшенные кадры копятся до конца окна.
+void MediaStats::noteRxQueue(int queued, int droppedSinceLast) {
+    m_rxQueue = queued;
+    m_rxDropAccum += droppedSinceLast;
+}
+
 void MediaStats::noteRxOff(bool screen) {
     QString& s = screen ? m_scrDecoder : m_camDecoder;
     if (s.isEmpty()) return;
@@ -93,7 +100,8 @@ bool MediaStats::isQuiet() const {
         && m_cam.kbps == 0 && m_cam.fps == 0 && m_cam.dropPercent == 0
         && m_scr.kbps == 0 && m_scr.fps == 0 && m_scr.dropPercent == 0
         && m_voice.kbps == 0 && m_syncHoldMs == 0 && !m_scrAudio
-        && m_camDecoder.isEmpty() && m_scrDecoder.isEmpty();
+        && m_camDecoder.isEmpty() && m_scrDecoder.isEmpty()
+        && m_rxQueue == 0 && m_rxDropped == 0;
 }
 
 void MediaStats::tick() {
@@ -138,6 +146,8 @@ void MediaStats::tick() {
 
     m_syncHoldMs = m_holdCount > 0 ? int(m_holdSum / m_holdCount) : 0;
     m_holdSum = 0; m_holdCount = 0;
+    m_rxDropped = m_rxDropAccum;
+    m_rxDropAccum = 0;
 
     // Молчим, только если и было тихо, и осталось тихо: последний тик активной
     // конференции обязан дойти до раздела — иначе на нём навсегда останутся

@@ -6,7 +6,9 @@
 #include <QPointer>
 #include <QRect>
 #include <QSet>
+#include <QVariantList>
 #include <QVideoFrame>
+#include <atomic>
 
 class SignalingClient;
 class MediaSettings;
@@ -39,6 +41,13 @@ class VideoEngine : public QObject {
     // Свой захват экрана реально даёт кадры — сцена показывает превью.
     Q_PROPERTY(bool screenPreviewActive READ screenPreviewActive
                NOTIFY screenPreviewActiveChanged)
+    // Кодировщики, которые есть на ЭТОЙ машине: список записей
+    // { id, label, hardware }. Пуст, пока не спросили (см. probeCodecs) —
+    // проба стоит создания MFT на каждый аппаратный пункт, и делать её на
+    // старте ради раздела настроек, куда могут ни разу не зайти, незачем.
+    Q_PROPERTY(QVariantList codecOptions READ codecOptions NOTIFY codecOptionsChanged)
+    // Проба уже прошла: список окончательный, а не «ещё не спрашивали».
+    Q_PROPERTY(bool codecsProbed READ codecsProbed NOTIFY codecOptionsChanged)
 public:
     VideoEngine(SignalingClient* conf, MediaSettings* settings,
                 ScreenSources* sources, AudioEngine* audio, MediaStats* stats,
@@ -84,6 +93,21 @@ public:
 
     bool previewActive() const { return m_previewActive; }
     bool screenPreviewActive() const { return m_screenPreviewActive; }
+    QVariantList codecOptions() const { return m_codecOptions; }
+    bool codecsProbed() const { return m_codecsProbed; }
+    // Спросить у машины, что она умеет. Зовёт QML, открывая раздел настроек;
+    // повторные вызовы бесплатны — ответ не меняется и считается один раз.
+    Q_INVOKABLE void probeCodecs();
+
+    // Экстренный сброс очередей. Кадры, которые уже стоят в очереди и ждут
+    // своего часа, объявляются мусором: показывать прошлое вместо настоящего
+    // смысла нет, а догонять его — тем более.
+    //
+    // Приём: выбрасывается всё, что не успело разобраться, и запрашивается
+    // опорный кадр. Отправка: выбрасывается всё, что захват успел наснимать,
+    // пока конвейер стоял.
+    Q_INVOKABLE void flushReceive();
+    Q_INVOKABLE void flushCapture();
 
 signals:
     void videoChanged(qint64 id, bool active);  // картинка появилась/пропала
@@ -94,6 +118,7 @@ signals:
     void lockedChanged(qint64 id, bool locked);
     void previewActiveChanged();
     void screenPreviewActiveChanged();
+    void codecOptionsChanged();
     // Захват экрана не поднялся или окно закрыли — QML показывает уведомление.
     void screenError(const QString& text);
     // Спустились на ступень ниже по лестнице кодеков: участник не понял тот,
@@ -194,6 +219,8 @@ private:
     int screenBitrate(int presetBitrate, qint64 nowMs, qint64* queueBudget);
     void resetScreenRate();            // новая демонстрация — начинаем с полного
     void applyCodecSteps();            // ступени лестниц -> обоим воркерам
+    void applyCodecChoice();           // выбор человека -> обоим воркерам
+    void applyBufferSettings();        // тумблеры буферов -> приёму и захвату
     // Участник не понял наш кодек: спускаемся на ступень и говорим об этом.
     void onCodecUnsupported(quint8 band, quint8 codec);
     // …и обратное: мы не поняли чужой — сообщить отправителю.
@@ -302,4 +329,18 @@ private:
     int m_scrBusySamples = 0;
     int m_scrCleanSamples = 0;
     qint64 m_scrRateSampleMs = 0;
+
+    // Что машина умеет кодировать (см. probeCodecs).
+    QVariantList m_codecOptions;
+    bool m_codecsProbed = false;
+    bool m_codecProbeRunning = false;
+
+    // Очередь захвата экрана: кадр приезжает с потока пула WGC, а обрабатывать
+    // его умеет только GUI-поток (превью, пейсер). Между ними — та же
+    // неограниченная очередь событий, что была на приёме, и та же плата за
+    // неё: если GUI подтормаживает, кадры копятся, и в эфир уходит прошлое.
+    // Поля атомарные: пишет их поток пула, читает GUI, и наоборот.
+    std::atomic<int> m_capInFlight{ 0 };
+    std::atomic<bool> m_capBuffered{ true };
+    std::atomic<quint32> m_capGeneration{ 0 };
 };
