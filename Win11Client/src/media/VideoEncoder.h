@@ -49,6 +49,11 @@ public:
     // Всё, что клиент вообще умеет кодировать, в порядке от лучшего к
     // запасному. Список статический: он про сборку, а не про машину.
     static const QList<Option>& catalog();
+    // Кто окажется ПЕРВЫМ кандидатом при таких условиях — тот же расчёт, что
+    // делает open(), но без открытия чего бы то ни было. Нужен ровно в одном
+    // месте: чтобы не переоткрывать кодировщик, когда выбор человека совпал с
+    // уже работающим (см. VideoSendWorker::setCodecChoice).
+    static QString firstChoice(bool screen, int step, const QString& preferred);
     // Открывается ли этот кодировщик ЗДЕСЬ. Проверяется единственным честным
     // способом — пробуем открыть на маленьком кадре: имя в сборке FFmpeg есть
     // всегда, а видеокарты под него может не быть.
@@ -71,6 +76,10 @@ public:
     void close();
 
     bool isOpen() const { return m_ctx != nullptr; }
+    // Имя кодировщика FFmpeg, которым открыт поток ("hevc_mf", "libvpx"…).
+    // nullptr — не открыт. Строка статическая (литерал из таблицы кандидатов),
+    // владеть ею не нужно.
+    const char* encoderName() const { return m_name; }
     quint8 protoCodec() const { return m_protoCodec; }   // Proto::CODEC_H264 | VP8 | VP9
     int width() const { return m_width; }
     int height() const { return m_height; }
@@ -116,6 +125,7 @@ private:
     AVFrame* m_frame = nullptr;
     AVPacket* m_pkt = nullptr;
     quint8 m_protoCodec = 0;
+    const char* m_name = nullptr;    // имя кандидата, которым открылись
     int m_width = 0, m_height = 0;
     int m_pixFmt = 0;            // AV_PIX_FMT_YUV420P
     bool m_hardware = false;

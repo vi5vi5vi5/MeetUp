@@ -59,6 +59,37 @@ static int holdCap(const QVideoFrame& vf) {
     return int(qBound<qint64>(4LL, kHoldBudgetBytes / frameBytes, 32LL));
 }
 
+// Сколько ждём кадр обратно от кодировщика, прежде чем считать поток
+// потерянным.
+//
+// Три секунды — это заведомо больше любого честного кадра: самый дорогой из
+// замеренных (программный H.264 на 4К) стоил 71 мс, а сторож должен срабатывать
+// только на том, что кадром уже не является. Причина, по которой он вообще
+// нужен: обёртка FFmpeg над Media Foundation ждёт события своего MFT
+// БЛОКИРУЮЩИМ вызовом без таймаута (IMFMediaEventGenerator::GetEvent), и если
+// аппаратный кодировщик перестал их присылать, поток стоит там навсегда.
+// Отменить этот вызов нельзя ни средствами FFmpeg, ни средствами Windows.
+static const qint64 kEncodeDeadlineMs = 3000;
+
+// Остановить поток, но не ценой зависания программы.
+//
+// Обычный quit()+wait() исходит из того, что поток рано или поздно вернётся в
+// свой цикл событий. Для медиапотоков это неправда: вызов, вставший внутри
+// драйвера, не вернётся никогда, и безусловное ожидание означало бы, что
+// программу нельзя даже закрыть. Не уложившийся в срок поток отвязывается от
+// нас и доживает вместе с процессом — уронить его нечем, а деструктор QThread
+// на живом потоке роняет уже нас.
+static void stopThread(QThread*& t, int ms) {
+    if (!t) return;
+    t->quit();
+    if (!t->wait(ms)) {
+        qWarning() << "VideoEngine: поток" << t->objectName()
+                   << "не остановился за" << ms << "мс — оставляем его процессу";
+        t->setParent(nullptr);
+    }
+    t = nullptr;
+}
+
 // Ступени качества демонстрации — множители пресетного битрейта.
 //
 // Ступени дискретные, а не плавная регулировка, и вот почему: сменить битрейт
@@ -79,7 +110,7 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
                          ScreenSources* sources, AudioEngine* audio,
                          MediaStats* stats, E2eCipher* cipher, QObject* parent)
     : QObject(parent), m_conf(conf), m_settings(settings), m_sources(sources),
-      m_audio(audio), m_stats(stats)
+      m_audio(audio), m_stats(stats), m_cipher(cipher)
 {
     connect(conf, &SignalingClient::binaryFrame,       this, &VideoEngine::onBinaryFrame);
     connect(conf, &SignalingClient::joinOk,            this, &VideoEngine::onJoinOk);
@@ -213,58 +244,40 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
     m_scrWorker = new VideoSendWorker(Proto::SCREEN_CODED, cipher);
     m_worker->moveToThread(m_encThread);
     m_scrWorker->moveToThread(m_scrThread);
-    connect(m_encThread, &QThread::finished, m_worker, &QObject::deleteLater);
-    connect(m_scrThread, &QThread::finished, m_scrWorker, &QObject::deleteLater);
-    connect(this, &VideoEngine::frameToEncode, m_worker, &VideoSendWorker::encode);
-    connect(this, &VideoEngine::screenFrameToEncode, m_scrWorker, &VideoSendWorker::encode);
-    // Готовый пакет уходит с потока кодирования ПРЯМО на поток сокета. Раньше
-    // он делал крюк через GUI-поток (packetReady -> лямбда -> invokeMethod на
-    // link), и каждый кадр ждал, пока интерфейс освободится, — а тот стоит на
-    // синхронизации с отрисовкой. В медиапути GUI-потоку делать нечего.
-    connect(m_worker, &VideoSendWorker::packetReady, link, &SignalingLink::sendBinary);
-    connect(m_scrWorker, &VideoSendWorker::packetReady, link, &SignalingLink::sendBinary);
-    // …а числа для «Диагностики» — сюда: MediaStats живёт на GUI-потоке.
-    connect(m_worker, &VideoSendWorker::packetSent, this,
-            [this](int bytes) { m_stats->noteTxVideo(false, bytes); });
-    connect(m_scrWorker, &VideoSendWorker::packetSent, this,
-            [this](int bytes) { m_stats->noteTxVideo(true, bytes); });
-    connect(m_worker, &VideoSendWorker::frameEncoded, this,
-            [this](qint64 us) { m_stats->noteEncodeTime(false, us); });
-    connect(m_scrWorker, &VideoSendWorker::frameEncoded, this,
-            [this](qint64 us) { m_stats->noteEncodeTime(true, us); });
-    // Кодировщик открылся: кодек и размер кадра — в «Диагностику». Спрашивать
-    // об этом настройки нельзя: там «Авто», а кадр может быть меньше пресета,
-    // если камера столько не даёт.
-    connect(m_worker, &VideoSendWorker::encoderOpened, this,
-            [this](int c, int w, int h, bool hw) { noteEncoderOpened(false, c, w, h, hw); });
-    connect(m_scrWorker, &VideoSendWorker::encoderOpened, this,
-            [this](int c, int w, int h, bool hw) { noteEncoderOpened(true, c, w, h, hw); });
+    wireSendWorker(false);
+    wireSendWorker(true);
     // Занятость воркеров движок спрашивает напрямую (VideoSendWorker::busy) —
     // сигнала об освобождении больше нет, см. комментарий там.
     m_encThread->start();
     m_scrThread->start();
 
-    // Захват экрана создаём НА потоке экрана и уже после его запуска: WGC хочет
-    // апартамент COM = MTA (QThread его и даёт, GUI-поток Qt — нет), а сторож
-    // свёрнутого окна внутри требует работающего цикла событий.
-    QMetaObject::invokeMethod(m_scrWorker, [this] {
-        m_scrCapture = new ScreenCapturer;
-    }, Qt::BlockingQueuedConnection);
-
-    // Пробы «есть ли аппаратный HEVC» здесь больше нет, и она не переехала —
-    // она стала не нужна. Спрашивали её ради настроек: пункт, которого машина
-    // не тянет, полагалось показывать погашенным. Настройки кодека больше нет,
-    // а лестница в VideoEncoder::open разбирается сама — не открылся hevc_mf,
-    // молча берём следующую ступень. Заодно ушли десятки миллисекунд на
-    // создание пробного MFT при каждом запуске.
+    // Захват экрана — на СВОЁМ потоке, а не на потоке кодирования.
     //
-    // Кадр приезжает с потока пула WGC — сюда queued, потому что дальше идут
-    // превью (только GUI-поток) и пейсер.
-    // Кадр захвата -> GUI-поток, с тем же фильтром перед очередью, что и на
-    // приёме (см. подписку на videoFrame выше). Соединение прямое: решение
-    // «класть или не класть» обязано приниматься на потоке пула WGC, до того
-    // как кадр займёт место в очереди GUI. Кадр 4К весит 12 МБ, и десяток
-    // таких в очереди — это не только задержка, но и память.
+    // Соседство с кодировщиком было тихой миной. Аппаратный кодировщик умеет
+    // встать внутри драйвера намертво (обёртка Media Foundation ждёт события
+    // своего MFT блокирующим вызовом без таймаута), и тогда на этом потоке
+    // перестаёт исполняться ВСЁ — в том числе остановка захвата. А её ждал
+    // GUI-поток блокирующим вызовом, то есть одна заминка в драйвере
+    // оборачивалась намертво зависшей программой, которую не закрыть.
+    // Теперь эти работы не связаны ничем: кодировщик может встать, захват при
+    // этом останавливается как ни в чём не бывало.
+    //
+    // Объект создаётся здесь, а живёт там: апартамент COM переехать не может
+    // (он свойство потока), поэтому его поднимает init() уже на месте.
+    m_capThread = new QThread(this);
+    m_capThread->setObjectName("screen-capture");
+    m_scrCapture = new ScreenCapturer;          // без parent: переезжает на свой поток
+    m_scrCapture->moveToThread(m_capThread);
+    connect(m_capThread, &QThread::finished, m_scrCapture, &QObject::deleteLater);
+    m_capThread->start();
+    QMetaObject::invokeMethod(m_scrCapture, &ScreenCapturer::init, Qt::QueuedConnection);
+
+    // Кадр захвата -> GUI-поток (там превью и пейсер), с тем же фильтром перед
+    // очередью, что и на приёме (см. подписку на videoFrame выше). Само
+    // соединение ПРЯМОЕ: решение «класть или не класть» обязано приниматься на
+    // потоке пула WGC, до того как кадр займёт место в очереди GUI. Кадр 4К
+    // весит 12 МБ, и десяток таких в очереди — это не только задержка, но и
+    // память.
     connect(m_scrCapture, &ScreenCapturer::frameReady, this,
             [this](const QVideoFrame& f) {
                 if (!m_capBuffered.load(std::memory_order_relaxed)
@@ -324,33 +337,29 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
 }
 
 VideoEngine::~VideoEngine() {
+    m_codecProbePartial = false;       // не заводить пробу кодеков на выходе
+    // Кадр захвата приходит ПРЯМЫМ соединением с потока пула WGC и кладёт себе
+    // задачу в очередь GUI-потока. Пока остановки захвата ждали блокирующим
+    // вызовом, к этому моменту таких кадров уже не бывало; теперь не ждём —
+    // значит рвём связь сами, до того как разбирать себя на части.
+    if (m_scrCapture) disconnect(m_scrCapture, nullptr, this, nullptr);
     stopCapture();
     stopScreenCapture();
-    // Захват создавали на потоке экрана — там же и разрушаем, до его остановки:
-    // внутри объекты WinRT и таймер, привязанные именно к тому потоку.
-    if (m_scrCapture) {
-        QMetaObject::invokeMethod(m_scrCapture, [this] {
-            delete m_scrCapture;
-            m_scrCapture = nullptr;
-        }, Qt::BlockingQueuedConnection);
-    }
-    if (m_encThread) {                         // остановить потоки кодирования
-        m_encThread->quit();
-        m_encThread->wait();                   // finished -> deleteLater воркера
-    }
-    if (m_scrThread) {
-        m_scrThread->quit();
-        m_scrThread->wait();
-    }
-    // Декодеры живут на своих потоках — там же и разрушаются.
-    QMetaObject::invokeMethod(m_recv, &VideoRecvWorker::shutdown,
-                              Qt::BlockingQueuedConnection);
-    QMetaObject::invokeMethod(m_scrRecv, &VideoRecvWorker::shutdown,
-                              Qt::BlockingQueuedConnection);
-    m_recvThread->quit();
-    m_recvThread->wait();
-    m_scrRecvThread->quit();
-    m_scrRecvThread->wait();
+    // Всё, что живёт на чужих потоках, там же и разрушается — по finished ->
+    // deleteLater. Блокирующих вызовов здесь больше НЕТ ни одного, и это
+    // главное: любой из них был ниткой, за которую зависший драйвер мог
+    // утащить закрытие программы. Порядок сохраняется сам: очередь потока
+    // разбирается по очереди, и shutdown встанет в неё раньше выхода.
+    QMetaObject::invokeMethod(m_recv, &VideoRecvWorker::shutdown, Qt::QueuedConnection);
+    QMetaObject::invokeMethod(m_scrRecv, &VideoRecvWorker::shutdown, Qt::QueuedConnection);
+    stopThread(m_capThread, 2000);     // finished -> deleteLater захватчика
+    stopThread(m_encThread, 2000);     // finished -> deleteLater воркеров
+    stopThread(m_scrThread, 2000);
+    stopThread(m_recvThread, 2000);
+    stopThread(m_scrRecvThread, 2000);
+    m_scrCapture = nullptr;
+    m_worker = nullptr;
+    m_scrWorker = nullptr;
     m_peers.clear();
     m_screenPeers.clear();
 }
@@ -601,6 +610,131 @@ void VideoEngine::sweepStale() {
     const int dropped = (m_recv ? m_recv->takeDropped() : 0)
                       + (m_scrRecv ? m_scrRecv->takeDropped() : 0);
     m_stats->noteRxQueue(queued, dropped);
+
+    // …и здесь же — жив ли вообще тот, кто эти кадры кодирует.
+    sweepEncoders();
+}
+
+// Кодировщик, который не вернул кадр.
+//
+// Разница между «медленно» и «никогда» здесь принципиальная, и до этого
+// сторожа её было не отличить ниоткуда. Движок не отдаёт воркеру второй кадр,
+// пока не вернулся первый (VideoSendWorker::busy) — это правильно, кадр в
+// очереди стареет. Но если первый не вернётся вовсе, полоса замолкает
+// НАВСЕГДА и выглядит это как «100 % пропусков»: кадры снимаются, считаются,
+// и все до одного выбрасываются. Ни смена кодека, ни смена качества не
+// помогают — они тоже едут в очередь того же вставшего потока.
+//
+// Лечения на месте нет: отменить зависший вызов внутри драйвера нечем.
+// Поэтому единственный честный ответ — перестать иметь с этим потоком дело.
+void VideoEngine::sweepEncoders() {
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+
+    if (m_scrWorker && m_scrWorker->busy() && m_scrHandedAtMs > 0
+        && now - m_scrHandedAtMs > kEncodeDeadlineMs) {
+        qWarning() << "VideoEngine: кодировщик демонстрации не отвечает"
+                   << (now - m_scrHandedAtMs) << "мс — полоса пересобирается";
+        rebuildSendWorker(true);
+        // Слот демонстрации отпускаем и говорим человеку прямым текстом.
+        // Молча перезапускать показ нельзя: если дело в кодеке, он встанет
+        // снова, и получится бесконечный цикл, в котором никто не виноват.
+        failScreen(QStringLiteral(
+            "Кодировщик демонстрации перестал отвечать — показ остановлен. "
+            "Включите демонстрацию заново; если повторится, выберите в "
+            "настройках другой кодек."));
+    }
+
+    if (m_worker && m_worker->busy() && m_camHandedAtMs > 0
+        && now - m_camHandedAtMs > kEncodeDeadlineMs) {
+        qWarning() << "VideoEngine: кодировщик камеры не отвечает"
+                   << (now - m_camHandedAtMs) << "мс — полоса пересобирается";
+        rebuildSendWorker(false);
+        // Камеру, в отличие от демонстрации, поднимаем сразу: её кодировщик
+        // программный, зависание там означает разовую беду, а не выбор
+        // человека, который стоит переспросить.
+        stopCapture();
+        updateCapture();
+        emit codecNotice(QStringLiteral(
+            "Кодировщик камеры перестал отвечать — камера перезапущена."));
+    }
+}
+
+// Подписать воркера полосы на всё, что ему полагается. Вынесено сюда, потому
+// что делается дважды: при создании движка и при пересборке полосы.
+void VideoEngine::wireSendWorker(bool screen) {
+    VideoSendWorker* w = screen ? m_scrWorker : m_worker;
+    QThread* t = screen ? m_scrThread : m_encThread;
+    if (!w || !t) return;
+    connect(t, &QThread::finished, w, &QObject::deleteLater);
+    connect(this, screen ? &VideoEngine::screenFrameToEncode : &VideoEngine::frameToEncode,
+            w, &VideoSendWorker::encode);
+    // Готовый пакет уходит с потока кодирования ПРЯМО на поток сокета. Раньше
+    // он делал крюк через GUI-поток (packetReady -> лямбда -> invokeMethod на
+    // link), и каждый кадр ждал, пока интерфейс освободится, — а тот стоит на
+    // синхронизации с отрисовкой. В медиапути GUI-потоку делать нечего.
+    connect(w, &VideoSendWorker::packetReady,
+            m_conf->mediaLink(), &SignalingLink::sendBinary);
+    // …а числа для «Диагностики» — сюда: MediaStats живёт на GUI-потоке.
+    connect(w, &VideoSendWorker::packetSent, this,
+            [this, screen](int bytes) { m_stats->noteTxVideo(screen, bytes); });
+    connect(w, &VideoSendWorker::frameEncoded, this,
+            [this, screen](qint64 us) { m_stats->noteEncodeTime(screen, us); });
+    // Кодировщик открылся: кодек и размер кадра — в «Диагностику». Спрашивать
+    // об этом настройки нельзя: там «Авто», а кадр может быть меньше пресета,
+    // если камера столько не даёт.
+    connect(w, &VideoSendWorker::encoderOpened, this,
+            [this, screen](int c, int width, int height, bool hw) {
+                noteEncoderOpened(screen, c, width, height, hw);
+            });
+}
+
+// Полоса потеряна — собрать её заново на чистом потоке.
+//
+// Старому воркеру сначала говорим «тебя больше нет»: если драйвер однажды
+// всё-таки вернётся, его пакеты не должны попасть в середину нового потока
+// кадров — получатель разбирал бы их поверх несовместимого состояния. Затем
+// отвязываем все его сигналы и оставляем поток жить: присоединить его нельзя
+// (он в вызове, который не вернётся), а удалить QThread на живом потоке —
+// значит уронить программу.
+void VideoEngine::rebuildSendWorker(bool screen) {
+    VideoSendWorker*& w = screen ? m_scrWorker : m_worker;
+    QThread*& t = screen ? m_scrThread : m_encThread;
+
+    if (w) {
+        w->abandon();
+        disconnect(w, nullptr, nullptr, nullptr);   // его сигналы — в никуда
+        // …и, ОБЯЗАТЕЛЬНО, наши сигналы к нему. Первый disconnect снимает
+        // только те связи, где воркер отправитель; подписка frameToEncode ->
+        // encode осталась бы жить, и каждый кадр продолжал бы вставать в
+        // очередь мёртвого потока. Разобрать её некому, а кадр демонстрации 4К
+        // весит 12 МБ — за минуту это гигабайты в никуда. Само по себе это не
+        // рассосётся: воркера удалит только выход потока, которого не будет.
+        disconnect(this, nullptr, w, nullptr);
+        w = nullptr;
+    }
+    if (t) {
+        // Связь «поток закончился -> удалить воркера» НЕ трогаем: если поток
+        // однажды всё-таки выйдет, пусть приберёт за собой.
+        t->quit();
+        t->setParent(nullptr);       // ~QObject не должен трогать живой поток
+        m_lostThreads.append(t);
+        qWarning() << "VideoEngine: брошено потоков кодирования:" << m_lostThreads.size();
+        t = nullptr;
+    }
+
+    t = new QThread(this);
+    t->setObjectName(screen ? "screen-encode" : "video-encode");
+    w = new VideoSendWorker(screen ? Proto::SCREEN_CODED : Proto::VIDEO_CODED, m_cipher);
+    w->moveToThread(t);
+    wireSendWorker(screen);
+    t->start();
+
+    (screen ? m_scrHandedAtMs : m_camHandedAtMs) = 0;
+    (screen ? m_scrKeyNext : m_keyNext) = true;   // новый кодировщик — с опорного
+    // Ступень лестницы и выбор человека жили в старом воркере — новый о них
+    // ещё не знает.
+    applyCodecSteps();
+    applyCodecChoice();
 }
 
 // ---------- приём ----------
@@ -874,6 +1008,8 @@ void VideoEngine::stopCapture() {
     // Энкодер и sws живут на кодирующем потоке — сброс тоже там (queued).
     if (m_worker) QMetaObject::invokeMethod(m_worker, "reset", Qt::QueuedConnection);
     m_keyNext = true;
+    m_camHandedAtMs = 0;
+    m_camEncoderId.clear();
     if (m_preview) m_preview->setVideoFrame(QVideoFrame());   // стереть стоп-кадр
     if (m_previewExtra) m_previewExtra->setVideoFrame(QVideoFrame());
     setPreviewActive(false);
@@ -925,13 +1061,16 @@ void VideoEngine::onCamFrame(const QVideoFrame& frame) {
     // пропусков: именно из них складывается «дёргается картинка».
     m_stats->noteTxAttempt(false);
     if (m_conf->bufferedBytes() > kMaxBuffered) {            // затор — кадр в мусор (§5.5)
-        m_stats->noteTxDrop(false);
+        m_stats->noteTxDrop(false, MediaStats::DropCongestion);
         return;
     }
     // Воркер ещё не отработал прошлый кадр: очередь копить нельзя — кадры в
     // ней стареют, а метка времени у них с момента съёмки, и получатель
     // увидит картинку позже звука. Лучше пропустить кадр, чем отстать.
-    if (m_worker->busy()) { m_stats->noteTxDrop(false); return; }
+    if (m_worker->busy()) {
+        m_stats->noteTxDrop(false, MediaStats::DropBusy);
+        return;
+    }
     // Сдвигаем срок ровно на период — так частота держится ровной. Но если
     // источник молчал дольше периода, догонять пропущенное нельзя: иначе после
     // паузы разом проскочит пачка кадров.
@@ -942,6 +1081,7 @@ void VideoEngine::onCamFrame(const QVideoFrame& frame) {
     const bool forceKey = m_keyNext;
     m_keyNext = false;
     m_worker->noteQueued();
+    m_camHandedAtMs = now;             // сторож зависшего кодировщика
     emit frameToEncode(frame, q.width, q.height, q.fps, q.bitrate, forceKey, now);
 }
 
@@ -993,18 +1133,15 @@ void VideoEngine::startScreenCapture() {
     // больше любого экрана, то есть уменьшать нечего.
     const MediaSettings::CamPreset preset = m_settings->screenPreset();
     const QSize box(preset.width, preset.height);
-    bool started = false;
-    // Захватчик живёт на потоке кодирования: WGC требует апартамента COM = MTA,
-    // а GUI-поток Qt — STA. Заодно там уже есть цикл событий для его сторожа.
-    QMetaObject::invokeMethod(m_scrCapture, [this, handle, wantWindow, cursor, box, &started] {
+    // Вызов НЕ блокирующий, и это принципиально: GUI-поток не должен ждать
+    // медиапоток НИКОГДА — именно на таком ожидании программа и вставала
+    // намертво. Ответ «не поднялось» приходит сигналом failed (его шлёт каждый
+    // неуспешный путь внутри ScreenCapturer) и приводит к failScreen.
+    QMetaObject::invokeMethod(m_scrCapture, [this, handle, wantWindow, cursor, box] {
         m_scrCapture->setTargetBox(box);
-        started = wantWindow ? m_scrCapture->startWindow(handle, cursor)
-                             : m_scrCapture->startMonitor(handle, cursor);
-    }, Qt::BlockingQueuedConnection);
-    if (!started) {                    // подробность уже уехала сигналом failed
-        stopScreenCapture();
-        return;
-    }
+        if (wantWindow) m_scrCapture->startWindow(handle, cursor);
+        else            m_scrCapture->startMonitor(handle, cursor);
+    }, Qt::QueuedConnection);
 
     m_scrCapturing = true;
     m_scrKeyNext = true;
@@ -1021,17 +1158,25 @@ void VideoEngine::startScreenCapture() {
 void VideoEngine::stopScreenCapture() {
     m_scrCapturing = false;
     m_scrRepeatTimer->stop();
+    // Тоже без ожидания: кадры, которые захват успеет отдать после этой строки,
+    // отсечёт onScreenCapFrame по m_scrCapturing — ждать тут нечего, а вот
+    // цена ожидания известна (см. startScreenCapture).
     if (m_scrCapture)
         QMetaObject::invokeMethod(m_scrCapture, [this] { m_scrCapture->stop(); },
-                                  Qt::BlockingQueuedConnection);
+                                  Qt::QueuedConnection);
     m_scrLastFrame = QVideoFrame();
     m_scrSuspended = false;
     if (m_scrWorker)
         QMetaObject::invokeMethod(m_scrWorker, "reset", Qt::QueuedConnection);
     m_scrKeyNext = true;
+    m_scrHandedAtMs = 0;
+    m_scrEncoderId.clear();
     if (m_scrPreview) m_scrPreview->setVideoFrame(QVideoFrame());
     setScreenPreviewActive(false);
     m_stats->noteTxOff(true);
+    // Аппаратного показа больше нет — можно наконец спросить у машины про
+    // аппаратные кодировщики по-настоящему (см. probeCodecs).
+    if (m_codecProbePartial && !m_codecProbeRunning) probeCodecs();
 }
 
 // Смена пресета качества на лету: перезапускаем, только если реально снимаем.
@@ -1111,17 +1256,42 @@ void VideoEngine::applyCodecChoice() {
 // Апартамент поднимаем сами: Media Foundation отвечает только в MTA, а
 // GUI-поток Qt всегда STA и дал бы ложное «нет» на каждый аппаратный пункт.
 void VideoEngine::probeCodecs() {
-    if (m_codecsProbed || m_codecProbeRunning) return;
+    if (m_codecProbeRunning) return;
+    if (m_codecsProbed && !m_codecProbePartial) return;   // полный ответ уже есть
+
+    // Аппаратные кодировщики НЕ трогаем, пока идёт аппаратная демонстрация.
+    //
+    // Это не осторожность впрок, а прямое следствие того, ради чего писался
+    // весь этот сторож. Проба открывает и закрывает по MFT на каждый
+    // аппаратный пункт — то есть создаёт вторую сессию кодирования рядом с
+    // работающей, — и делает это ровно в тот момент, когда человек открыл
+    // раздел «Демонстрация», чтобы что-нибудь в показе поправить. Именно в этом
+    // месте аппаратный кодировщик и вставал.
+    //
+    // Ответ при этом остаётся полезным: программные пункты проверяются как
+    // обычно, а тот кодировщик, которым мы вещаем прямо сейчас, попадает в
+    // список без всякой пробы — живой кодировщик и есть лучшее доказательство,
+    // что он работает. Полную пробу проведём, когда показ закончится
+    // (stopScreenCapture).
+    const bool skipHardware = m_scrCapturing;
+    if (m_codecsProbed && skipHardware) return;      // лучше ответа сейчас не будет
+
     m_codecProbeRunning = true;
+    QStringList live;
+    if (!m_scrEncoderId.isEmpty()) live << m_scrEncoderId;
+    if (!m_camEncoderId.isEmpty()) live << m_camEncoderId;
+
     QPointer<VideoEngine> self(this);
-    QThreadPool::globalInstance()->start([self] {
+    QThreadPool::globalInstance()->start([self, skipHardware, live] {
 #ifdef Q_OS_WIN
         const bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
 #endif
         QVariantList found;
         QStringList names;
         for (const VideoEncoder::Option& o : VideoEncoder::catalog()) {
-            if (!VideoEncoder::probe(o.id)) continue;
+            const bool working = live.contains(o.id);
+            if (o.hardware && skipHardware && !working) continue;
+            if (!working && !VideoEncoder::probe(o.id)) continue;
             QVariantMap m;
             m["id"] = o.id;
             m["label"] = o.label;
@@ -1130,15 +1300,17 @@ void VideoEngine::probeCodecs() {
             names << o.id;
         }
         qInfo() << "VideoEngine: кодировщики этой машины:"
-                << (names.isEmpty() ? QStringLiteral("ни одного") : names.join(", "));
+                << (names.isEmpty() ? QStringLiteral("ни одного") : names.join(", "))
+                << (skipHardware ? "(без аппаратных: идёт демонстрация)" : "");
 #ifdef Q_OS_WIN
         if (com) CoUninitialize();
 #endif
         if (!self) return;
-        QMetaObject::invokeMethod(self, [self, found] {
+        QMetaObject::invokeMethod(self, [self, found, skipHardware] {
             if (!self) return;
             self->m_codecOptions = found;
             self->m_codecsProbed = true;
+            self->m_codecProbePartial = skipHardware;
             self->m_codecProbeRunning = false;
             emit self->codecOptionsChanged();
         }, Qt::QueuedConnection);
@@ -1151,6 +1323,13 @@ void VideoEngine::noteEncoderOpened(bool screen, int codec, int width, int heigh
     // байту сверяется чужая жалоба (onCodecUnsupported): без него мы не знали
     // бы, на наш кодек жалуются или на соседский.
     (screen ? m_scrCodec : m_camCodec) = quint8(codec);
+    // …и он же, но именем из каталога — для пробы кодировщиков: то, что
+    // работает прямо сейчас, проверять незачем, а во время аппаратного показа
+    // ещё и опасно (см. probeCodecs).
+    QString id;
+    for (const VideoEncoder::Option& o : VideoEncoder::catalog())
+        if (o.proto == codec && o.hardware == hardware) { id = o.id; break; }
+    (screen ? m_scrEncoderId : m_camEncoderId) = id;
     // Пометка идёт только у аппаратного: «H.264» без уточнения и так означает
     // процессор, а строка в «Диагностике» и без того длинная.
     const QString name = hardware
@@ -1309,6 +1488,10 @@ void VideoEngine::setScreenPreviewActive(bool on) {
 // трогать пейсер можно только здесь, на GUI-потоке.
 void VideoEngine::onScreenCapFrame(const QVideoFrame& frame) {
     if (!frame.isValid()) return;
+    // Захват уже остановлен, а кадр всё ещё ехал с его потока. Раньше этой
+    // строки не было, потому что остановки ждали блокирующим вызовом и такого
+    // кадра не бывало; теперь не ждём — значит отсекаем здесь.
+    if (!m_scrCapturing) return;
 
     // Запоминаем для повтора: на неподвижном экране новых кадров не будет,
     // а поток в сеть должен идти ровно (см. onScreenRepeat).
@@ -1355,15 +1538,19 @@ void VideoEngine::sendScreenFrame(const QVideoFrame& frame) {
     // роняем кадр. Экран уступает дорогу голосу и камере первым: лицо к
     // пропаже кадра чувствительнее, чем слайд, а кадры экрана самые тяжёлые.
     if (m_conf->bufferedBytes() > budget) {
-        m_stats->noteTxDrop(true);
+        m_stats->noteTxDrop(true, MediaStats::DropCongestion);
         return;
     }
-    if (m_scrWorker->busy()) { m_stats->noteTxDrop(true); return; }   // см. onCamFrame
+    if (m_scrWorker->busy()) {                                        // см. onCamFrame
+        m_stats->noteTxDrop(true, MediaStats::DropBusy);
+        return;
+    }
     m_scrNextDueMs = (m_scrNextDueMs < now - period) ? now + period
                                                     : m_scrNextDueMs + period;
 
     const bool forceKey = m_scrKeyNext;
     m_scrKeyNext = false;
     m_scrWorker->noteQueued();
+    m_scrHandedAtMs = now;             // сторож зависшего кодировщика
     emit screenFrameToEncode(frame, q.width, q.height, q.fps, bitrate, forceKey, now);
 }

@@ -38,6 +38,15 @@ class MediaStats : public QObject {
     // мы сами, до отправки.
     Q_PROPERTY(int camDropPercent READ camDropPercent NOTIFY updated)
     Q_PROPERTY(int scrDropPercent READ scrDropPercent NOTIFY updated)
+    // …и то же число, разложенное по причинам. Одним процентом обходиться
+    // нельзя: «канал не тянет» и «кодировщик не поспевает» — разные беды с
+    // разным лечением (битрейт и разрешение против кодека и машины), а
+    // выглядят они в общем числе одинаково. Разбор жалобы каждый раз начинался
+    // с угадывания, какая из двух.
+    Q_PROPERTY(int camDropCongestionPercent READ camDropCongestionPercent NOTIFY updated)
+    Q_PROPERTY(int camDropBusyPercent READ camDropBusyPercent NOTIFY updated)
+    Q_PROPERTY(int scrDropCongestionPercent READ scrDropCongestionPercent NOTIFY updated)
+    Q_PROPERTY(int scrDropBusyPercent READ scrDropBusyPercent NOTIFY updated)
     // На сколько миллисекунд видео придерживается, чтобы совпасть со звуком.
     Q_PROPERTY(int syncHoldMs READ syncHoldMs NOTIFY updated)
     // Сколько миллисекунд стоит один кадр. Это главное число, когда картинка
@@ -79,6 +88,10 @@ public:
     bool txScrAudio() const { return m_scrAudio; }
     int camDropPercent() const { return m_cam.dropPercent; }
     int scrDropPercent() const { return m_scr.dropPercent; }
+    int camDropCongestionPercent() const { return m_cam.dropCongestionPercent; }
+    int camDropBusyPercent() const { return m_cam.dropBusyPercent; }
+    int scrDropCongestionPercent() const { return m_scr.dropCongestionPercent; }
+    int scrDropBusyPercent() const { return m_scr.dropBusyPercent; }
     int syncHoldMs() const { return m_syncHoldMs; }
     qreal txCamEncodeMs() const { return m_camEnc.avg; }
     qreal txScrEncodeMs() const { return m_scrEnc.avg; }
@@ -95,7 +108,13 @@ public:
     void noteTxVideo(bool screen, int bytes);
     void noteTxAudio(bool screen, int bytes);   // screen = звук демонстрации
     void noteTxAttempt(bool screen);            // кадр снят и должен был уйти
-    void noteTxDrop(bool screen);               // …но не ушёл
+    // Почему кадр не ушёл. Congestion — очередь в сокете выше бюджета полосы,
+    // то есть канал не принимает столько, сколько мы производим. Busy —
+    // кодировщик ещё не отдал предыдущий кадр, и класть за ним второй нельзя:
+    // в очереди он состарится, а метку времени несёт с момента съёмки.
+    enum DropReason { DropCongestion, DropBusy };
+    Q_ENUM(DropReason)
+    void noteTxDrop(bool screen, DropReason why);
     void noteEncoder(bool screen, const QString& codec, int w, int h);
     void noteTxOff(bool screen);                // полоса погасла: числа стереть
     void noteRxFrame(quint32 sender);           // отрисован входящий кадр
@@ -126,8 +145,10 @@ private:
         qint64 bytes = 0;      // ушло за окно
         int attempts = 0;      // кадров снято и предложено к отправке
         int drops = 0;         // из них выброшено до кодирования
+        int dropsBusy = 0;     // …и сколько из этих — из-за занятого кодировщика
         // готовые значения
         int kbps = 0, fps = 0, dropPercent = 0;
+        int dropCongestionPercent = 0, dropBusyPercent = 0;
         QString format;        // "H.264 · 1280×720"
     };
 

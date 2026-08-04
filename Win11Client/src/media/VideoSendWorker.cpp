@@ -182,6 +182,22 @@ void VideoSendWorker::setCodecChoice(const QString& id) {
     const QString v = (id == QLatin1String("auto")) ? QString() : id;
     if (m_codecChoice == v) return;
     m_codecChoice = v;
+
+    // Выбор поменялся, а кодировщик от этого — не обязательно. Самый частый
+    // случай ровно такой: у демонстрации нулевая ступень лестницы и так HEVC,
+    // и человек, выбирающий «HEVC» в списке, просит то, что уже работает.
+    //
+    // Переоткрывать в этом случае не просто лишнее, а вредно. Переоткрытие
+    // сносит открытый MFT и создаёт новый прямо посреди живого показа — а
+    // именно эта операция и подвешивала аппаратный кодировщик: обёртка Media
+    // Foundation ждёт события своего MFT блокирующим вызовом без таймаута, и
+    // вернуться из него потом нечем.
+    const bool screen = (m_msgType == Proto::SCREEN_CODED);
+    if (m_enc && m_enc->isOpen() && m_enc->encoderName()
+        && VideoEncoder::firstChoice(screen, m_codecStep, v)
+               == QLatin1String(m_enc->encoderName()))
+        return;
+
     reset();
 }
 
@@ -192,6 +208,12 @@ void VideoSendWorker::setCodecChoice(const QString& id) {
 // попал бы, а он-то как раз и самый дорогой.
 void VideoSendWorker::encode(const QVideoFrame& frame, int maxW, int maxH,
                              int fps, int bitrate, bool forceKey, qint64 tsMs) {
+    // Полосу уже собрали заново без нас (см. abandon): кадр, который мы
+    // застали в очереди, относится к прошлой жизни.
+    if (m_abandoned.load(std::memory_order_acquire)) {
+        m_inFlight.fetch_sub(1, std::memory_order_release);
+        return;
+    }
     QElapsedTimer clock;
     clock.start();
     encodeFrame(frame, maxW, maxH, fps, bitrate, forceKey, tsMs);
@@ -308,6 +330,9 @@ void VideoSendWorker::encodeFrame(const QVideoFrame& frame, int maxW, int maxH,
     if (m_sendStartMs == 0) m_sendStartMs = tsMs;
     const auto packets = m_enc->encode(key, tsMs - m_sendStartMs);
     for (const VideoEncoder::Packet& p : packets) {
+        // Кодировщик всё-таки вернулся, но полосы, которой он принадлежал,
+        // больше нет (см. abandon) — эти пакеты уже некуда девать.
+        if (m_abandoned.load(std::memory_order_relaxed)) return;
         const qint64 frameTsMs = m_sendStartMs + p.ptsMs;
         // Сквозное шифрование: наружу уходит только запечатанный payload,
         // заголовок остаётся открытым — по нему сервер релеит полосу. Не

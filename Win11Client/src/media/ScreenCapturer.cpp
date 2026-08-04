@@ -91,7 +91,13 @@ struct ScreenCapturer::Impl {
 // ---------------------------------------------------------------------------
 
 ScreenCapturer::ScreenCapturer(QObject* parent)
-    : QObject(parent), d(std::make_unique<Impl>()) {
+    : QObject(parent), d(std::make_unique<Impl>()) {}
+
+// Всё, что принадлежит ПОТОКУ, а не объекту. Раньше это стояло в конструкторе
+// и работало по случайности: объект создавали прямо на нужном потоке. Теперь
+// он создаётся на GUI-потоке и переезжает, а апартамент переехать не может —
+// он свойство потока, и заявлять его надо оттуда, где потом пойдут вызовы.
+void ScreenCapturer::init() {
     // WinRT требует инициализированного COM на потоке, где создают её объекты,
     // и MTA — потому что пул кадров свободнопоточный. На QThread апартамент уже
     // MTA (проверено пробой), так что это страховка на случай другого вызова.
@@ -107,6 +113,7 @@ ScreenCapturer::ScreenCapturer(QObject* parent)
     // Сторож свёрнутого окна. WGC в этом случае просто перестаёт отдавать кадры,
     // и без сторожа это не отличить от «на экране ничего не происходит»: сцена у
     // зрителя тихо застыла бы на последнем кадре, а причины не видно.
+    if (m_watchdog) return;
     m_watchdog = new QTimer(this);
     m_watchdog->setInterval(500);
     connect(m_watchdog, &QTimer::timeout, this, &ScreenCapturer::onWatchdog);
@@ -487,7 +494,7 @@ bool ScreenCapturer::startItem(bool drawCursor, const QString& what) {
     try { d->session.IsBorderRequired(false); } catch (...) {}
 
     d->session.StartCapture();
-    if (d->hwnd) m_watchdog->start();
+    if (d->hwnd && m_watchdog) m_watchdog->start();
     return true;
 }
 

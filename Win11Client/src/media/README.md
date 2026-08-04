@@ -333,6 +333,33 @@ The media pipeline (see `docs/ROADMAP.md`).
   atomic** (`VideoSendWorker::busy()`), not by waiting for a signal — the GUI
   thread blocks while Qt Quick syncs with the render thread, and a worker that
   reported its freedom through that queue sat idle for the duration.
+
+  **(3) the GUI thread never waits on a media thread, and a stalled encoder is
+  survivable.** Both halves of that were paid for. FFmpeg's Media Foundation
+  wrapper waits on `IMFMediaEventGenerator::GetEvent` with **no timeout**, so a
+  hardware encoder that stops posting events parks its thread forever, and
+  nothing — not FFmpeg, not Windows — can cancel that call. Everything built on
+  top then failed in sequence: `busy()` never cleared, so every captured frame
+  was dropped and diagnostics read *100 % skipped*; `setCodecChoice` and
+  `setCodecStep` are queued to that same thread, so changing the codec was a
+  message into a void; and `stopScreenCapture()` reached `ScreenCapturer::stop()`
+  through a **`BlockingQueuedConnection`** on the thread that also ran the
+  encoder — so ending the share hung the whole application, including its exit.
+  Three rules follow. `ScreenCapturer` gets its **own** thread (it needs an MTA
+  apartment and an event loop, not the encoder's company), start/stop are
+  fire-and-forget with failures arriving via the existing `failed` signal, and
+  `~VideoEngine` bounds every join. `sweepEncoders()` watches the hand-off
+  timestamp once a second and, past `kEncodeDeadlineMs`, rebuilds the band on a
+  fresh thread — the wedged one is marked `abandon()`ed, disconnected **in both
+  directions** (leaving `frameToEncode → encode` alive would pile 12 MB frames
+  into a dead queue), detached from its parent and left to the process. And
+  `probeCodecs()` refuses to open hardware MFTs while a hardware share is
+  running — creating a second encode session beside a live one, which is exactly
+  what opening the share settings used to do, is the surest way to wedge the
+  driver; the encoder already in use is listed without being probed, and the
+  full probe runs once the share ends. Drop counters name their cause
+  (`MediaStats::DropCongestion` / `DropBusy`), because "the link" and "the
+  machine" are opposite repairs and one percentage hid which.
   Also on this path: `sws_scale` is built by hand rather than through
   `sws_getCachedContext` (the latter takes no thread count, and BGRA 4K →
   YUV420P is 12–20 ms single-threaded, more than a whole 60 fps frame budget),

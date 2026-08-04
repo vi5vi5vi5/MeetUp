@@ -23,7 +23,12 @@ void MediaStats::noteTxAudio(bool screen, int bytes) {
 }
 
 void MediaStats::noteTxAttempt(bool screen) { ++band(screen).attempts; }
-void MediaStats::noteTxDrop(bool screen)    { ++band(screen).drops; }
+
+void MediaStats::noteTxDrop(bool screen, DropReason why) {
+    Band& b = band(screen);
+    ++b.drops;
+    if (why == DropBusy) ++b.dropsBusy;
+}
 
 // Случается редко (открытие кодировщика), поэтому сообщаем сразу, не дожидаясь
 // тика: строка формата — то немногое, что видно ещё до первых килобит.
@@ -118,8 +123,13 @@ void MediaStats::tick() {
     const auto close = [&](Band& b) {
         b.kbps = kbps(b.bytes);
         b.fps = perSec(b.attempts - b.drops);
-        b.dropPercent = b.attempts > 0 ? int(qint64(b.drops) * 100 / b.attempts) : 0;
-        b.bytes = 0; b.attempts = 0; b.drops = 0;
+        const auto share = [&b](int n) {
+            return b.attempts > 0 ? int(qint64(n) * 100 / b.attempts) : 0;
+        };
+        b.dropPercent = share(b.drops);
+        b.dropBusyPercent = share(b.dropsBusy);
+        b.dropCongestionPercent = share(b.drops - b.dropsBusy);
+        b.bytes = 0; b.attempts = 0; b.drops = 0; b.dropsBusy = 0;
     };
     // Окно без единого кадра оставляет прошлые числа как есть, а не обнуляет:
     // на статичном экране кадров может не быть секунду-другую, и мигающий ноль

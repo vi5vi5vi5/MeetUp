@@ -239,46 +239,78 @@ Column {
     // будет: транспорт — TCP, по дороге не теряется ничего. Кадры теряем мы
     // сами, до отправки, — когда сокет забит или кодировщик не поспевает.
     Field {
+        id: dropField
         width: parent.width
         label: "Пропуск кадров"
+        // Одного процента мало, и это выяснилось дорого: «канал не тянет» и
+        // «кодировщик не поспевает» выглядели в нём одинаково, а лечатся
+        // противоположным — первое разрешением и битрейтом, второе кодеком и
+        // машиной. Поэтому под плитками стоит разбор по причинам, и подпись
+        // называет ту, которой больше.
+        readonly property int scrBusy: Stats.scrDropBusyPercent
+        readonly property int camBusy: Stats.camDropBusyPercent
+        readonly property int scrJam: Stats.scrDropCongestionPercent
+        readonly property int camJam: Stats.camDropCongestionPercent
         hint: (Stats.txCamFormat === "" && Stats.txScrFormat === "")
               ? "Считается, пока вы вещаете: кадры, снятые, но не ушедшие в сеть."
-              : "Кадр снят, но не ушёл: сокет забит или кодировщик не поспевает."
-        Row {
+              : (scrBusy + camBusy) > (scrJam + camJam)
+                ? "Не поспевает кодировщик: кадр снят, а предыдущий ещё не закодирован. Лечится кодеком полегче, разрешением или частотой пониже."
+                : "Забит канал: кадр снят, но в сокете уже больше, чем он успевает отдать. Лечится битрейтом и разрешением."
+
+        // Своя Column: Field складывает содержимое в Item, не в колонку.
+        Column {
             width: parent.width
             spacing: 8
 
-            Rectangle {
-                width: (parent.width - 8) / 2
-                height: 34
-                radius: Theme.radiusSm
-                color: Theme.surface2
-                border.width: 1
-                border.color: Stats.camDropPercent > 20 ? Theme.danger : Theme.border
-                Text {
-                    anchors.centerIn: parent
-                    text: "Камера · " + Stats.camDropPercent + "%"
-                    color: Stats.txCamFormat === "" ? Theme.textFaint : Theme.text
-                    font.family: Theme.uiFont
-                    font.pixelSize: Theme.textXs
-                    font.weight: Font.Medium
+            Row {
+                width: parent.width
+                spacing: 8
+
+                Rectangle {
+                    width: (parent.width - 8) / 2
+                    height: 34
+                    radius: Theme.radiusSm
+                    color: Theme.surface2
+                    border.width: 1
+                    border.color: Stats.camDropPercent > 20 ? Theme.danger : Theme.border
+                    Text {
+                        anchors.centerIn: parent
+                        text: "Камера · " + Stats.camDropPercent + "%"
+                        color: Stats.txCamFormat === "" ? Theme.textFaint : Theme.text
+                        font.family: Theme.uiFont
+                        font.pixelSize: Theme.textXs
+                        font.weight: Font.Medium
+                    }
+                }
+                Rectangle {
+                    width: (parent.width - 8) / 2
+                    height: 34
+                    radius: Theme.radiusSm
+                    color: Theme.surface2
+                    border.width: 1
+                    border.color: Stats.scrDropPercent > 20 ? Theme.danger : Theme.border
+                    Text {
+                        anchors.centerIn: parent
+                        text: "Экран · " + Stats.scrDropPercent + "%"
+                        color: Stats.txScrFormat === "" ? Theme.textFaint : Theme.text
+                        font.family: Theme.uiFont
+                        font.pixelSize: Theme.textXs
+                        font.weight: Font.Medium
+                    }
                 }
             }
-            Rectangle {
-                width: (parent.width - 8) / 2
-                height: 34
-                radius: Theme.radiusSm
-                color: Theme.surface2
-                border.width: 1
-                border.color: Stats.scrDropPercent > 20 ? Theme.danger : Theme.border
-                Text {
-                    anchors.centerIn: parent
-                    text: "Экран · " + Stats.scrDropPercent + "%"
-                    color: Stats.txScrFormat === "" ? Theme.textFaint : Theme.text
-                    font.family: Theme.uiFont
-                    font.pixelSize: Theme.textXs
-                    font.weight: Font.Medium
-                }
+
+            Text {
+                width: parent.width
+                visible: Stats.camDropPercent > 0 || Stats.scrDropPercent > 0
+                wrapMode: Text.WordWrap
+                text: "Камера: канал " + dropField.camJam + "%, кодировщик "
+                      + dropField.camBusy + "%  ·  экран: канал "
+                      + dropField.scrJam + "%, кодировщик "
+                      + dropField.scrBusy + "%"
+                color: Theme.textFaint
+                font.family: Theme.uiFont
+                font.pixelSize: Theme.text2xs
             }
         }
     }
@@ -381,16 +413,22 @@ Column {
                    + Stats.rxStreams + " "
                    + page.plural(Stats.rxStreams, "видеопоток", "видеопотока", "видеопотоков"))
         lines.push("Голос: " + Stats.txVoiceKbps + " кбит/с")
+        // Пропуск идёт с разбором по причине: без него читающий отчёт начинает
+        // с угадывания, канал виноват или машина.
         lines.push("Камера: " + (Stats.txCamFormat === "" ? "выключена"
                    : Stats.txCamFormat + " · " + Stats.txCamFps + " к/с · "
-                     + Stats.txCamKbps + " кбит/с · пропуск " + Stats.camDropPercent + "%"
+                     + Stats.txCamKbps + " кбит/с · пропуск " + Stats.camDropPercent
+                     + "% (канал " + Stats.camDropCongestionPercent
+                     + "%, кодировщик " + Stats.camDropBusyPercent + "%)"
                      + " · кодирование " + Stats.txCamEncodeMs.toFixed(1) + " мс"
                      + " при бюджете " + page.frameBudget(Stats.txCamFps) + " мс"))
         lines.push("Демонстрация: " + (Stats.txScrFormat === "" ? "нет"
                    : Stats.txScrFormat + " · " + Stats.txScrFps + " к/с · "
                      + Stats.txScrKbps + " кбит/с"
                      + (Stats.txScrAudio ? " (со звуком)" : "")
-                     + " · пропуск " + Stats.scrDropPercent + "%"
+                     + " · пропуск " + Stats.scrDropPercent
+                     + "% (канал " + Stats.scrDropCongestionPercent
+                     + "%, кодировщик " + Stats.scrDropBusyPercent + "%)"
                      + " · кодирование " + Stats.txScrEncodeMs.toFixed(1) + " мс"
                      + " (пик " + Stats.txScrEncodePeakMs.toFixed(1) + ")"
                      + " при бюджете " + page.frameBudget(Stats.txScrFps) + " мс"))
