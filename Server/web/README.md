@@ -1,8 +1,41 @@
 # web/
 
-Веб-клиент MeetUp (дизайн «Prism Minimal», React + JSX, компилируется
-Babel'ем прямо в браузере — сборка не нужна). Отдаётся встроенным
+Веб-клиент MeetUp (дизайн «Prism Minimal», React + JSX). Отдаётся встроенным
 `HttpFileServer`; точка входа `/` — это `login.html`.
+
+## Сборка
+
+Исходники в этой папке рассчитаны на то, что их можно открыть и сразу
+править: JSX в них компилирует `assets/babel.js` прямо в браузере, React —
+dev-сборка с проверками разметки. Для разработки это удобно, для посетителя —
+нет: получалось 4,4 МБ на каждый заход, и телефон компилировал JSX заново
+каждый раз.
+
+Поэтому в эфир уходит не эта папка, а собранная:
+
+```bash
+node tools/build.js            # web/ -> web/dist
+node tools/build.js --watch    # то же, но пересобирает при правке
+```
+
+Сборщику нужен только node — ни `npm install`, ни сети: он вызывает тот же
+самый `assets/babel.js`, который лежит рядом. При развёртывании этот шаг
+делает `docker build` (в стадии сборки образа стоит `nodejs`), поэтому у того,
+кто поднимает свой сервер, из инструментов по-прежнему только docker.
+
+Что меняется в `dist` по сравнению с исходниками:
+
+- блок `<script type="text/babel">` со страницы скомпилирован в
+  `assets/pages/<страница>.js`, а сам `babel.js` в раздачу не попадает;
+- React подменён на production-сборки (`react.production.min.js`,
+  `react-dom.production.min.js`);
+- к каждой ссылке на `assets/…` приписан `?v=<хэш содержимого>` — версию
+  больше не нужно поднимать руками, а забытая правка не уедет в чужой кэш на
+  сутки (`Cache-Control: public, max-age=86400`);
+- итог: **4467 КБ → 351 КБ**, а по сети с gzip (включён в `proxy/nginx.conf`)
+  — около **98 КБ** на страницу конференции.
+
+`web/dist` в git не хранится: в репозитории лежит исходник, а не результат.
 
 ## Страницы
 
@@ -20,8 +53,10 @@ Babel'ем прямо в браузере — сборка не нужна). О�
 Общие ресурсы страниц (в браузере кэшируются, см. Cache-Control в
 `HttpFileServer`):
 
-- `react.js`, `react-dom.js`, `babel.js` — React 18 (dev-сборки) и
-  @babel/standalone для JSX без шага сборки;
+- `react.js`, `react-dom.js`, `babel.js` — React 18.3.1 (dev-сборки) и
+  @babel/standalone. Нужны только при работе с исходниками напрямую; в
+  `dist` вместо них едут `react*.production.min.js`, а Babel не едет вовсе
+  (см. «Сборка» выше);
 - `meetup-ds.js` — дизайн-система (Card, Button, VideoTile, ControlDock…),
   глобал `window.MeetUpDesignSystem_2584b5`;
 - `meetup-common.js` — помощники страниц: адрес WebSocket, fetch-обёртка
@@ -32,8 +67,7 @@ Babel'ем прямо в браузере — сборка не нужна). О�
   видео VideoEncoder (H.264 → VP8 → VP9, keyframe раз в 3 с и по запросу),
   звук AudioEncoder (Opus 48 кГц) с джиттер-буфером на AudioWorklet,
   фолбэк JPEG/PCM для браузеров без WebCodecs, E2E-слой AES-256-GCM
-  (WebCrypto; PBKDF2 из фразы либо raw-ключ из `#k=`). Подключается с
-  `?v=N` — не забудьте поднять при изменении (assets кэшируются);
+  (WebCrypto; PBKDF2 из фразы либо raw-ключ из `#k=`);
 - `theme.css` — дизайн-токены (цвета/типографика/отступы/радиусы),
   тёмная тема по умолчанию, светлая через `[data-theme="light"]`;
 - `fonts.css` + `fonts/*.woff2` — Manrope, Space Grotesk, Unbounded
@@ -43,4 +77,4 @@ Babel'ем прямо в браузере — сборка не нужна). О�
 по https — `wss://<host>/ws` (через nginx из [`../proxy`](../proxy/README.md)),
 по http (локальная разработка) — напрямую `ws://<host>:9000`.
 
-Протокол и HTTP API описаны в [`../docs/meetup-server-spec.md`](../docs/meetup-server-spec.md).
+Протокол и HTTP API описаны в [`../docs/desktop-client-guide.md`](../docs/desktop-client-guide.md).

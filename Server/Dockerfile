@@ -16,6 +16,7 @@ RUN apt-get update \
         ninja-build \
         qt6-base-dev \
         qt6-websockets-dev \
+        nodejs \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -24,6 +25,15 @@ COPY . .
 # Конфигурируем напрямую (без CMakePresets — там зашиты Windows-пути к Qt).
 RUN cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
  && cmake --build build
+
+# Веб-клиент: JSX компилируется ЗДЕСЬ, один раз, а не в браузере у каждого
+# посетителя. Раньше страница везла с собой @babel/standalone (3,1 МБ) и
+# dev-сборки React (1,2 МБ) и компилировала себя при каждом заходе — на
+# телефоне это была самая тяжёлая часть загрузки. Сборщик берёт тот же самый
+# assets/babel.js, который лежит в репозитории, поэтому ни npm install, ни
+# сеть на этом шаге не нужны: у того, кто поднимает свой сервер, из
+# инструментов есть только docker, и так должно остаться.
+RUN node web/tools/build.js
 
 # ---------- 2. Стадия рантайма ----------
 FROM debian:bookworm-slim AS runtime
@@ -40,7 +50,11 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY --from=build /src/build/MeetUpServer /app/MeetUpServer
-COPY web /app/web
+# Именно dist, а не исходники: в собранном виде нет ни babel.js, ни
+# dev-React, страницы ссылаются на скомпилированные assets/pages/*.js, а к
+# каждому ассету приписан ?v=<хэш содержимого> — забыть поднять версию и
+# оставить людей с суточным кэшем старого кода больше нельзя.
+COPY --from=build /src/web/dist /app/web
 
 # HTTP-раздача веб-клиента и WebSocket-relay. Это внутренние порты:
 # наружу их публикует docker-compose через nginx-прокси (https/wss),
