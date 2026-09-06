@@ -52,7 +52,7 @@ Item {
                 fillMode: VideoOutput.PreserveAspectFit
                 transform: Scale {
                     origin.x: out.width / 2
-                    xScale: root.isSelf ? -1 : 1
+                    xScale: root.isSelf && AV.mirrorSelf ? -1 : 1
                 }
             }
         }

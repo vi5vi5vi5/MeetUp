@@ -7,6 +7,7 @@ import MeetUp
 // soon: true — место занято, бэкенда нет: строка приглушается и не нажимается.
 // Так же выглядит и строка, которой снаружи задали enabled: false, — настройка,
 // недоступная из-за другой настройки, читается ровно как «пока нельзя».
+// dev: true — строки нет вовсе, пока не включён режим разработчика (см. Field).
 Item {
     id: root
 
@@ -14,11 +15,13 @@ Item {
     property string description: ""
     property bool checked: false
     property bool soon: false
+    property bool dev: false
     signal toggled(bool value)
 
     width: parent ? parent.width : 0
     implicitHeight: Math.max(col.implicitHeight, sw.height)
     height: implicitHeight
+    visible: !root.dev || AV.devMode
     opacity: (soon || !enabled) ? 0.62 : 1
     enabled: !soon
 
@@ -41,6 +44,11 @@ Item {
             }
             SoonChip {
                 visible: root.soon
+                anchors.verticalCenter: parent.verticalCenter
+            }
+            SoonChip {
+                visible: root.dev
+                text: "dev"
                 anchors.verticalCenter: parent.verticalCenter
             }
         }

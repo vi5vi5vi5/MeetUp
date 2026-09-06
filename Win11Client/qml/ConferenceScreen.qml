@@ -49,7 +49,15 @@ Item {
     // silent — микрофон дёргает не человек, а toggleSound(): у того жеста свой
     // звук, и тумблерный поверх него звучал бы дребезгом.
     function toggleMic(silent) {
-        micOn = !micOn
+        setMic(!micOn, silent)
+    }
+    // Рации нужно именно «поставить в положение», а не «переключить»: сигнал об
+    // удержании приходит и о нажатии, и об отпускании, а состояние микрофона
+    // между ними могли сменить доком — переключение тогда сработало бы в
+    // противоход клавише.
+    function setMic(on, silent) {
+        if (micOn === on) return
+        micOn = on
         if (!silent) Sfx.play(micOn ? "toggle-on" : "toggle-off")
         // Человек тронул микрофон сам — восстанавливать за него больше нечего.
         // toggleSound() ставит флаг ПОСЛЕ вызова этой функции, поэтому её
@@ -112,6 +120,14 @@ Item {
     function toggleTheater() {
         theater = !theater
         if (theater !== fullScreen) fullScreenRequested()
+    }
+
+    // «Во весь экран» с клавиатуры. Пока идёт демонстрация, разворачивать надо
+    // именно её — ради этого клавишу и вешают. Демонстрации нет — разворачивать
+    // нечего, кроме самого окна, и это ровно то, что делает F11.
+    function toggleFullView() {
+        if (screenActive) toggleTheater()
+        else fullScreenRequested()
     }
 
     // Боковая панель: на широком окне она часть раскладки, на узком —
@@ -304,6 +320,14 @@ Item {
         function onMicHotkey()   { root.toggleMic() }
         function onSoundHotkey() { root.toggleSound() }
         function onCamHotkey()   { root.toggleCam() }
+        function onShareHotkey() { root.toggleShare() }
+        function onFullScreenHotkey() { root.toggleFullView() }
+        function onLeaveHotkey() { root.leaveRequested() }
+        // Рация. Микрофон повторяет клавишу один в один: зажали — открыт,
+        // отпустили — закрыт. Сигнал приходит из состояния клавиш, а не из
+        // событий (см. GlobalHotkeys::pttHeld), поэтому залипнуть открытым
+        // микрофон не может даже на потерянном отпускании.
+        function onPttChanged(down) { root.setMic(down) }
     }
 
     // ---------------------------------------------------------------- Side panel

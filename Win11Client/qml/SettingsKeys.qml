@@ -37,32 +37,50 @@ Column {
 
     Rectangle { width: parent.width; height: 1; color: Theme.border }
 
-    // Механизм тот же — не хватает только идентификаторов в GlobalHotkeys
-    // и действий на стороне ConferenceScreen.
+    // Механизм тот же, что у трёх верхних, — разница только в том, что эти три
+    // действия имеют смысл лишь внутри конференции: вне её слушать их некому
+    // (обработчики живут в ConferenceScreen и уходят вместе с ним).
     Field {
         width: parent.width
         label: "Ещё действия"
-        soon: true
+        hint: "«Во весь экран» разворачивает идущую демонстрацию, а если её нет — само окно."
         Column {
             width: parent.width
             spacing: 8
-            enabled: false
-            opacity: 0.62
 
-            KeyBind { label: "Демонстрация экрана" }
-            KeyBind { label: "Во весь экран" }
-            KeyBind { label: "Завершить звонок" }
+            KeyBind {
+                label: "Демонстрация экрана"
+                value: AV.keyShare
+                onPicked: function (seq) { AV.keyShare = seq }
+            }
+            KeyBind {
+                label: "Во весь экран"
+                value: AV.keyFull
+                onPicked: function (seq) { AV.keyFull = seq }
+            }
+            KeyBind {
+                label: "Завершить звонок"
+                value: AV.keyLeave
+                onPicked: function (seq) { AV.keyLeave = seq }
+            }
         }
     }
 
     Rectangle { width: parent.width; height: 1; color: Theme.border }
 
-    // Рация ждёт уже только проводки: сырой ввод сообщает и о нажатии, и об
-    // отпускании (см. GlobalHotkeys::onKey) — нужен свой сигнал на удержание
-    // и обработка на стороне ConferenceScreen.
+    // Рация переопределяет клавишу микрофона, а не заводит свою: две клавиши на
+    // один микрофон — «выключатель» и «удержание» — спорили бы между собой, и
+    // объяснить их разницу человеку было бы нечем.
     SettingSwitch {
         label: "Рация"
-        description: "Микрофон открыт, пока клавиша зажата."
-        soon: true
+        description: AV.keyMic === ""
+            ? "Сначала назначьте клавишу микрофона выше — рация работает ею."
+            : "Микрофон открыт, пока зажата клавиша микрофона ("
+              + Hotkeys.label(AV.keyMic) + "). Отпустили — закрылся."
+        // Режим без органа управления включать нельзя: микрофон в нём не
+        // открылся бы никогда, а тумблер стоял бы включённым и врал.
+        enabled: AV.keyMic !== ""
+        checked: AV.pushToTalk
+        onToggled: function (v) { AV.pushToTalk = v }
     }
 }

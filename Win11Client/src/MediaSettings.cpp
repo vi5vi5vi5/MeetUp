@@ -67,12 +67,21 @@ MediaSettings::MediaSettings(QObject* parent) : QObject(parent) {
     m_screenAudio = s.value("screenAudio", false).toBool();
     m_screenVolume = qBound(0, s.value("screenVolume", 100).toInt(), 200);
     m_uiSounds = s.value("uiSounds", true).toBool();
+    m_mirrorSelf = s.value("mirrorSelf", true).toBool();
     // Через normalize — в файле может лежать текст QKeySequence от прежней
     // версии ("Ctrl+D", "Num+5"); что переносится, то переносится, остальное
     // молча очищается и назначается заново.
     m_keyMic = HotkeySpec::normalize(s.value("keyMic").toString());
     m_keySound = HotkeySpec::normalize(s.value("keySound").toString());
     m_keyCam = HotkeySpec::normalize(s.value("keyCam").toString());
+    m_keyShare = HotkeySpec::normalize(s.value("keyShare").toString());
+    m_keyFull = HotkeySpec::normalize(s.value("keyFull").toString());
+    m_keyLeave = HotkeySpec::normalize(s.value("keyLeave").toString());
+    m_pushToTalk = s.value("pushToTalk", false).toBool();
+    // Режим разработчика не наследуется от «когда-то включал»: он сохраняется,
+    // как и всё остальное, но по умолчанию выключен — иначе первый же запуск у
+    // нового человека встречал бы его кодеками и диагностикой.
+    m_devMode = s.value("devMode", false).toBool();
     s.endGroup();
 
     // Горячее подключение/отключение устройств: списки в модалке живые.
@@ -263,15 +272,27 @@ void MediaSettings::setScreenVolume(int v) {
     save("screenVolume", v);
     emit screenVolumeChanged();
 }
+void MediaSettings::setMirrorSelf(bool on) {
+    if (m_mirrorSelf == on) return;
+    m_mirrorSelf = on;
+    save("mirrorSelf", on);
+    emit mirrorSelfChanged();
+}
+
 // Бинды приводим к каноническому виду на входе, а не при чтении: так в файле
 // настроек и в интерфейсе всегда одно и то же написание, откуда бы значение ни
 // пришло (см. HotkeySpec).
 void MediaSettings::setKeyMic(const QString& s) {
     const QString v = HotkeySpec::normalize(s);
     if (m_keyMic == v) return;
+    const bool pttWas = pushToTalk();
     m_keyMic = v;
     save("keyMic", v);
     emit keyMicChanged();
+    // Клавишу микрофона очистили или назначили заново — рация вместе с ней
+    // погасла или ожила (см. pushToTalk()). Молча этого делать нельзя: тумблер
+    // в настройках должен погаснуть, а GlobalHotkeys — отпустить микрофон.
+    if (pushToTalk() != pttWas) emit pushToTalkChanged();
 }
 void MediaSettings::setKeySound(const QString& s) {
     const QString v = HotkeySpec::normalize(s);
@@ -286,6 +307,41 @@ void MediaSettings::setKeyCam(const QString& s) {
     m_keyCam = v;
     save("keyCam", v);
     emit keyCamChanged();
+}
+void MediaSettings::setKeyShare(const QString& s) {
+    const QString v = HotkeySpec::normalize(s);
+    if (m_keyShare == v) return;
+    m_keyShare = v;
+    save("keyShare", v);
+    emit keyShareChanged();
+}
+void MediaSettings::setKeyFull(const QString& s) {
+    const QString v = HotkeySpec::normalize(s);
+    if (m_keyFull == v) return;
+    m_keyFull = v;
+    save("keyFull", v);
+    emit keyFullChanged();
+}
+void MediaSettings::setKeyLeave(const QString& s) {
+    const QString v = HotkeySpec::normalize(s);
+    if (m_keyLeave == v) return;
+    m_keyLeave = v;
+    save("keyLeave", v);
+    emit keyLeaveChanged();
+}
+
+void MediaSettings::setPushToTalk(bool on) {
+    if (m_pushToTalk == on) return;
+    m_pushToTalk = on;
+    save("pushToTalk", on);
+    emit pushToTalkChanged();
+}
+
+void MediaSettings::setDevMode(bool on) {
+    if (m_devMode == on) return;
+    m_devMode = on;
+    save("devMode", on);
+    emit devModeChanged();
 }
 
 void MediaSettings::setAudioQuality(const QString& q) {

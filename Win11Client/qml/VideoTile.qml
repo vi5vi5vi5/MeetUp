@@ -94,9 +94,11 @@ Item {
                 id: out
                 anchors.fill: parent
                 fillMode: VideoOutput.PreserveAspectCrop
+                // Зеркалим только СВОЙ кадр и только у себя на экране: в эфир
+                // он уходит как есть (см. AV.mirrorSelf).
                 transform: Scale {
                     origin.x: out.width / 2
-                    xScale: root.isSelf ? -1 : 1
+                    xScale: root.isSelf && AV.mirrorSelf ? -1 : 1
                 }
             }
         }

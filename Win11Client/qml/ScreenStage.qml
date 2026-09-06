@@ -22,6 +22,42 @@ Item {
     // занимается ConferenceScreen, сцена только просит.
     signal expandRequested()
 
+    // ---- Полноэкранный показ: интерфейс уходит вместе с курсором ----
+    // В развёрнутом показе смотрят чужой экран, а не наши кнопки: единственный
+    // оставшийся элемент (зелёная кнопка выхода в углу) весь сеанс маячит
+    // поверх чужого текста. Поэтому здесь работает правило плееров — стоит
+    // мышь, нет и интерфейса; двинули её, и всё вернулось.
+    //
+    // Курсор гасим тем же условием и по той же причине: чужая стрелка,
+    // застывшая посреди демонстрации, читается как часть картинки и сбивает с
+    // толку не меньше кнопки.
+    readonly property bool chromeShown: !root.expanded || !root._idle
+    property bool _idle: false
+
+    function wake() {
+        root._idle = false
+        if (root.expanded) idleTimer.restart()
+    }
+    onExpandedChanged: {
+        idleTimer.stop()
+        wake()          // выход из полного экрана обязан вернуть интерфейс
+    }
+
+    Timer {
+        id: idleTimer
+        interval: 2200
+        // Пока мышь стоит НА органах управления, прятать их нельзя: человек
+        // подвёл её к ручке громкости и целится — это не безделье.
+        onTriggered: root._idle = !volPill.open
+    }
+
+    HoverHandler {
+        id: stageHover
+        // Курсор в свёрнутой сцене не наш: там своё указывают плитки и кнопки.
+        cursorShape: root.chromeShown ? Qt.ArrowCursor : Qt.BlankCursor
+        onPointChanged: root.wake()
+    }
+
     Rectangle {
         id: box
         anchors.fill: parent
@@ -107,10 +143,19 @@ Item {
             icon: root.expanded ? "minimize" : "maximize"
             variant: root.expanded ? "active" : "neutral"
             onClicked: root.expandRequested()
+
+            // visible, а не только opacity: прозрачная кнопка всё ещё ловила бы
+            // мышь и подменяла курсор, который мы только что погасили.
+            opacity: root.chromeShown ? 1 : 0
+            visible: opacity > 0
+            Behavior on opacity { NumberAnimation { duration: Theme.durMed } }
         }
         TapHandler {
             gesturePolicy: TapHandler.ReleaseWithinBounds
             onDoubleTapped: root.expandRequested()
+            // Щелчок без движения — тоже признак жизни: интерфейс должен
+            // вернуться, даже если мышь при этом не сдвинулась ни на пиксель.
+            onSingleTapped: root.wake()
         }
 
         // Громкость звука демонстрации — у каждого своя. Ручка стоит здесь, а
@@ -127,7 +172,9 @@ Item {
             anchors.topMargin: 8
             // Своя демонстрация звучит у нас и так — регулировать нечего.
             // Чужая без звука тоже: ручка, которая ничем не управляет, врёт.
-            visible: !root.isSelf && Audio.screenAudioLive
+            visible: !root.isSelf && Audio.screenAudioLive && opacity > 0
+            opacity: root.chromeShown ? 1 : 0
+            Behavior on opacity { NumberAnimation { duration: Theme.durMed } }
 
             readonly property bool open: volHover.hovered || volSlider.pressed
             property int lastVolume: 100        // куда возвращаться из «тихо»
@@ -224,6 +271,8 @@ Item {
             height: chipRow.implicitHeight + 12
             radius: Theme.radiusXs
             color: Theme.scrimChip
+            opacity: root.chromeShown ? 1 : 0
+            Behavior on opacity { NumberAnimation { duration: Theme.durMed } }
 
             Row {
                 id: chipRow

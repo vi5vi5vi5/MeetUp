@@ -10,7 +10,14 @@ Column {
 
     // См. SettingsShare: проба стоит создания пробного кодировщика на каждый
     // аппаратный пункт, поэтому спрашиваем при открытии раздела и один раз.
-    Component.onCompleted: Media.probeCodecs()
+    // А раз список кодеков спрятан за режимом разработчика — то и только тому,
+    // кто его увидит: остальным этот счёт выставлять не за что.
+    function probeIfShown() { if (AV.devMode) Media.probeCodecs() }
+    Component.onCompleted: probeIfShown()
+    Connections {
+        target: AV
+        function onDevModeChanged() { page.probeIfShown() }
+    }
 
     readonly property var codecModel: {
         var m = [{ id: "auto", label: "Авто — подобрать самому" }]
@@ -63,10 +70,12 @@ Column {
                 visible: Media.previewActive
                 fillMode: VideoOutput.PreserveAspectCrop
                 // Зеркало — как в своей плитке и как у веба: человек привык
-                // видеть себя в зеркале, неотзеркаленное лицо читается как чужое.
+                // видеть себя в зеркале, неотзеркаленное лицо читается как
+                // чужое. Тумблер ниже переключает и предпросмотр: иначе выбор
+                // пришлось бы делать вслепую, а проверяют его как раз здесь.
                 transform: Scale {
                     origin.x: out.width / 2
-                    xScale: -1
+                    xScale: AV.mirrorSelf ? -1 : 1
                 }
             }
 
@@ -120,6 +129,7 @@ Column {
     // а машины бывают очень разные.
     Field {
         width: parent.width
+        dev: true
         label: "Кодек камеры"
         hint: AV.camCodec === "auto"
             ? "Сначала VP9: он кодируется вчетверо быстрее остальных программных, а значит меньше задержка. Если участник его не поймёт, перейдём на H.264, в крайнем случае на VP8."
@@ -134,8 +144,9 @@ Column {
 
     SettingSwitch {
         label: "Зеркалить моё видео"
-        description: "Только у вас. Собеседники видят кадр как есть."
-        checked: true
-        soon: true
+        description: "Только у вас — и в предпросмотре выше, и в своей плитке. "
+                   + "Собеседники видят кадр как есть, что бы здесь ни стояло."
+        checked: AV.mirrorSelf
+        onToggled: function (v) { AV.mirrorSelf = v }
     }
 }

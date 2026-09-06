@@ -28,9 +28,13 @@ LRESULT CALLBACK sinkWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 GlobalHotkeys::GlobalHotkeys(MediaSettings* settings, QObject* parent)
     : QObject(parent), m_settings(settings) {
     m_clock.start();
-    connect(settings, &MediaSettings::keyMicChanged,   this, &GlobalHotkeys::reloadBindings);
-    connect(settings, &MediaSettings::keySoundChanged, this, &GlobalHotkeys::reloadBindings);
-    connect(settings, &MediaSettings::keyCamChanged,   this, &GlobalHotkeys::reloadBindings);
+    connect(settings, &MediaSettings::keyMicChanged,     this, &GlobalHotkeys::reloadBindings);
+    connect(settings, &MediaSettings::keySoundChanged,   this, &GlobalHotkeys::reloadBindings);
+    connect(settings, &MediaSettings::keyCamChanged,     this, &GlobalHotkeys::reloadBindings);
+    connect(settings, &MediaSettings::keyShareChanged,   this, &GlobalHotkeys::reloadBindings);
+    connect(settings, &MediaSettings::keyFullChanged,    this, &GlobalHotkeys::reloadBindings);
+    connect(settings, &MediaSettings::keyLeaveChanged,   this, &GlobalHotkeys::reloadBindings);
+    connect(settings, &MediaSettings::pushToTalkChanged, this, &GlobalHotkeys::reloadBindings);
     reloadBindings();
 }
 
@@ -64,20 +68,30 @@ QString GlobalHotkeys::label(const QString& text) const {
 }
 
 void GlobalHotkeys::reloadBindings() {
-    m_specs[0] = HotkeySpec::parse(m_settings->keyMic());
-    m_specs[1] = HotkeySpec::parse(m_settings->keySound());
-    m_specs[2] = HotkeySpec::parse(m_settings->keyCam());
+    m_specs[Mic]   = HotkeySpec::parse(m_settings->keyMic());
+    m_specs[Sound] = HotkeySpec::parse(m_settings->keySound());
+    m_specs[Cam]   = HotkeySpec::parse(m_settings->keyCam());
+    m_specs[Share] = HotkeySpec::parse(m_settings->keyShare());
+    m_specs[Full]  = HotkeySpec::parse(m_settings->keyFull());
+    m_specs[Leave] = HotkeySpec::parse(m_settings->keyLeave());
+    m_ptt = m_settings->pushToTalk();
     refreshListener();
 }
 
 // ---------- приёмник сырого ввода ----------
 
 void GlobalHotkeys::refreshListener() {
-    const bool anyBound = !(m_specs[0].isEmpty() && m_specs[1].isEmpty() && m_specs[2].isEmpty());
+    bool anyBound = false;
+    for (const HotkeySpec& s : m_specs)
+        if (!s.isEmpty()) { anyBound = true; break; }
     // Вне конференции и без единого бинда слушать нечего: чужие нажатия нам
     // тогда не нужны, и просить их у системы незачем.
     if (m_capture || (m_active && anyBound)) startListening();
     else stopListening();
+    // Рацию гасим здесь, а не в каждом вызывающем: сюда сходятся все причины,
+    // по которым она могла перестать действовать, — ушли из конференции, начали
+    // назначать клавишу, выключили сам режим.
+    syncPtt();
 }
 
 bool GlobalHotkeys::startListening() {
@@ -205,6 +219,8 @@ void GlobalHotkeys::handleRawInput(void* rawInputHandle) {
         return;
 
     onKey(vk, !up);
+    // Состояние клавиш только что изменилось — рация смотрит именно на него.
+    syncPtt();
 }
 
 // ---------- разбор аккорда ----------
@@ -288,17 +304,53 @@ void GlobalHotkeys::endChord() {
 }
 
 void GlobalHotkeys::fire(const HotkeySpec& pressed) {
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < ActionCount; ++i) {
+        // В режиме рации клавиша микрофона — не выключатель: её состояние
+        // целиком ведёт syncPtt(), и разовое срабатывание тут только сбивало бы
+        // микрофон в противоход удержанию.
+        if (i == Mic && m_ptt) continue;
         const HotkeySpec& s = m_specs[i];
         if (s.isEmpty() || s.vk != pressed.vk) continue;
         if (!s.modsMatch(pressed.mods)) continue;
         switch (i) {
-        case 0: emit micHotkey();   break;
-        case 1: emit soundHotkey(); break;
-        case 2: emit camHotkey();   break;
+        case Mic:   emit micHotkey();        break;
+        case Sound: emit soundHotkey();      break;
+        case Cam:   emit camHotkey();        break;
+        case Share: emit shareHotkey();      break;
+        case Full:  emit fullScreenHotkey(); break;
+        case Leave: emit leaveHotkey();      break;
         }
         return;                       // одно нажатие — одно действие
     }
+}
+
+// ---------- рация ----------
+
+bool GlobalHotkeys::pttHeld() const {
+    const HotkeySpec& s = m_specs[Mic];
+    if (s.isEmpty()) return false;
+    if (s.modifierOnly()) {
+        // Аккорд из одних модификаторов: он «зажат», пока набор совпадает и
+        // обычных клавиш никто не трогает. Иначе RCtrl-рация открывала бы
+        // микрофон на каждом RCtrl+C — ровно та беда, ради которой в обычном
+        // режиме бинд ждёт отпускания.
+        return m_keysDown.isEmpty() && s.modsMatch(m_modsDown);
+    }
+    return m_keysDown.contains(s.vk) && s.modsMatch(m_modsDown);
+}
+
+void GlobalHotkeys::syncPtt() {
+    const bool held = m_ptt && m_active && !m_capture && pttHeld();
+    if (held == m_pttDown) return;
+    // Печатает человек или нет, проверяем только на ОТКРЫТИИ микрофона: буква,
+    // назначенная рацией, в чате должна остаться буквой. На закрытии такой
+    // проверки быть не может — иначе микрофон залипал бы открытым ровно в тот
+    // момент, когда человек ушёл печатать. Аккорд из одних модификаторов в чат
+    // ничего не вписывает, поэтому его — как и в обычном режиме (см. endChord)
+    // — набор текста не отменяет.
+    if (held && !m_specs[Mic].modifierOnly() && typingInOurWindow()) return;
+    m_pttDown = held;
+    emit pttChanged(held);
 }
 
 void GlobalHotkeys::finishCapture(const HotkeySpec& spec) {

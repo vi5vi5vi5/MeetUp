@@ -32,9 +32,18 @@ class MediaSettings;
 // от «правый Ctrl + правый Shift» было бы нечем: на отпускании же видно, до
 // чего аккорд дорос. Бинд с обычной клавишей срабатывает как везде — сразу на
 // нажатии.
+//
+// РАЦИЯ — исключение из всего абзаца выше. Там важно не «сработало», а
+// «зажато», поэтому клавиша микрофона в этом режиме не даёт micHotkey вовсе:
+// вместо него идёт pttChanged(true/false) по фактическому состоянию клавиш.
+// Аккорд из одних модификаторов в рации срабатывает сразу на нажатии — ждать
+// отпускания, чтобы открыть микрофон, было бы бессмысленно.
 class GlobalHotkeys : public QObject {
     Q_OBJECT
 public:
+    // Порядок задаёт и порядок в m_specs, и порядок разбора в fire().
+    enum Action { Mic = 0, Sound, Cam, Share, Full, Leave, ActionCount };
+
     explicit GlobalHotkeys(MediaSettings* settings, QObject* parent = nullptr);
     ~GlobalHotkeys() override;
 
@@ -59,6 +68,11 @@ signals:
     void micHotkey();
     void soundHotkey();
     void camHotkey();
+    void shareHotkey();
+    void fullScreenHotkey();
+    void leaveHotkey();
+    // Рация: клавиша микрофона зажата (true) или отпущена (false).
+    void pttChanged(bool down);
     void captured(const QString& text);
 
 private:
@@ -72,14 +86,22 @@ private:
     void endChord();                // отпущен последний модификатор аккорда
     void fire(const HotkeySpec& pressed);
     void finishCapture(const HotkeySpec& spec);
+    // Рация: зажат ли ПРЯМО СЕЙЧАС бинд микрофона. Считается по состоянию
+    // клавиш, а не по событиям, — так микрофон не может залипнуть открытым из-за
+    // потерянного отпускания (например, если клавишу отпустили, пока мы не
+    // слушали ввод).
+    bool pttHeld() const;
+    void syncPtt();                 // сверить состояние клавиш с сигналом
     // Окно приложения в фокусе и человек печатает — бинд с обычной клавишей
     // тогда не наш: клавиша должна дойти до поля ввода и только туда.
     bool typingInOurWindow() const;
 
     MediaSettings* m_settings;      // не владеем
-    HotkeySpec m_specs[3];          // микрофон, звук, камера — в этом порядке
+    HotkeySpec m_specs[ActionCount];
     bool m_active = false;
     bool m_capture = false;
+    bool m_ptt = false;             // режим рации включён в настройках
+    bool m_pttDown = false;         // …и клавиша сейчас зажата
 
     void* m_hwnd = nullptr;         // окно-приёмник сырого ввода (HWND)
     bool m_listening = false;

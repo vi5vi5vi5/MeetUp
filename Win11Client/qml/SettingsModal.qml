@@ -22,18 +22,38 @@ Item {
     z: 200
 
     // Рельс и страницы строятся из одного списка: добавить раздел — дописать
-    // сюда строку и положить рядом файл.
-    readonly property var sections: [
+    // сюда строку и положить рядом файл. dev: true — раздел для режима
+    // разработчика: без него его нет вовсе, а не «есть, но серый».
+    readonly property var allSections: [
         { icon: "mic",      title: "Звук",         sub: "Микрофон, динамики и качество передачи голоса", page: "SettingsAudio.qml" },
         { icon: "video",    title: "Видео",        sub: "Камера, предпросмотр и параметры трансляции",   page: "SettingsVideo.qml" },
         { icon: "screen",   title: "Демонстрация", sub: "Что видят собеседники, когда вы показываете экран", page: "SettingsShare.qml" },
         { icon: "lock",     title: "Шифрование",   sub: "Сквозное шифрование медиа и переписки",         page: "SettingsCrypto.qml" },
         { icon: "keyboard", title: "Управление",   sub: "Глобальные клавиши — работают и вне окна",      page: "SettingsKeys.qml" },
         { icon: "layout",   title: "Интерфейс",    sub: "Тема, сетка участников и уведомления",          page: "SettingsInterface.qml" },
-        { icon: "activity", title: "Диагностика",  sub: "Живые показатели соединения и кодеков",         page: "SettingsStats.qml" },
+        { icon: "activity", title: "Диагностика",  sub: "Живые показатели соединения и кодеков",         page: "SettingsStats.qml", dev: true },
         { icon: "info",     title: "О программе",  sub: "Версия, сервер и журналы",                      page: "SettingsAbout.qml" }
     ]
-    property int current: 0
+    readonly property var sections: allSections.filter(function (s) {
+        return !s.dev || AV.devMode
+    })
+
+    // Текущий раздел храним ИМЕНЕМ файла, а не номером в списке: номера едут,
+    // когда режим разработчика убирает «Диагностику» из середины, и человек,
+    // щёлкнувший тумблер в «О программе», уезжал бы оттуда сам собой.
+    property string current: root.allSections[0].page
+    readonly property int currentIdx: {
+        for (var i = 0; i < root.sections.length; ++i)
+            if (root.sections[i].page === root.current) return i
+        return 0
+    }
+    readonly property var currentInfo: root.sections[root.currentIdx]
+
+    // Открытый раздел исчез вместе с режимом разработчика — уходим на первый.
+    onSectionsChanged: {
+        var alive = root.sections.some(function (s) { return s.page === root.current })
+        if (!alive) root.current = root.sections[0].page
+    }
     // Минимальная ширина окна — 760, так что узкий случай не гипотетический:
     // рельс схлопывается в иконки, подписи уходят в подсказки.
     readonly property bool compact: width < 900
@@ -42,8 +62,7 @@ Item {
     component RailItem: Item {
         id: item
         required property var info
-        required property int idx
-        readonly property bool active: root.current === idx
+        readonly property bool active: root.current === item.info.page
 
         width: parent ? parent.width : 0
         height: 40
@@ -93,7 +112,7 @@ Item {
         // задана явно.
         TapHandler {
             gesturePolicy: TapHandler.ReleaseWithinBounds
-            onTapped: root.current = item.idx
+            onTapped: root.current = item.info.page
         }
 
         // В узком окне подписей нет — название показывает подсказка.
@@ -205,9 +224,7 @@ Item {
                     model: root.sections.slice(0, root.sections.length - 1)
                     delegate: RailItem {
                         required property var modelData
-                        required property int index
                         info: modelData
-                        idx: index
                     }
                 }
             }
@@ -229,7 +246,6 @@ Item {
                 }
                 RailItem {
                     info: root.sections[root.sections.length - 1]
-                    idx: root.sections.length - 1
                 }
             }
         }
@@ -262,7 +278,7 @@ Item {
                     Text {
                         width: parent.width
                         elide: Text.ElideRight
-                        text: root.sections[root.current].title
+                        text: root.currentInfo.title
                         color: Theme.text
                         font.family: Theme.displayFont
                         font.pixelSize: Theme.textLg
@@ -272,7 +288,7 @@ Item {
                     Text {
                         width: parent.width
                         elide: Text.ElideRight
-                        text: root.sections[root.current].sub
+                        text: root.currentInfo.sub
                         color: Theme.textMuted
                         font.family: Theme.uiFont
                         font.pixelSize: Theme.textXs
@@ -334,7 +350,7 @@ Item {
                     // Закрытая модалка не держит раздел живым: у видео там
                     // появится предпросмотр камеры, и лишний захват ни к чему.
                     active: root.open
-                    source: Qt.resolvedUrl(root.sections[root.current].page)
+                    source: Qt.resolvedUrl(root.currentInfo.page)
                 }
             }
 

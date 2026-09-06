@@ -87,12 +87,30 @@ class MediaSettings : public QObject {
     // Звуки интерфейса: тумблеры, входящее сообщение, приход и уход участников.
     // По умолчанию включены — это подтверждение действия, а не украшение.
     Q_PROPERTY(bool uiSounds READ uiSounds WRITE setUiSounds NOTIFY uiSoundsChanged)
+    // Зеркалить своё видео — и в плитке, и на сцене, и в предпросмотре камеры.
+    // По умолчанию включено: человек привык видеть себя в зеркале, и
+    // неотзеркаленное лицо читается как чужое. Настройка чисто своя: в эфир
+    // кадр уходит как есть, собеседники ничего не заметят.
+    Q_PROPERTY(bool mirrorSelf READ mirrorSelf WRITE setMirrorSelf NOTIFY mirrorSelfChanged)
     // Горячие клавиши (M8): текст бинда в собственном формате — "RCtrl",
     // "RCtrl+RShift", "Ctrl+D", "F9" (разбор и правила в src/HotkeySpec.h).
     // Пустая строка — клавиша не назначена. Слушают GlobalHotkeys и настройки.
     Q_PROPERTY(QString keyMic   READ keyMic   WRITE setKeyMic   NOTIFY keyMicChanged)
     Q_PROPERTY(QString keySound READ keySound WRITE setKeySound NOTIFY keySoundChanged)
     Q_PROPERTY(QString keyCam   READ keyCam   WRITE setKeyCam   NOTIFY keyCamChanged)
+    Q_PROPERTY(QString keyShare READ keyShare WRITE setKeyShare NOTIFY keyShareChanged)
+    Q_PROPERTY(QString keyFull  READ keyFull  WRITE setKeyFull  NOTIFY keyFullChanged)
+    Q_PROPERTY(QString keyLeave READ keyLeave WRITE setKeyLeave NOTIFY keyLeaveChanged)
+    // Рация: клавиша микрофона перестаёт быть выключателем и работает на
+    // удержание — микрофон открыт, пока она зажата, и закрывается сразу на
+    // отпускании. Механизм — в GlobalHotkeys (сырой ввод сообщает и о нажатии,
+    // и об отпускании, чего RegisterHotKey не умел).
+    Q_PROPERTY(bool pushToTalk READ pushToTalk WRITE setPushToTalk NOTIFY pushToTalkChanged)
+    // Режим разработчика: показывает служебные настройки, которым не место
+    // перед обычным человеком, — кодеки, буферы конвейера, диагностику, ещё не
+    // подключённые тумблеры. Живёт здесь, а не в отдельном объекте, потому что
+    // это ровно то же самое: строчка в файле настроек, которую читает QML.
+    Q_PROPERTY(bool devMode READ devMode WRITE setDevMode NOTIFY devModeChanged)
     // Уровень микрофона 0..1 (RMS) — индикатор в настройках. Пишет AudioEngine.
     Q_PROPERTY(qreal micLevel READ micLevel NOTIFY micLevelChanged)
 public:
@@ -132,9 +150,18 @@ public:
     bool screenAudio() const { return m_screenAudio; }
     int screenVolume() const { return m_screenVolume; }
     bool uiSounds() const { return m_uiSounds; }
+    bool mirrorSelf() const { return m_mirrorSelf; }
     QString keyMic() const { return m_keyMic; }
     QString keySound() const { return m_keySound; }
     QString keyCam() const { return m_keyCam; }
+    QString keyShare() const { return m_keyShare; }
+    QString keyFull() const { return m_keyFull; }
+    QString keyLeave() const { return m_keyLeave; }
+    // Рация без назначенной клавиши микрофона — режим без органа управления:
+    // микрофон в нём не открылся бы никогда. Сам выбор при этом не
+    // переписывается: назначат клавишу — рация и заработает (ср. autoGain()).
+    bool pushToTalk() const { return m_pushToTalk && !m_keyMic.isEmpty(); }
+    bool devMode() const { return m_devMode; }
     qreal micLevel() const { return m_micLevel; }
 
     void setMicId(const QString& id);
@@ -153,9 +180,15 @@ public:
     void setScreenAudio(bool on);
     void setScreenVolume(int v);
     void setUiSounds(bool on);
+    void setMirrorSelf(bool on);
     void setKeyMic(const QString& s);
     void setKeySound(const QString& s);
     void setKeyCam(const QString& s);
+    void setKeyShare(const QString& s);
+    void setKeyFull(const QString& s);
+    void setKeyLeave(const QString& s);
+    void setPushToTalk(bool on);
+    void setDevMode(bool on);
 
     // ---- Для движков (не QML) ----
 
@@ -208,9 +241,15 @@ signals:
     void screenAudioChanged();
     void screenVolumeChanged();
     void uiSoundsChanged();
+    void mirrorSelfChanged();
     void keyMicChanged();
     void keySoundChanged();
     void keyCamChanged();
+    void keyShareChanged();
+    void keyFullChanged();
+    void keyLeaveChanged();
+    void pushToTalkChanged();
+    void devModeChanged();
     void micLevelChanged();
 
 private:
@@ -237,7 +276,11 @@ private:
     bool m_screenAudio = false;
     int m_screenVolume = 100;
     bool m_uiSounds = true;
+    bool m_mirrorSelf = true;
     QString m_keyMic, m_keySound, m_keyCam;
+    QString m_keyShare, m_keyFull, m_keyLeave;
+    bool m_pushToTalk = false;
+    bool m_devMode = false;
 
     qreal m_micLevel = 0;
     qint64 m_micLevelAt = 0;              // прореживание micLevelChanged
