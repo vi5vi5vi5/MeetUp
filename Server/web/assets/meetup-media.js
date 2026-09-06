@@ -90,10 +90,19 @@
     return p;
   }
 
+  // Что мы ОТПРАВЛЯЕМ. Здесь выбора нет и не должно быть: H.264 понимают все,
+  // и почти везде он кодируется видеокартой. VP8 — не альтернатива, а
+  // аварийный выход для браузера, где H.264 недоступен (часть сборок Firefox
+  // без системных кодеков): там иначе не было бы видео вообще.
+  //
+  // VP9 из отправки убран намеренно, хотя браузеры его умеют. Ручка «кодек»
+  // в вебе — иллюзия управления: настоящий выбор всё равно делает WebCodecs
+  // за нас, а каждый лишний кодек в отправке — это ещё один способ оказаться
+  // непонятым частью комнаты. Принимаем при этом по-прежнему всё, что
+  // вытянет браузер (см. VIDEO_DECODE): шлём узко, принимаем широко.
   const VIDEO_TRY = [
-    { id: 2, codec: "avc1.42E01F", extra: { avc: { format: "annexb" } } },  // аппаратный почти везде
+    { id: 2, codec: "avc1.42E01F", extra: { avc: { format: "annexb" } } },
     { id: 1, codec: "vp8", extra: {} },
-    { id: 3, codec: "vp09.00.10.08", extra: {} },
   ];
 
   // H.264 задаёт «уровень» (level_idc) — потолок разрешения и битрейта потока.
@@ -129,7 +138,20 @@
   const PCM_RATE = 16000;                 // legacy-фолбэк
   const JPEG_INTERVAL_MS = 100;           // legacy ~10 к/с
   const KEY_EVERY_FRAMES = 72;            // keyframe раз в ~3 с при 24 к/с
-  const MAX_BUFFERED = 1.5e6;             // затык сети: пропускаем кадры
+
+  // Затор в сокете. Все полосы — голос, камера, экран — едут через ОДИН
+  // WebSocket поверх TCP, поэтому очередь в сокете задерживает и звук: пока
+  // не уйдёт опорный кадр экрана в сотни килобайт, голос стоит за ним.
+  // Отсюда асимметрия: экран прижимаем раньше и роняем первым, у камеры
+  // запас больше, а голос не трогаем никогда.
+  //
+  //   easeAt — с этого размера очереди понижаем битрейт (плавно);
+  //   dropAt — с этого просто не отдаём кадр энкодеру (обрыв, край).
+  const PRESSURE = {
+    cam:    { easeAt: 400e3,  dropAt: 1.5e6 },
+    screen: { easeAt: 200e3,  dropAt: 350e3 },
+  };
+  const RATE_MIN = 0.25;                  // ниже четверти пресета не опускаемся
 
   // ---- Захват микрофона: копит кванты по 128 в чанки 960 (20 мс) ----
   const CAPTURE_WORKLET = `
@@ -297,6 +319,10 @@
     //       onSelfSpeaking(), onSpeaking(id), onFrameActivity(id), onLocked(id, bool)
     const st = {
       quality: { cam: "med", screen: "med", audio: "med" },
+      // Множитель битрейта под состояние сети: 1 — пресет целиком, ниже —
+      // сеть не тянет. Держится отдельно по полосам, потому что и давят на
+      // них по-разному (см. PRESSURE).
+      rate: { cam: 1, screen: 1 },
       ctx: null, masterGain: null, screenGain: null, workletsReady: null,
       volume: 1, screenVolume: 1, sens: 1, micLevel: 0,
       cipher: null,
@@ -363,7 +389,9 @@
       const codec = choice.codec.startsWith("avc1.") ? avcCodec(w, h, q.framerate) : choice.codec;
       return Object.assign({
         codec, width: w, height: h,
-        bitrate: q.bitrate,
+        // Пресет — это потолок, а не обещание: сколько уедет на самом деле,
+        // решает состояние сети (см. pace ниже).
+        bitrate: Math.max(80000, Math.round(q.bitrate * st.rate[kind])),
         framerate: q.framerate,
         latencyMode: "realtime",
       }, choice.extra);
@@ -573,6 +601,8 @@
     // демонстрация не выключает камеру и наоборот.
 
     function makeVideoSender(screen) {
+      const kind = screen ? "screen" : "cam";
+      const press = PRESSURE[kind];
       const lane = screen ? "s" : "v";
       const codedType = screen ? MSG.SCREEN_CODED : MSG.VIDEO_CODED;
       const jpegType = screen ? MSG.SCREEN_JPEG : MSG.VIDEO_JPEG;
@@ -584,7 +614,45 @@
       const s = { el: null, token: 0, active: false, reader: null, stream: null,
                   onElement: false,
                   venc: null, w: 0, h: 0, frames: 0, keyNext: false,
+                  lastPaceAt: 0,
                   jpegCanvas: null, lastJpegAt: 0, jpegBusy: false };
+
+      // Подстройка под сеть. Раньше здесь был один порог: очередь в сокете
+      // переросла полтора мегабайта — кадр выброшен. Это обрыв, а не
+      // регулирование: полтора мегабайта на медленном канале — уже несколько
+      // секунд задержки, и всё это время картинка стоит, а голос опаздывает
+      // за ней. Теперь сначала плавно снижаем битрейт (сеть перестаёт
+      // захлёбываться, картинка живая, просто мягче), и только на самом краю
+      // роняем кадр.
+      //
+      // Вверх возвращаемся втрое медленнее, чем вниз: провал заметен сразу и
+      // реагировать надо быстро, а вот радоваться освободившемуся каналу
+      // рано — стоит дёрнуться, и затор повторится.
+      function pace() {
+        const now = Date.now();
+        if (now - s.lastPaceAt < 1000) return;
+        s.lastPaceAt = now;
+
+        const buf = opts.buffered();
+        const cur = st.rate[kind];
+        let next = cur;
+        if (buf > press.easeAt) next = Math.max(RATE_MIN, cur - 0.2);
+        else if (buf < press.easeAt / 4) next = Math.min(1, cur + 0.07);
+        if (Math.abs(next - cur) < 0.02) return;
+
+        st.rate[kind] = next;
+        // Меняем битрейт на живом энкодере, без пересоздания: состояние
+        // потока сохраняется, а следующий кадр делаем опорным — новый битрейт
+        // должен вступить в силу с картинки, а не с середины серии дельт.
+        if (s.venc && s.venc.state === "configured" && s.w) {
+          const choice = choiceFor(screen);
+          try {
+            if (choice) { s.venc.configure(videoCfg(choice, s.w, s.h, screen)); s.keyNext = true; }
+          } catch (e) {
+            resetEncoder();   // не принял — пересоздадим со следующим кадром
+          }
+        }
+      }
 
       // Кадры берём ПРЯМО С ТРЕКА через MediaStreamTrackProcessor. Скрытый
       // <video> вне DOM браузер деприоритезирует: он не держится живого края
@@ -595,6 +663,11 @@
         stop();
         s.active = true;
         s.stream = stream;
+        // Новый захват — новая ситуация: прошлый зажим мог остаться от сети,
+        // которой давно нет. Если сеть всё ещё плохая, pace() вернёт зажим
+        // через секунду; а вот стартовать заведомо мягкой картинкой и ждать
+        // десять секунд подъёма — хуже.
+        st.rate[kind] = 1;
         const token = ++s.token;
         // Ждём детект кодеков: без WebCodecs идём только элементом (JPEG).
         detect.then(() => {
@@ -705,8 +778,9 @@
           }
           return;
         }
+        pace();
         const w = frame.displayWidth & ~1, h = frame.displayHeight & ~1;
-        if (w >= 2 && h >= 2 && opts.buffered() <= MAX_BUFFERED
+        if (w >= 2 && h >= 2 && opts.buffered() <= press.dropAt
             && ensureEncoder(w, h) && s.venc.encodeQueueSize <= 2)
           emitFrame(frame);
         frame.close();
@@ -716,7 +790,8 @@
         if (!v.videoWidth || v.readyState < 2) return;
         if (st.videoChoice === undefined) return;          // детект кодеков ещё идёт
         if (st.videoChoice === null) { legacyTick(v); return; }
-        if (opts.buffered() > MAX_BUFFERED) return;        // сеть не успевает — пропуск кадра
+        pace();
+        if (opts.buffered() > press.dropAt) return;        // сеть не успевает — пропуск кадра
 
         const w = v.videoWidth & ~1, h = v.videoHeight & ~1;
         if (!ensureEncoder(w, h)) return;
@@ -735,7 +810,7 @@
       function legacyTick(v) {
         const now = Date.now();
         if (now - s.lastJpegAt < jpegIntervalMs || s.jpegBusy) return;
-        if (opts.buffered() > MAX_BUFFERED) return;
+        if (opts.buffered() > press.dropAt) return;
         s.lastJpegAt = now;
         const c = s.jpegCanvas || (s.jpegCanvas = document.createElement("canvas"));
         const vw = v.videoWidth || jpegMaxW, vh = v.videoHeight || jpegMaxH;
@@ -1249,6 +1324,9 @@
                  // Чем этот браузер умеет кодировать — пригодится в разделе
                  // диагностики и объясняет, почему откат возможен не всегда.
                  encodeOk: st.videoOk.map((c) => CODEC_NAME[c.id] || c.codec),
+                 // Насколько сеть прижала каждую полосу (1 — не прижала).
+                 camRate: st.rate.cam, screenRate: st.rate.screen,
+                 buffered: opts.buffered(),
                  screenAudio: !!st.scrAenc,
                  encrypted: !!st.cipher };
       },
