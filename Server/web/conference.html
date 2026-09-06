@@ -117,6 +117,73 @@
   .pager-dot.on { background: var(--accent); width: 22px; }
 
   .dock { position: absolute; left: 50%; bottom: 26px; transform: translateX(-50%); max-width: calc(100% - 32px); }
+  /* Док собран здесь, а не взят из дизайн-системы: там жёстко зашиты пять
+     кнопок без «общего звука», а на телефоне доку нужен компактный размер. */
+  .dockbar {
+    display: inline-flex; align-items: center; gap: var(--gap-inline);
+    padding: 10px; border-radius: var(--radius-lg);
+    background: var(--surface); border: 1px solid var(--border);
+    box-shadow: var(--shadow-pop);
+  }
+  .dock-sep { width: 1px; align-self: stretch; background: var(--border); margin: 0 2px; }
+
+  /* Кнопки на самой демонстрации: во весь экран и громкость её звука. */
+  .stage-tools {
+    position: absolute; right: 12px; bottom: 12px; z-index: 6;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .stage-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 36px; height: 36px; padding: 0; cursor: pointer;
+    border-radius: var(--radius-md); border: 1px solid var(--border);
+    background: var(--scrim-chip); backdrop-filter: var(--blur-chip);
+    -webkit-backdrop-filter: var(--blur-chip);
+    color: var(--text); transition: var(--transition);
+  }
+  .stage-btn:hover { background: var(--surface-2); }
+
+  /* Громкость демонстрации: пилюля, которая разъезжается по наведению.
+     В свёрнутом виде это просто значок, в развёрнутом — ползунок и проценты.
+     Ручка у СЛУШАТЕЛЯ, а не у ведущего: иначе один решал бы за всю комнату. */
+  .scrvol {
+    display: flex; align-items: center; gap: 8px; height: 36px;
+    padding: 0 8px; overflow: hidden;
+    border-radius: var(--radius-md); border: 1px solid var(--border);
+    background: var(--scrim-chip); backdrop-filter: var(--blur-chip);
+    -webkit-backdrop-filter: var(--blur-chip);
+    color: var(--text); width: 36px; transition: width .18s var(--ease);
+  }
+  .scrvol:hover, .scrvol.open { width: 190px; }
+  .scrvol > button {
+    background: none; border: none; padding: 0; margin: 0; cursor: pointer;
+    color: inherit; display: inline-flex; flex: none;
+  }
+  .scrvol .set-range { margin: 0; flex: 1; min-width: 0; }
+  .scrvol .pct { font-size: var(--text-2xs); font-weight: 700; flex: none; width: 34px; text-align: right; }
+
+  /* Демонстрация во весь экран: шапка, плёнка, док и панель уходят,
+     сцена занимает всё. Полноэкранный API просим дополнительно — на iOS
+     его для произвольных элементов нет, и режим должен работать и без него. */
+  .conf.theater { grid-template-columns: 1fr; }
+  .conf.theater .confbar,
+  .conf.theater .film,
+  .conf.theater .side,
+  .conf.theater .dock,
+  .conf.theater .chat-fab,
+  .conf.theater .pager-dots { display: none !important; }
+  .conf.theater .stagebox { margin: 0; border-radius: 0; border: none; }
+
+  /* Личная громкость участника (правая кнопка / долгий тап по плитке). */
+  .peervol-scrim { position: fixed; inset: 0; z-index: 100; background: color-mix(in srgb, var(--bg) 55%, transparent); }
+  .peervol {
+    position: fixed; z-index: 101; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: 300px; max-width: calc(100vw - 32px);
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-card); box-shadow: var(--shadow-card); padding: 18px;
+  }
+  .peervol h3 { margin: 0 0 2px; font-family: var(--font-display); font-size: 17px; font-weight: 700; letter-spacing: -.4px; }
+  .peervol .sub { margin: 0 0 14px; color: var(--text-muted); font-size: var(--text-xs); }
+  .peervol .row { display: flex; align-items: center; gap: 10px; }
 
   /* поповер «поделиться ссылкой» */
   .share-scrim { position: fixed; inset: 0; z-index: 70; background: transparent; }
@@ -142,12 +209,85 @@
     position: fixed; inset: 0; z-index: 96; display: grid; place-items: center;
     padding: 20px; pointer-events: none;
   }
-  .settings-card {
-    width: 100%; max-width: 440px; pointer-events: auto;
-    max-height: calc(100dvh - 40px); overflow: auto;
+  /* Настройки — двухколоночный диалог: рельс разделов слева, страница
+     справа. Прокрутка живёт ВНУТРИ раздела, поэтому появление новых
+     настроек не двигает вёрстку остальных. */
+  .set-panel {
+    pointer-events: auto; display: grid; grid-template-columns: 236px 1fr;
+    width: 100%; max-width: 840px; height: min(580px, calc(100dvh - 40px));
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-card); box-shadow: var(--shadow-card); overflow: hidden;
   }
-  .set-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
-  .set-title { margin: 0; font-family: var(--font-display); font-weight: 700; font-size: 20px; letter-spacing: -.5px; }
+  .set-rail {
+    border-right: 1px solid var(--border); padding: 14px 10px;
+    overflow: auto; display: flex; flex-direction: column; gap: 2px; min-width: 0;
+  }
+  .set-rail-head { display: flex; align-items: center; gap: 8px; padding: 0 4px 10px 0; }
+  .set-rail-title {
+    font-family: var(--font-label); font-weight: 700; font-size: 11px;
+    letter-spacing: 2px; text-transform: uppercase; color: var(--text-faint);
+    padding: 4px 10px 0; flex: 1; min-width: 0;
+  }
+  /* На широком окне закрывает крестик в шапке раздела — второй был бы лишним.
+     На телефоне правая панель спрятана вместе со своим крестиком, и без
+     этого из списка разделов было бы не выйти вовсе. */
+  .set-rail-close { display: none; }
+  .set-item {
+    display: flex; align-items: center; gap: 11px; width: 100%;
+    padding: 9px 10px; border: 1px solid transparent; border-radius: var(--radius-sm);
+    background: none; color: var(--text-muted); cursor: pointer; text-align: left;
+    font-family: var(--font-ui); font-size: var(--text-sm); font-weight: 600;
+    transition: var(--transition);
+  }
+  .set-item:hover { background: var(--surface-2); color: var(--text); }
+  .set-item.on {
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+    color: var(--accent-ink);
+  }
+  .set-item .chev { margin-left: auto; opacity: .5; display: none; }
+  .set-body { display: flex; flex-direction: column; min-width: 0; }
+  .set-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 16px 20px; border-bottom: 1px solid var(--border);
+  }
+  .set-title { margin: 0; font-family: var(--font-display); font-weight: 700; font-size: 19px; letter-spacing: -.5px; }
+  .set-sub { margin: 2px 0 0; font-size: var(--text-xs); color: var(--text-muted); }
+  .set-back { display: none; }
+  .set-page { flex: 1; overflow: auto; padding: 18px 20px 24px; }
+  .set-page > * + * { margin-top: 18px; }
+  /* Тумблер: те же токены, что у остальных «включено» в системе. */
+  .set-toggle {
+    display: flex; align-items: center; gap: 10px; width: 100%;
+    padding: 10px 12px; border-radius: var(--radius-sm);
+    border: 1px solid var(--border); background: var(--surface-2);
+    color: var(--text); font-family: var(--font-ui); font-size: var(--text-sm);
+    font-weight: 600; cursor: pointer; text-align: left; transition: var(--transition);
+  }
+  .set-toggle:hover { border-color: var(--border-strong); }
+  .set-toggle .knob {
+    margin-left: auto; flex: none; width: 38px; height: 22px; border-radius: var(--radius-pill);
+    background: var(--surface-3); border: 1px solid var(--border); position: relative;
+    transition: var(--transition);
+  }
+  .set-toggle .knob::after {
+    content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+    border-radius: 50%; background: var(--text-faint); transition: var(--transition);
+  }
+  .set-toggle.on .knob { background: color-mix(in srgb, var(--accent) 30%, transparent); border-color: var(--accent); }
+  .set-toggle.on .knob::after { left: 18px; background: var(--accent); }
+  .set-toggle .sub { display: block; font-weight: 400; font-size: var(--text-2xs); color: var(--text-muted); margin-top: 2px; }
+  /* Строка «показатель — значение» в диагностике и «о программе». */
+  .set-kv { display: flex; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: var(--text-sm); }
+  .set-kv:last-child { border-bottom: none; }
+  .set-kv b { flex: none; width: 46%; font-weight: 600; color: var(--text-muted); }
+  .set-kv span { min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+  .set-note { font-size: var(--text-xs); color: var(--text-faint); }
+  .set-kv kbd {
+    font-family: var(--font-mono); font-size: var(--text-xs);
+    padding: 2px 7px; border-radius: var(--radius-xs);
+    background: var(--surface-2); border: 1px solid var(--border-strong);
+  }
   .set-select {
     width: 100%; padding: var(--pad-input);
     background: var(--surface-2); color: var(--text);
@@ -236,6 +376,7 @@
     .film-cell { width: 128px; height: 74px; }
     .stagebox { margin: 0 16px 132px; }
     .dock { bottom: 20px; }
+    .stage-tools { right: 10px; bottom: 10px; }
     .pager-dots { bottom: 102px; }
     .share-pop { right: 16px; top: 64px; }
     .side {
@@ -244,6 +385,20 @@
     }
     .side.open { transform: none; }
     .side-head { display: flex; }
+    /* Настройки на телефоне: тот же список разделов, но во весь экран и с
+       переходом «список → раздел → назад». Компонент один, раскладки две. */
+    .settings-pop { padding: 0; }
+    .set-panel {
+      grid-template-columns: 1fr; max-width: none;
+      height: 100dvh; border-radius: 0; border: none;
+    }
+    .set-panel.list .set-body { display: none; }
+    .set-panel.page .set-rail { display: none; }
+    .set-item { padding: 13px 12px; font-size: var(--text-md); }
+    .set-item .chev { display: block; }
+    .set-back { display: inline-flex; }
+    .set-rail-close { display: inline-flex; }
+    .set-rail-head { padding: 4px 4px 10px 0; }
     .tabs { padding: 8px 16px 0; }
     .mobile-only { display: inline-flex !important; }
     .chat-fab { display: inline-flex; }
@@ -261,7 +416,10 @@
 <script src="assets/meetup-media.js?v=4"></script>
 <script type="text/babel">
   const { useState, useRef, useEffect } = React;
-  const { Badge, Icon, IconButton, Input, Field, Button, Card, VideoTile, ParticipantRow, ChatMessage, ControlDock } =
+  // ControlDock из дизайн-системы здесь больше не берём: в нём жёстко зашиты
+  // пять кнопок без «общего звука», а доку нужен ещё и компактный размер на
+  // телефоне — он собран на странице (см. .dockbar).
+  const { Badge, Icon, IconButton, Input, Field, Button, Card, VideoTile, ParticipantRow, ChatMessage } =
     window.MeetUpDesignSystem_2584b5;
 
   // Бинарный протокол, кодеки и E2E-шифрование живут в assets/meetup-media.js.
@@ -287,15 +445,27 @@
     audio: { low: "16 кбит/с", med: "32 кбит/с", high: "64 кбит/с" },
   };
 
+  // Сколько плиток на странице. "auto" — по ширине окна (9 на компьютере,
+  // 6 на телефоне); остальное человек выбрал сам и знает, что делает.
+  const PER_PAGE = ["auto", "4", "6", "9", "12"];
+
   function loadAvSettings() {
     const def = { micId: "", camId: "", outId: "", volume: 100, sens: 100,
-                  qCam: "med", qScreen: "med", qAudio: "med" };
+                  qCam: "med", qScreen: "med", qAudio: "med",
+                  // Обработка голоса — браузерная (WebRTC APM). Она работает
+                  // до нашего захвата: в worklet приходит уже очищенный трек.
+                  noise: true, echo: true, agc: true,
+                  // Интерфейс
+                  mirror: true, perPage: "auto", hideNoVideo: false, showSelf: true };
     let s = def;
     try { s = { ...def, ...JSON.parse(localStorage.getItem(AV_KEY) || "{}") }; } catch (e) {}
     s.volume = clampPct(s.volume);
     s.sens = clampPct(s.sens);
     for (const k of ["qCam", "qScreen", "qAudio"])
       if (!Q_LEVELS.includes(s[k])) s[k] = "med";
+    if (!PER_PAGE.includes(String(s.perPage))) s.perPage = "auto";
+    for (const k of ["noise", "echo", "agc", "mirror", "hideNoVideo", "showSelf"])
+      s[k] = !!s[k];
     return s;
   }
 
@@ -307,6 +477,24 @@
   // Выбор устройства вывода работает через AudioContext.setSinkId —
   // есть в Chrome/Edge/Firefox, в Safari пока нет.
   const sinkSupported = !!(window.AudioContext && "setSinkId" in AudioContext.prototype);
+
+  // Демонстрация экрана: на телефонах getDisplayMedia не реализован ни в
+  // одном браузере — кнопку там не показываем вовсе, а не показываем
+  // неработающей.
+  const shareSupported = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+
+  // Разделы настроек. Порядок и названия — как в десктопном клиенте:
+  // человек, знакомый с одним, находит нужное во втором не глядя.
+  const SECTIONS = [
+    { id: "audio",  icon: "mic",      title: "Звук",         sub: "Микрофон, динамики и качество передачи голоса" },
+    { id: "video",  icon: "video",    title: "Видео",        sub: "Камера и параметры вашей трансляции" },
+    { id: "share",  icon: "screen",   title: "Демонстрация", sub: "Что видят собеседники, когда вы показываете экран" },
+    { id: "crypto", icon: "lock",     title: "Шифрование",   sub: "Сквозное шифрование медиа и переписки" },
+    { id: "keys",   icon: "keyboard", title: "Управление",   sub: "Сочетания клавиш в этой вкладке" },
+    { id: "iface",  icon: "layout",   title: "Интерфейс",    sub: "Тема и сетка участников" },
+    { id: "diag",   icon: "activity", title: "Диагностика",  sub: "Живые показатели соединения и кодеков" },
+    { id: "about",  icon: "info",     title: "О программе",  sub: "Сервер, протокол и возможности браузера" },
+  ];
 
   // История посещённых комнат для главной страницы (localStorage, общий
   // на все вкладки). Хранится только в браузере — сервер её не ведёт.
@@ -365,6 +553,13 @@
     // звуком») и идёт ли звук чужой демонстрации прямо сейчас.
     const [shareAudio, setShareAudio] = useState(false);
     const [screenAudioIn, setScreenAudioIn] = useState(false);
+    // «Не слышу вас», громкость чужой демонстрации, личная громкость
+    // участника (карточка по правой кнопке / долгому тапу) и показ
+    // демонстрации во весь экран.
+    const [deafened, setDeafened] = useState(false);
+    const [screenVol, setScreenVol] = useState(100);
+    const [peerVol, setPeerVol] = useState(null);   // { id, name, vol }
+    const [theater, setTheater] = useState(false);
     // Кто ведёт демонстрацию экрана (id участника, может быть свой) — одна
     // на комнату, закрепляется сервером.
     const [screenId, setScreenId] = useState(null);
@@ -392,6 +587,7 @@
     const stagePinSelfRef = useRef(null);   // своя камера на сцене (закрепление себя)
     const fileRef = useRef(null);           // скрытый <input type=file> для картинок чата
     const touchX = useRef(null);
+    const holdRef = useRef(null);           // долгий тап по плитке = правая кнопка
 
     // Зеркало актуального состояния для обработчиков вне рендера
     // (наполняется эффектом ниже по файлу, после вычисления pages).
@@ -423,6 +619,10 @@
 
     // ---- Настройки: устройства и звук ----
     const [settingsOpen, setSettingsOpen] = useState(false);
+    // Раздел настроек. На телефоне тот же список работает как «список →
+    // раздел → назад», поэтому нужен ещё и признак «раздел открыт».
+    const [section, setSection] = useState("audio");
+    const [onSection, setOnSection] = useState(false);
     const [devices, setDevices] = useState({ mics: [], cams: [], outs: [] });
     const [micId, setMicId] = useState(M.pref.micId);
     const [camId, setCamId] = useState(M.pref.camId);
@@ -432,6 +632,22 @@
     const [micLevel, setMicLevel] = useState(0);
     const [quality, setQuality] = useState(
       { cam: M.pref.qCam, screen: M.pref.qScreen, audio: M.pref.qAudio });
+    // Обработка голоса — браузерная: она стоит ДО нашего захвата, в worklet
+    // приходит уже очищенный трек. Своего шумодава не тащим (это был бы
+    // WASM на пару мегабайт ради того, что уже есть).
+    const [proc, setProc] = useState(
+      { noise: M.pref.noise, echo: M.pref.echo, agc: M.pref.agc });
+    // Интерфейс
+    const [mirror, setMirror] = useState(M.pref.mirror);
+    const [perPagePref, setPerPagePref] = useState(String(M.pref.perPage));
+    const [hideNoVideo, setHideNoVideo] = useState(M.pref.hideNoVideo);
+    const [showSelf, setShowSelf] = useState(M.pref.showSelf);
+    // Живые показатели — тикают только пока открыт раздел «Диагностика».
+    const [diag, setDiag] = useState(null);
+    // Что браузер умеет декодировать — узнаём один раз, когда открыли
+    // раздел «О программе»: проба поднимает декодеры и на слабой машине
+    // стоит десятки миллисекунд.
+    const [decodeOk, setDecodeOk] = useState(null);
 
     // ---- E2E-шифрование ----
     const [lockedIds, setLockedIds] = useState(() => new Set());
@@ -782,7 +998,8 @@
     // Разрешение камеры следует выбранному качеству отправки.
     function mediaConstraints(kind, id) {
       const base = kind === "audio"
-        ? { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+        ? { echoCancellation: M.pref.echo, noiseSuppression: M.pref.noise,
+            autoGainControl: M.pref.agc }
         : { ...CAM_RES[M.pref.qCam] };
       if (id) base.deviceId = { exact: id };
       return { [kind]: base };
@@ -827,7 +1044,9 @@
 
     // ================= Кнопки дока =================
 
-    async function toggleMic() {
+    // byUser=false — микрофон дёргает не человек, а toggleSound(): тогда мы
+    // помним, что вернуть, и не считаем это его собственным решением.
+    async function toggleMic(byUser) {
       const next = !stateRef.current.mic;
       if (next && !M.micStream) {
         // Разрешения не было — пробуем запросить ещё раз.
@@ -835,8 +1054,33 @@
         if (!ok) return;
       }
       if (M.micStream) M.micStream.getAudioTracks().forEach(t => { t.enabled = next; });
+      // Человек тронул микрофон сам — восстанавливать за него больше нечего.
+      if (byUser !== false) M.micBeforeDeafen = false;
       setMic(next);
       pushState(next, stateRef.current.cam);
+    }
+
+    // «Не слышу вас» почти всегда значит и «не говорю»: выключая звук
+    // конференции, снимаем и микрофон, а возвращая — включаем обратно, но
+    // только если человек не распорядился им сам. Само по себе включение
+    // звука микрофон не включает никогда.
+    //
+    // Глушим только выход движка: декодеры и джиттер-буферы продолжают
+    // работать, поэтому ни картинка (её придерживают по часам звука), ни
+    // подсветка «говорит» не встают. Состояние не запоминаем между входами —
+    // заходить в комнату оглохшим никто не хочет.
+    function toggleSound() {
+      const next = !deafened;
+      setDeafened(next);
+      engine.setDeafened(next);
+      if (next) {
+        const had = stateRef.current.mic;
+        if (had) toggleMic(false);
+        M.micBeforeDeafen = had;
+      } else {
+        if (M.micBeforeDeafen && !stateRef.current.mic) toggleMic(false);
+        M.micBeforeDeafen = false;
+      }
     }
 
     async function toggleCamera() {
@@ -949,6 +1193,9 @@
     function openSettings() {
       refreshDevices();
       setSettingsOpen(true);
+      // На телефоне открываем список разделов, а не тот, где были в прошлый
+      // раз: на широком экране рельс виден всегда и такой памяти не мешает.
+      setOnSection(!isMobile);
     }
 
     async function selectMic(id) {
@@ -993,6 +1240,79 @@
       setSens(v);
       saveAvSettings({ sens: v });
       engine.setSensitivity(v / 100);
+    }
+
+    // Обработка голоса. Меняем на живом треке: браузер умеет применять эти
+    // ограничения на лету, и перезахват микрофона (с миганием индикатора и
+    // паузой в разговоре) ради тумблера был бы неоправдан.
+    async function toggleProc(key) {
+      const next = { ...proc, [key]: !proc[key] };
+      setProc(next);
+      M.pref[key] = next[key];
+      saveAvSettings({ [key]: next[key] });
+      const track = M.micStream && M.micStream.getAudioTracks()[0];
+      if (!track || !track.applyConstraints) return;
+      try {
+        await track.applyConstraints({ noiseSuppression: next.noise,
+                                       echoCancellation: next.echo,
+                                       autoGainControl: next.agc });
+      } catch (e) {
+        // Не дал сменить на лету — применится при следующем захвате.
+      }
+    }
+
+    function setPref(key, value, apply) {
+      M.pref[key] = value;
+      saveAvSettings({ [key]: value });
+      if (apply) apply(value);
+    }
+
+    // Заполненная часть ползунка. accent-color в Chrome даёт грязный трек на
+    // светлой теме, поэтому рисуем градиентом от значения.
+    function rangeFill(v, max) {
+      const p = Math.round((v / max) * 100);
+      return "linear-gradient(90deg, var(--accent) " + p + "%, var(--surface-3) " + p + "%)";
+    }
+
+    // ---- Громкость чужой демонстрации ----
+    // Ручка у слушателя, а не у ведущего: иначе один человек решал бы за всю
+    // комнату, насколько громко играет его фонограмма. Между комнатами не
+    // запоминается — у каждой демонстрации свой звук.
+    function applyScreenVol(v) {
+      setScreenVol(v);
+      engine.setScreenVolume(v / 100);
+    }
+    function changeScreenVol(v) {
+      if (v > 0) M.screenVolBack = v;   // куда возвращаться из «тихо»
+      applyScreenVol(v);
+    }
+    function toggleScreenMute() {
+      applyScreenVol(screenVol > 0 ? 0 : (M.screenVolBack || 100));
+    }
+
+    // ---- Личная громкость участника ----
+    // Один говорит шёпотом, другой кричит — общая громкость тут не помогает.
+    // Помним и для тех, кто сейчас молчит: движок применит при первом звуке.
+    function changePeerVol(id, v) {
+      engine.setPeerVolume(id, v / 100);
+      setPeerVol(cur => (cur && cur.id === id ? { ...cur, vol: v } : cur));
+    }
+
+    // ---- Демонстрация во весь экран ----
+    // Свой режим (CSS) — основной, полноэкранный API просим дополнительно:
+    // на iOS его для произвольных элементов нет, и без своего режима кнопка
+    // там просто не работала бы.
+    function toggleTheater() {
+      const next = !theater;
+      setTheater(next);
+      try {
+        if (next) {
+          const el = document.documentElement;
+          if (el.requestFullscreen) { const p = el.requestFullscreen(); if (p && p.catch) p.catch(() => {}); }
+        } else if (document.fullscreenElement && document.exitFullscreen) {
+          const p = document.exitFullscreen(); if (p && p.catch) p.catch(() => {});
+        }
+      } catch (e) { /* браузер не дал — остаёмся в своём режиме */ }
     }
 
     // Качество отправки: битрейт применяет движок на лету; смена качества
@@ -1212,6 +1532,16 @@
       document.body.removeChild(ta);
     }
 
+    // Общая копия в буфер: clipboard-API в защищённом контексте, иначе
+    // старый приём через скрытое поле (http-развёртывание без TLS).
+    function copyText(text) {
+      const done = () => { setCopied(true); setTimeout(() => setCopied(false), 1800); };
+      if (navigator.clipboard && window.isSecureContext)
+        navigator.clipboard.writeText(text).then(done, () => fallbackCopy(text, done));
+      else
+        fallbackCopy(text, done);
+    }
+
     function copyInvite() {
       const done = () => { setCopied(true); setTimeout(() => setCopied(false), 1800); };
       if (navigator.clipboard && window.isSecureContext)
@@ -1316,11 +1646,34 @@
       // Esc закрывает поповеры; стрелки листают страницы плиток
       // (кроме случаев, когда фокус в поле ввода или открыты настройки).
       const onKey = (e) => {
-        if (e.key === "Escape") { setSettingsOpen(false); setShareOpen(false); setLightbox(null); return; }
+        if (e.key === "Escape") {
+          // Полный экран Esc гасит сам (браузер), поэтому здесь только свой
+          // режим — иначе одно нажатие снимало бы оба, и человек оставался бы
+          // в обычном виде, хотя хотел выйти только из полноэкранного.
+          if (stateRef.current.theater) setTheater(false);
+          setSettingsOpen(false); setShareOpen(false); setLightbox(null); setPeerVol(null);
+          return;
+        }
         const tag = (e.target && e.target.tagName) || "";
         if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
         if (stateRef.current.settingsOpen) return;
-        if (stateRef.current.stageMode) return;   // в режиме сцены страниц нет
+        // Ctrl/Alt/Cmd — сочетания браузера, не наши: перехватывать их значило
+        // бы ломать людям привычные Ctrl+D и Ctrl+F.
+        if (e.ctrlKey || e.altKey || e.metaKey) return;
+
+        // Смотрим на ФИЗИЧЕСКУЮ клавишу (e.code), а не на введённый символ:
+        // иначе в русской раскладке «ь» вместо «m» ничего бы не работало.
+        const s = stateRef.current;
+        if (e.code === "KeyM") { e.preventDefault(); M.keys.toggleMic(true); return; }
+        if (e.code === "KeyV") { e.preventDefault(); M.keys.toggleCamera(); return; }
+        if (e.code === "KeyD") { e.preventDefault(); M.keys.toggleSound(); return; }
+        if (e.code === "KeyF") {
+          // Только на чужой демонстрации: свою во весь экран разворачивать
+          // нечего, а без демонстрации клавише вообще нечего делать.
+          if (s.screenId != null && s.screenId !== s.myId) { e.preventDefault(); M.keys.toggleTheater(); }
+          return;
+        }
+        if (s.stageMode) return;   // в режиме сцены страниц нет
         if (e.key === "ArrowLeft") setPage(p => Math.max(0, p - 1));
         if (e.key === "ArrowRight") setPage(p => Math.min(stateRef.current.pages - 1, p + 1));
       };
@@ -1378,7 +1731,7 @@
 
     const selfAvatar = M.profile && M.profile.avatar_ver > 0
       ? avatarUrl(M.profile.id, M.profile.avatar_ver) : null;
-    const tiles = [{
+    const allTiles = [{
       key: "self", id: myId, name: nameRef.current || "Вы", self: true,
       mic, cam, speaking: myId != null && speaking.has(myId), hasFrame: true,
       avatar: selfAvatar,
@@ -1388,6 +1741,16 @@
       avatar: p.userId && p.avatar ? avatarUrl(p.userId, p.avatar) : null,
     })));
 
+    // Что показываем в сетке (настройки «Интерфейса»). Закреплённого и
+    // ведущего демонстрацию не прячем никогда — иначе сцена осталась бы без
+    // хозяина, а человек не понял бы, куда делся тот, на кого он смотрит.
+    const tiles = allTiles.filter(t => {
+      if (t.id != null && (t.id === pinnedId || t.id === screenId)) return true;
+      if (t.self) return showSelf;
+      if (hideNoVideo && !(t.cam && t.hasFrame)) return false;
+      return true;
+    });
+
     // Режим сцены: демонстрация экрана или закреплённый участник —
     // сцена + плёнка камер вместо сетки. Закрепление важнее демонстрации.
     const screenActive = screenId != null;
@@ -1396,7 +1759,7 @@
       ? "Вы"
       : ((peers.find(p => p.id === screenId) || {}).name || "");
     const stageReady = screenSelf || screenFrames.has(screenId);
-    const pinnedTile = pinnedId != null ? tiles.find(t => t.id === pinnedId) : null;
+    const pinnedTile = pinnedId != null ? allTiles.find(t => t.id === pinnedId) : null;
     const pinActive = !!pinnedTile;
     const stageMode = screenActive || pinActive;
 
@@ -1405,7 +1768,33 @@
       setPinnedId(cur => (cur === t.id ? null : t.id));
     }
 
-    const perPage = isMobile ? 6 : 9;
+    // Личная громкость участника. На компьютере — правая кнопка, на телефоне
+    // контекстного меню нет вовсе, поэтому долгий тап: жест один и тот же по
+    // смыслу, и ручка нужна на обоих одинаково.
+    function openPeerVol(t, ev) {
+      if (ev) ev.preventDefault();
+      if (t.self || t.id == null) return;
+      setPeerVol({ id: t.id, name: t.name, vol: Math.round(engine.peerVolume(t.id) * 100) });
+    }
+    function holdStart(t) {
+      holdCancel();
+      holdRef.current = setTimeout(() => {
+        holdRef.current = null;
+        M.holdFired = true;   // чтобы отпускание пальца не закрепило плитку
+        openPeerVol(t);
+      }, 500);
+    }
+    function holdCancel() {
+      if (holdRef.current) { clearTimeout(holdRef.current); holdRef.current = null; }
+    }
+    function tileClick(t) {
+      if (M.holdFired) { M.holdFired = false; return; }
+      togglePin(t);
+    }
+
+    // На телефоне кнопки дока меньше: их шесть, и в 360 px они иначе не встают.
+    const dockSize = isMobile ? "sm" : "md";
+    const perPage = perPagePref === "auto" ? (isMobile ? 6 : 9) : Number(perPagePref);
     const pages = stageMode ? 1 : Math.max(1, Math.ceil(tiles.length / perPage));
     const curPage = Math.min(page, pages - 1);
     const visible = tiles.slice(curPage * perPage, curPage * perPage + perPage);
@@ -1413,8 +1802,44 @@
     // Актуальный снимок состояния для обработчиков вне рендера
     // (WS-сообщения, таймеры, аудио-callback).
     useEffect(() => {
-      stateRef.current = { phase, mic, cam, sharing, screenId, stageMode, tab, panelOpen, isMobile, pages, settingsOpen };
+      stateRef.current = { phase, mic, cam, sharing, screenId, myId, stageMode, tab, panelOpen,
+                           isMobile, pages, settingsOpen, theater };
+      // Слушатель клавиш навешан один раз и держал бы первые версии этих
+      // функций со старым состоянием — берём их через ref.
+      M.keys = { toggleMic, toggleCamera, toggleSound, toggleTheater };
     });
+
+    // Демонстрация кончилась (или ведущий сменился на нас) — полноэкранный
+    // показ терять смысл: показывать нечего.
+    useEffect(() => {
+      if (theater && !(screenActive && !screenSelf)) setTheater(false);
+    }, [screenActive, screenSelf, theater]);
+
+    // Из полного экрана можно выйти и мимо нашей кнопки — F11, Esc, жест на
+    // телефоне. Тогда свой режим тоже надо снять, иначе шапка и док
+    // остались бы спрятанными в обычном окне.
+    useEffect(() => {
+      const onFs = () => { if (!document.fullscreenElement) setTheater(false); };
+      document.addEventListener("fullscreenchange", onFs);
+      return () => document.removeEventListener("fullscreenchange", onFs);
+    }, []);
+
+    // Живые показатели — только пока открыт раздел «Диагностика»: считать
+    // и перерисовывать их всё время конференции незачем.
+    useEffect(() => {
+      if (!settingsOpen || section !== "diag") return;
+      setDiag(engine.metrics());
+      const t = setInterval(() => setDiag(engine.metrics()), 1000);
+      return () => clearInterval(t);
+    }, [settingsOpen, section]);
+
+    // Проба декодеров — один раз за сессию, при первом заходе в «О программе».
+    useEffect(() => {
+      if (!settingsOpen || section !== "about" || decodeOk) return;
+      let alive = true;
+      engine.decodeOk().then(list => { if (alive) setDecodeOk(list); });
+      return () => { alive = false; };
+    }, [settingsOpen, section, decodeOk]);
 
     // Индикатор уровня микрофона — обновляется только при открытых настройках.
     useEffect(() => {
@@ -1452,7 +1877,7 @@
       let media = null;
       if (t.self) {
         if (cam)
-          media = <video ref={selfVideoRef} className="tile-media mirror"
+          media = <video ref={selfVideoRef} className={"tile-media" + (mirror ? " mirror" : "")}
                          autoPlay muted playsInline />;
       } else if (t.cam && t.hasFrame && !locked && !onStage) {
         media = <canvas className="tile-media" ref={engine.videoSinkRef(t.id)} />;
@@ -1463,8 +1888,12 @@
       const pinned = pinActive && t.id === pinnedId;
       return (
         <div key={t.key} className={film ? "film-cell" : undefined}
-             onClick={() => togglePin(t)}
-             title={pinned ? "Вернуть обычный вид" : "Развернуть на весь экран"}
+             onClick={() => tileClick(t)}
+             onContextMenu={t.self ? undefined : (e) => openPeerVol(t, e)}
+             onTouchStart={t.self ? undefined : () => holdStart(t)}
+             onTouchEnd={holdCancel} onTouchMove={holdCancel} onTouchCancel={holdCancel}
+             title={(pinned ? "Вернуть обычный вид" : "Развернуть на весь экран")
+                    + (t.self ? "" : " · правая кнопка — громкость")}
              style={{ cursor: "pointer",
                       ...(pinned ? { outline: "2px solid var(--accent)", outlineOffset: -2,
                                      borderRadius: "var(--radius-lg)" } : null),
@@ -1488,7 +1917,7 @@
       const t = pinnedTile;
       if (t.self) {
         if (cam)
-          return <video ref={stagePinSelfRef} className="stage-media mirror"
+          return <video ref={stagePinSelfRef} className={"stage-media" + (mirror ? " mirror" : "")}
                         autoPlay muted playsInline />;
       } else if (t.cam && t.hasFrame && !lockedIds.has(t.id)) {
         return <canvas key={"pin" + t.id} className="stage-media"
@@ -1541,11 +1970,350 @@
       </>;
     }
 
+    // ================= Настройки: разделы =================
+    // Разделов восемь, как в десктопном клиенте, и порядок тот же — человек,
+    // знакомый с одним, находит нужное во втором не глядя. Содержимое разное:
+    // в браузере половина десктопных ручек — фикция (кодек выбирает
+    // WebCodecs, разрешение демонстрации задаёт системное окно выбора,
+    // глобальных клавиш нет вовсе). Заглушек «скоро» не ставим: если чего-то
+    // в вебе быть не может, честнее объяснить почему.
+    const curSection = SECTIONS.find(s => s.id === section) || SECTIONS[0];
+
+    function closeSettings() {
+      setSettingsOpen(false);
+      setOnSection(false);
+    }
+
+    // Тумблер: подпись, пояснение и переключатель справа.
+    function Toggle({ on, label, sub, onToggle }) {
+      return (
+        <button type="button" className={"set-toggle" + (on ? " on" : "")}
+                role="switch" aria-checked={on} onClick={onToggle}>
+          <span style={{ minWidth: 0 }}>
+            {label}
+            {sub && <span className="sub">{sub}</span>}
+          </span>
+          <span className="knob" />
+        </button>
+      );
+    }
+
+    const KV = ({ k, v }) => <div className="set-kv"><b>{k}</b><span>{v}</span></div>;
+
+    // Отчёт для «скопировать»: то же, что видно в разделе, одним текстом —
+    // его удобно приложить к жалобе «у меня всё тормозит».
+    function diagReport() {
+      const s = engine.stats();
+      const m = diag || { rxKbps: 0, txKbps: 0, rxFps: 0, txFps: 0 };
+      return [
+        "MeetUp — диагностика",
+        "Комната: " + (roomTitle || roomCode),
+        "Сервер: " + location.host,
+        "Задержка до сервера: " + (ping == null ? "—" : ping + " мс"),
+        "Приём: " + m.rxKbps + " кбит/с, " + m.rxFps + " кадр/с",
+        "Отправка: " + m.txKbps + " кбит/с, " + m.txFps + " кадр/с",
+        "Очередь в сокете: " + Math.round(s.buffered / 1024) + " КБ",
+        "Камера: " + s.camCodec + ", битрейт " + Math.round(s.camRate * 100) + "% от пресета",
+        "Демонстрация: " + s.screenCodec + ", битрейт " + Math.round(s.screenRate * 100) + "%",
+        "Звук: " + s.audioCodec,
+        "Умеем кодировать: " + s.encodeOk.join(", "),
+        "Шифрование: " + (s.encrypted ? "включено" : "выключено"),
+        "Браузер: " + navigator.userAgent,
+      ].join("\n");
+    }
+
+    function renderSection() {
+      switch (section) {
+
+      case "audio": return <>
+        <Field label="Микрофон" htmlFor="set-mic">
+          <select id="set-mic" className="set-select" value={micId}
+                  onChange={e => selectMic(e.target.value)}>
+            {!devices.mics.some(d => d.id === micId) &&
+              <option value={micId}>Системный по умолчанию</option>}
+            {devices.mics.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
+          </select>
+          <div className="mic-meter" aria-hidden="true">
+            <div className="mic-meter-fill"
+                 style={{ width: Math.round(Math.min(1, micLevel * 3) * 100) + "%" }} />
+          </div>
+        </Field>
+
+        <Field label="Динамики" htmlFor="set-out"
+               hint={sinkSupported ? undefined : "Этот браузер не даёт выбрать устройство вывода — звук идёт в системное по умолчанию."}>
+          <select id="set-out" className="set-select" value={outId} disabled={!sinkSupported}
+                  onChange={e => selectOut(e.target.value)}>
+            {!devices.outs.some(d => d.id === outId) &&
+              <option value={outId}>Системные по умолчанию</option>}
+            {devices.outs.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
+          </select>
+        </Field>
+
+        <Field label={"Громкость воспроизведения · " + volume + "%"} htmlFor="set-volume">
+          <input id="set-volume" className="set-range" type="range"
+                 min="0" max="200" step="5" value={volume}
+                 style={{ background: rangeFill(volume, 200) }}
+                 onChange={e => changeVolume(Number(e.target.value))} />
+        </Field>
+
+        <Field label={"Чувствительность микрофона · " + sens + "%"} htmlFor="set-sens"
+               hint="Влияет на громкость вашего голоса у собеседников.">
+          <input id="set-sens" className="set-range" type="range"
+                 min="0" max="200" step="5" value={sens}
+                 style={{ background: rangeFill(sens, 200) }}
+                 onChange={e => changeSens(Number(e.target.value))} />
+        </Field>
+
+        <Field label="Качество звука" htmlFor="set-qaudio"
+               hint="Голос идёт кодеком Opus. Выше битрейт — заметнее оттенки голоса и музыка.">
+          <select id="set-qaudio" className="set-select" value={quality.audio}
+                  onChange={e => selectQuality("audio", e.target.value)}>
+            {Q_LEVELS.map(l => <option key={l} value={l}>{Q_LABELS.audio[l]}</option>)}
+          </select>
+        </Field>
+
+        <Field label="Обработка голоса"
+               hint="Делает браузер, ещё до того как звук попадает к нам. Меняется на лету — микрофон не перезапускается.">
+          <div style={{ display: "grid", gap: 8 }}>
+            <Toggle on={proc.noise} label="Шумоподавление"
+                    sub="Убирает вентилятор, клавиатуру и уличный шум"
+                    onToggle={() => toggleProc("noise")} />
+            <Toggle on={proc.echo} label="Эхоподавление"
+                    sub="Нужно, когда вы слушаете через динамики, а не наушники"
+                    onToggle={() => toggleProc("echo")} />
+            <Toggle on={proc.agc} label="Автоусиление"
+                    sub="Подтягивает тихий голос и придерживает громкий"
+                    onToggle={() => toggleProc("agc")} />
+          </div>
+        </Field>
+      </>;
+
+      case "video": return <>
+        <Field label="Камера" htmlFor="set-cam">
+          <select id="set-cam" className="set-select" value={camId}
+                  onChange={e => selectCam(e.target.value)}>
+            {!devices.cams.some(d => d.id === camId) &&
+              <option value={camId}>Системная по умолчанию</option>}
+            {devices.cams.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
+          </select>
+        </Field>
+
+        <Field label="Качество отправки" htmlFor="set-qcam"
+               hint="Выше качество — больше нагрузка на сеть. Применяется сразу: камера перезахватывается с новым разрешением.">
+          <select id="set-qcam" className="set-select" value={quality.cam}
+                  onChange={e => selectQuality("cam", e.target.value)}>
+            {Q_LEVELS.map(l => <option key={l} value={l}>{Q_LABELS.cam[l]}</option>)}
+          </select>
+        </Field>
+
+        <Field label="Отображение">
+          <Toggle on={mirror} label="Зеркалить моё видео"
+                  sub="Только у вас — собеседники видят вас как есть"
+                  onToggle={() => { const v = !mirror; setMirror(v); setPref("mirror", v); }} />
+        </Field>
+
+        <p className="set-note">
+          Кодек не выбирается: в браузере это решает WebCodecs. Мы отправляем
+          H.264 — его понимают все, — а принимаем всё, что умеет ваш браузер.
+          Если собеседник не сможет разобрать чужое видео, отправитель узнает
+          об этом и перейдёт на H.264 сам.
+        </p>
+      </>;
+
+      case "share": return <>
+        <Field label="Качество демонстрации" htmlFor="set-qscreen"
+               hint="«Эко» бережёт сеть и годится для слайдов, «Плавное» — для видео и анимации.">
+          <select id="set-qscreen" className="set-select" value={quality.screen}
+                  onChange={e => selectQuality("screen", e.target.value)}>
+            {Q_LEVELS.map(l => <option key={l} value={l}>{Q_LABELS.screen[l]}</option>)}
+          </select>
+        </Field>
+
+        <Field label="Что решает браузер">
+          <div>
+            <KV k="Демонстрация экрана" v={shareSupported ? "доступна" : "этот браузер не умеет"} />
+            <KV k="Что показывать" v="Выбирается в системном окне при запуске" />
+            <KV k="Со звуком" v="По галочке «Поделиться звуком» в том же окне" />
+          </div>
+        </Field>
+
+        <p className="set-note">
+          Разрешение, частоту кадров и показ курсора задаёт сам браузер по
+          тому, что вы выбрали в окне доступа, — своих ручек для них здесь нет.
+          Звук демонстрации отдают только Chrome и Edge, и галочка в их окне и
+          есть согласие: второй тумблер здесь означал бы «вы разрешили, а мы
+          всё равно не отправили».
+        </p>
+      </>;
+
+      case "crypto": return <>
+        <Field label={"Сквозное шифрование" + (e2eOn ? " · включено" : "")} htmlFor="set-e2e"
+               hint="Одна фраза у всех участников. Ключ не покидает браузер — сервер видит только шифротекст.">
+          <div style={{ display: "flex", gap: 8 }}>
+            <Input id="set-e2e" type="password" value={e2ePhrase} autoComplete="off"
+                   placeholder={e2eOn && !e2ePhrase ? "Ключ загружен из ссылки" : "Фраза-ключ"}
+                   onChange={e => setE2ePhrase(e.target.value)}
+                   onKeyDown={e => e.key === "Enter" && applyPhrase()} />
+            <Button variant={e2eOn ? "secondary" : "primary"} disabled={e2eBusy}
+                    onClick={applyPhrase}>
+              {e2eOn ? "Сменить" : "Включить"}
+            </Button>
+          </div>
+        </Field>
+
+        {e2eOn &&
+          <Field label="Когда шифрование включено"
+                 hint="Ссылка вида …/room#k=… открывает комнату уже расшифрованной. Ключ едет во фрагменте адреса, а фрагмент на сервер не отправляется.">
+            <div style={{ display: "grid", gap: 8 }}>
+              <Button variant="secondary" block icon={copied ? "check" : "copy"}
+                      onClick={copyKeyInvite}>
+                {copied ? "Скопировано" : "Скопировать ссылку с ключом"}
+              </Button>
+              <Button variant="ghost" block size="sm" onClick={disableE2e}>
+                Отключить шифрование
+              </Button>
+            </div>
+          </Field>}
+
+        <p className="set-note">
+          Шифруются видео, голос, звук демонстрации, сообщения и картинки чата —
+          AES-256-GCM прямо в браузере. Участник без ключа видит плитки
+          «зашифровано» и не может прочитать переписку. Десктопный клиент
+          понимает тот же формат: одна фраза работает и там, и здесь.
+        </p>
+      </>;
+
+      case "keys": return <>
+        <Field label="Сочетания клавиш"
+               hint="Работают, пока открыта вкладка конференции и курсор не в поле ввода.">
+          <div>
+            {[["M", "Микрофон"], ["V", "Камера"], ["D", "Общий звук"],
+              ["F", "Демонстрация во весь экран"], ["← →", "Страницы плиток"],
+              ["Esc", "Закрыть окно или выйти из полного экрана"]].map(pair => (
+              <div className="set-kv" key={pair[0]}>
+                <b>{pair[1]}</b><span><kbd>{pair[0]}</kbd></span>
+              </div>
+            ))}
+          </div>
+        </Field>
+        <p className="set-note">
+          Переназначить их нельзя, и глобальными они не бывают: браузер не
+          отдаёт странице нажатия, пока вы работаете в другом окне. В
+          десктопном клиенте клавиши настраиваются и срабатывают поверх любой
+          программы — это, пожалуй, главное, ради чего его стоит держать.
+        </p>
+      </>;
+
+      case "iface": return <>
+        <Field label="Тема">
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <Button variant={theme === "dark" ? "primary" : "secondary"} icon="moon"
+                    onClick={() => setTheme("dark")}>Тёмная</Button>
+            <Button variant={theme === "light" ? "primary" : "secondary"} icon="sun"
+                    onClick={() => setTheme("light")}>Светлая</Button>
+          </div>
+        </Field>
+
+        <Field label="Плиток на странице" htmlFor="set-perpage"
+               hint="«Автоматически» — девять на компьютере, шесть на телефоне.">
+          <select id="set-perpage" className="set-select" value={perPagePref}
+                  onChange={e => { setPerPagePref(e.target.value); setPref("perPage", e.target.value); }}>
+            <option value="auto">Автоматически</option>
+            <option value="4">4</option>
+            <option value="6">6</option>
+            <option value="9">9</option>
+            <option value="12">12</option>
+          </select>
+        </Field>
+
+        <Field label="Сетка участников">
+          <div style={{ display: "grid", gap: 8 }}>
+            <Toggle on={showSelf} label="Показывать себя в сетке"
+                    sub="Своё видео всё равно видно в предпросмотре камеры"
+                    onToggle={() => { const v = !showSelf; setShowSelf(v); setPref("showSelf", v); }} />
+            <Toggle on={hideNoVideo} label="Скрывать участников без видео"
+                    sub="В большой комнате остаются только те, кого видно"
+                    onToggle={() => { const v = !hideNoVideo; setHideNoVideo(v); setPref("hideNoVideo", v); }} />
+          </div>
+        </Field>
+        <p className="set-note">
+          Закреплённого и того, кто ведёт демонстрацию, эти настройки не
+          прячут никогда — иначе сцена осталась бы без хозяина.
+        </p>
+      </>;
+
+      case "diag": {
+        const s = engine.stats();
+        const m = diag || { rxKbps: 0, txKbps: 0, rxFps: 0, txFps: 0 };
+        return <>
+          <Field label="Соединение">
+            <div>
+              <KV k="Задержка до сервера" v={ping == null ? "—" : ping + " мс"} />
+              <KV k="Приём" v={m.rxKbps + " кбит/с · " + m.rxFps + " кадр/с"} />
+              <KV k="Отправка" v={m.txKbps + " кбит/с · " + m.txFps + " кадр/с"} />
+              <KV k="Очередь в сокете" v={Math.round(s.buffered / 1024) + " КБ"} />
+            </div>
+          </Field>
+
+          <Field label="Кодеки"
+                 hint="Проценты — насколько сеть прижала полосу. 100% значит, что пресет отдаётся целиком.">
+            <div>
+              <KV k="Камера" v={s.camCodec + " · " + Math.round(s.camRate * 100) + "%"} />
+              <KV k="Демонстрация" v={s.screenCodec + " · " + Math.round(s.screenRate * 100) + "%"} />
+              <KV k="Звук" v={s.audioCodec} />
+              <KV k="Шифрование" v={s.encrypted ? "включено" : "выключено"} />
+            </div>
+          </Field>
+
+          <Button variant="secondary" block icon={copied ? "check" : "copy"}
+                  onClick={() => copyText(diagReport())}>
+            {copied ? "Скопировано" : "Скопировать отчёт"}
+          </Button>
+          <p className="set-note">
+            Потерь пакетов здесь нет и не будет: всё идёт по TCP — данные не
+            теряются, а опаздывают. Признак затора — растущая очередь в сокете
+            и просевший процент битрейта.
+          </p>
+        </>;
+      }
+
+      case "about": return <>
+        <Field label="MeetUp">
+          <div>
+            <KV k="Сервер" v={location.host} />
+            <KV k="Комната" v={roomTitle ? roomTitle + " · #" + roomCode : "#" + roomCode} />
+            <KV k="Протокол" v="Бинарный v2 поверх WebSocket" />
+          </div>
+        </Field>
+
+        <Field label="Что умеет этот браузер"
+               hint="Отправляем мы всегда H.264. Список приёма объясняет, почему у одних чужая демонстрация идёт как есть, а у других отправитель спускается на H.264.">
+          <div>
+            <KV k="Кодирование" v={engine.stats().encodeOk.join(", ") || "нет — идёт запасной JPEG"} />
+            <KV k="Декодирование" v={decodeOk ? (decodeOk.join(", ") || "нет") : "проверяем…"} />
+            <KV k="Выбор динамиков" v={sinkSupported ? "есть" : "нет"} />
+            <KV k="Демонстрация экрана" v={shareSupported ? "есть" : "нет"} />
+          </div>
+        </Field>
+
+        <p className="set-note">
+          Открытый исходный код:{" "}
+          <a href="https://github.com/vi5vi5vi5/MeetUp" target="_blank" rel="noopener noreferrer">
+            github.com/vi5vi5vi5/MeetUp
+          </a>. Сервер, на котором идёт этот разговор, поднял тот, кто дал вам ссылку.
+        </p>
+      </>;
+
+      default: return null;
+      }
+    }
+
     const participantRows = [{ id: "self", name: nameRef.current || "Вы", you: true, muted: !mic }]
       .concat(peers.map(p => ({ id: p.id, name: p.name, you: false, muted: !p.mic })));
 
     return (
-      <div className="conf" style={{ background: "var(--bg)", color: "var(--text)", fontFamily: "var(--font-ui)" }}>
+      <div className={"conf" + (theater && screenActive && !screenSelf ? " theater" : "")}
+           style={{ background: "var(--bg)", color: "var(--text)", fontFamily: "var(--font-ui)" }}>
         {/* stage */}
         <div className="stage">
           <div className="confbar">
@@ -1581,6 +2349,7 @@
               </div>
               <div className="stagebox"
                    onClick={pinActive ? () => setPinnedId(null) : undefined}
+                   onDoubleClick={!pinActive && screenActive && !screenSelf ? toggleTheater : undefined}
                    style={pinActive ? { cursor: "zoom-out" } : undefined}>
                 {pinActive ? <>
                   {stagePinMedia()}
@@ -1606,6 +2375,29 @@
                     {screenSelf ? "Вы демонстрируете экран" : "Демонстрация — " + (sharerName || "участник")}
                     {(screenSelf ? shareAudio : screenAudioIn) &&
                       <span style={{ color: "var(--accent-ink)" }}>· со звуком</span>}
+                  </div>
+                  <div className="stage-tools" onClick={(e) => e.stopPropagation()}>
+                    {/* Ручка громкости — только у ЧУЖОЙ демонстрации и только
+                        пока звук реально идёт: свою фонограмму себе не крутят,
+                        а пустой ползунок сбивает с толку. */}
+                    {!screenSelf && screenAudioIn &&
+                      <div className={"scrvol" + (isMobile ? " open" : "")}>
+                        <button onClick={toggleScreenMute}
+                                aria-label={screenVol === 0 ? "Вернуть звук демонстрации" : "Приглушить демонстрацию"}
+                                title={screenVol === 0 ? "Вернуть звук демонстрации" : "Приглушить демонстрацию"}>
+                          <Icon name={screenVol === 0 ? "volume-off" : "volume"} size={18} />
+                        </button>
+                        <input type="range" className="set-range" min="0" max="200" step="5"
+                               value={screenVol} aria-label="Громкость демонстрации"
+                               onChange={(e) => changeScreenVol(+e.target.value)}
+                               style={{ background: rangeFill(screenVol, 200) }} />
+                        <span className="pct">{screenVol}%</span>
+                      </div>}
+                    <button className="stage-btn" onClick={toggleTheater}
+                            aria-label={theater ? "Свернуть" : "Во весь экран"}
+                            title={theater ? "Свернуть (Esc)" : "Во весь экран"}>
+                      <Icon name={theater ? "minimize" : "maximize"} size={18} />
+                    </button>
                   </div>
                 </>}
               </div>
@@ -1634,18 +2426,58 @@
           </div>
 
           <div className="dock">
-            <ControlDock
-              micOn={mic} cameraOn={cam} sharing={sharing}
-              settingsOpen={settingsOpen} showShare={!isMobile}
-              onToggleMic={toggleMic}
-              onToggleCamera={toggleCamera}
-              onToggleShare={toggleShare}
-              onOpenSettings={openSettings}
-              onLeave={leave}
-            />
+            <div className="dockbar">
+              <IconButton size={dockSize} icon={mic ? "mic" : "mic-off"}
+                          variant={mic ? "neutral" : "off"}
+                          label={mic ? "Выключить микрофон" : "Включить микрофон"}
+                          onClick={() => toggleMic(true)} />
+              <IconButton size={dockSize} icon={cam ? "video" : "video-off"}
+                          variant={cam ? "neutral" : "off"}
+                          label={cam ? "Выключить камеру" : "Включить камеру"}
+                          onClick={toggleCamera} />
+              <IconButton size={dockSize} icon={deafened ? "volume-off" : "volume"}
+                          variant={deafened ? "off" : "neutral"}
+                          label={deafened ? "Включить звук конференции" : "Не слышать участников"}
+                          onClick={toggleSound} />
+              {/* getDisplayMedia на телефонах не работает ни в одном браузере —
+                  кнопку там не показываем вовсе, а не показываем неработающей. */}
+              {!isMobile &&
+                <IconButton size={dockSize} icon="screen" variant={sharing ? "active" : "neutral"}
+                            label="Демонстрация экрана" onClick={toggleShare} />}
+              <IconButton size={dockSize} icon="settings"
+                          variant={settingsOpen ? "active" : "neutral"}
+                          label="Настройки" onClick={openSettings} />
+              <span className="dock-sep" />
+              <IconButton size={dockSize} icon="phone-off" variant="danger" wide
+                          label="Завершить" onClick={leave} />
+            </div>
           </div>
 
           {notice && <div className="notice">{notice}</div>}
+
+          {peerVol && <>
+            <div className="peervol-scrim" onClick={() => setPeerVol(null)} />
+            <div className="peervol" role="dialog" aria-modal="true" aria-label="Громкость участника">
+              <h3>{peerVol.name}</h3>
+              <p className="sub">Только для вас — остальные слышат его как обычно.</p>
+              <div className="row">
+                <Icon name={peerVol.vol === 0 ? "volume-off" : "volume"} size={18} />
+                <input type="range" className="set-range" min="0" max="200" step="5"
+                       value={peerVol.vol} aria-label="Громкость участника"
+                       onChange={(e) => changePeerVol(peerVol.id, +e.target.value)}
+                       style={{ margin: 0, background: rangeFill(peerVol.vol, 200) }} />
+                <span style={{ flex: "none", width: 42, textAlign: "right",
+                               fontSize: "var(--text-xs)", fontWeight: 700 }}>{peerVol.vol}%</span>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+                <Button variant="ghost" size="sm" onClick={() => changePeerVol(peerVol.id, 100)}>
+                  Сбросить
+                </Button>
+                <span style={{ flex: 1 }} />
+                <Button variant="primary" size="sm" onClick={() => setPeerVol(null)}>Готово</Button>
+              </div>
+            </div>
+          </>}
 
           <button className="chat-fab" onClick={() => { setPanelOpen(true); setTab("chat"); }}>
             <Icon name="chat" size={18} />
@@ -1730,100 +2562,43 @@
 
         {/* настройки: устройства, громкость, чувствительность */}
         {settingsOpen && <>
-          <div className="settings-scrim" onClick={() => setSettingsOpen(false)} />
+          <div className="settings-scrim" onClick={closeSettings} />
           <div className="settings-pop" role="dialog" aria-modal="true" aria-label="Настройки">
-            <div className="settings-card">
-              <Card elevated width="100%">
-                <div className="set-head">
-                  <h2 className="set-title">Настройки</h2>
-                  <IconButton icon="x" size="sm" label="Закрыть" onClick={() => setSettingsOpen(false)} />
+            <div className={"set-panel " + (onSection ? "page" : "list")}>
+              <div className="set-rail" role="tablist" aria-label="Разделы настроек">
+                <div className="set-rail-head">
+                  <span className="set-rail-title">Настройки</span>
+                  <span className="set-rail-close">
+                    <IconButton icon="x" size="sm" label="Закрыть настройки" onClick={closeSettings} />
+                  </span>
                 </div>
+                {SECTIONS.map(s => (
+                  <button key={s.id} type="button" role="tab"
+                          aria-selected={section === s.id}
+                          className={"set-item" + (section === s.id && !isMobile ? " on" : "")}
+                          onClick={() => { setSection(s.id); setOnSection(true); }}>
+                    <Icon name={s.icon} size={17} />
+                    {s.title}
+                    <span className="chev"><Icon name="arrow-right" size={15} /></span>
+                  </button>
+                ))}
+              </div>
 
-                <Field label="Микрофон" htmlFor="set-mic">
-                  <select id="set-mic" className="set-select" value={micId}
-                          onChange={e => selectMic(e.target.value)}>
-                    {!devices.mics.some(d => d.id === micId) &&
-                      <option value={micId}>Системный по умолчанию</option>}
-                    {devices.mics.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
-                  </select>
-                  <div className="mic-meter" aria-hidden="true">
-                    <div className="mic-meter-fill"
-                         style={{ width: Math.round(Math.min(1, micLevel * 3) * 100) + "%" }} />
+              <div className="set-body">
+                <div className="set-head">
+                  <span className="set-back">
+                    <IconButton icon="arrow-right" size="sm" label="Назад к разделам"
+                                style={{ transform: "rotate(180deg)" }}
+                                onClick={() => setOnSection(false)} />
+                  </span>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <h2 className="set-title">{curSection.title}</h2>
+                    <p className="set-sub">{curSection.sub}</p>
                   </div>
-                </Field>
-
-                <Field label="Камера" htmlFor="set-cam" style={{ marginTop: 16 }}>
-                  <select id="set-cam" className="set-select" value={camId}
-                          onChange={e => selectCam(e.target.value)}>
-                    {!devices.cams.some(d => d.id === camId) &&
-                      <option value={camId}>Системная по умолчанию</option>}
-                    {devices.cams.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
-                  </select>
-                </Field>
-
-                <Field label="Динамики" htmlFor="set-out" style={{ marginTop: 16 }}
-                       hint={sinkSupported ? undefined : "Браузер не поддерживает выбор устройства вывода."}>
-                  <select id="set-out" className="set-select" value={outId} disabled={!sinkSupported}
-                          onChange={e => selectOut(e.target.value)}>
-                    {!devices.outs.some(d => d.id === outId) &&
-                      <option value={outId}>Системные по умолчанию</option>}
-                    {devices.outs.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
-                  </select>
-                </Field>
-
-                <Field label={"Громкость воспроизведения · " + volume + "%"} htmlFor="set-volume"
-                       style={{ marginTop: 18 }}>
-                  <input id="set-volume" className="set-range" type="range"
-                         min="0" max="200" step="5" value={volume}
-                         style={{ background: "linear-gradient(90deg, var(--accent) " + (volume / 2) + "%, var(--surface-3) " + (volume / 2) + "%)" }}
-                         onChange={e => changeVolume(Number(e.target.value))} />
-                </Field>
-
-                <Field label={"Чувствительность микрофона · " + sens + "%"} htmlFor="set-sens"
-                       hint="Влияет на громкость вашего голоса у собеседников."
-                       style={{ marginTop: 14 }}>
-                  <input id="set-sens" className="set-range" type="range"
-                         min="0" max="200" step="5" value={sens}
-                         style={{ background: "linear-gradient(90deg, var(--accent) " + (sens / 2) + "%, var(--surface-3) " + (sens / 2) + "%)" }}
-                         onChange={e => changeSens(Number(e.target.value))} />
-                </Field>
-
-                <Field label="Качество отправки"
-                       hint="Выше качество — больше нагрузка на сеть. Применяется сразу."
-                       style={{ marginTop: 18 }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-                    {[["cam", "Камера"], ["screen", "Экран"], ["audio", "Звук"]].map(([k, label]) => (
-                      <div key={k}>
-                        <div style={{ fontSize: 11, color: "var(--text-faint)", marginBottom: 4 }}>{label}</div>
-                        <select className="set-select" value={quality[k]} aria-label={"Качество: " + label}
-                                onChange={e => selectQuality(k, e.target.value)}>
-                          {Q_LEVELS.map(l => <option key={l} value={l}>{Q_LABELS[k][l]}</option>)}
-                        </select>
-                      </div>
-                    ))}
-                  </div>
-                </Field>
-
-                <Field label={"Сквозное шифрование" + (e2eOn ? " · включено" : "")} htmlFor="set-e2e"
-                       hint="Одна фраза у всех участников. Ключ не покидает браузер — сервер видит только шифрованные данные."
-                       style={{ marginTop: 18 }}>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <Input id="set-e2e" type="password" value={e2ePhrase} autoComplete="off"
-                           placeholder={e2eOn && !e2ePhrase ? "Ключ загружен из ссылки" : "Фраза-ключ"}
-                           onChange={e => setE2ePhrase(e.target.value)}
-                           onKeyDown={e => e.key === "Enter" && applyPhrase()} />
-                    <Button variant={e2eOn ? "secondary" : "primary"} disabled={e2eBusy}
-                            onClick={applyPhrase}>
-                      {e2eOn ? "Сменить" : "Включить"}
-                    </Button>
-                  </div>
-                  {e2eOn &&
-                    <Button variant="ghost" block size="sm" style={{ marginTop: 8 }}
-                            onClick={disableE2e}>
-                      Отключить шифрование
-                    </Button>}
-                </Field>
-              </Card>
+                  <IconButton icon="x" size="sm" label="Закрыть" onClick={closeSettings} />
+                </div>
+                <div className="set-page">{renderSection()}</div>
+              </div>
             </div>
           </div>
         </>}

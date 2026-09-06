@@ -325,6 +325,11 @@
       rate: { cam: 1, screen: 1 },
       ctx: null, masterGain: null, screenGain: null, workletsReady: null,
       volume: 1, screenVolume: 1, sens: 1, micLevel: 0,
+      // «Не слышу вас»: глушим на общем узле, а декодеры и плееры продолжают
+      // работать. Иначе встали бы и картинка (её придерживают по часам
+      // звука), и подсветка «говорит» — а человек всего лишь убрал звук.
+      deafened: false,
+      peerVolume: new Map(),      // id -> множитель громкости участника
       cipher: null,
       // отправка
       videoChoice: undefined,     // undefined = детект идёт, null = только legacy
@@ -342,6 +347,12 @@
                     s: Promise.resolve(), sa: Promise.resolve() },
       lastKeyReqAt: 0,
       lastScreenAudioAt: 0,
+      // Счётчики для раздела «Диагностика». Считаем сырые байты кадров:
+      // накладные расходы WebSocket и TCP сюда не входят, поэтому число
+      // всегда чуть меньше того, что покажет системный монитор трафика.
+      // «Потерь пакетов» здесь нет и не будет — транспорт TCP.
+      meter: { rxBytes: 0, txBytes: 0, rxFrames: 0, txFrames: 0,
+               at: 0, lastRx: 0, lastTx: 0, lastRxF: 0, lastTxF: 0 },
       // приём
       peers: new Map(),           // id -> peer
       sinks: new Map(),           // id -> <canvas> камеры
@@ -399,6 +410,21 @@
 
     // ---------- Аудиографа ----------
 
+    function masterLevel() { return st.deafened ? 0 : st.volume; }
+
+    // Узел громкости конкретного участника: его голос идёт через него, а не
+    // прямо в общий. Личная громкость нужна ровно там, где общая не помогает:
+    // один говорит шёпотом, другой кричит.
+    function peerOut(peer, id) {
+      if (!peer.gain) {
+        peer.gain = st.ctx.createGain();
+        const v = st.peerVolume.get(id);
+        peer.gain.gain.value = v == null ? 1 : v;
+        peer.gain.connect(st.masterGain);
+      }
+      return peer.gain;
+    }
+
     async function ensureAudio() {
       if (st.ctx) return st.workletsReady;
       const AC = window.AudioContext || window.webkitAudioContext;
@@ -407,7 +433,7 @@
       try { st.ctx = new AC({ sampleRate: AUDIO_RATE }); }
       catch (e) { st.ctx = new AC(); }
       st.masterGain = st.ctx.createGain();
-      st.masterGain.gain.value = st.volume;
+      st.masterGain.gain.value = masterLevel();
       st.masterGain.connect(st.ctx.destination);
       // Громкость звука демонстрации — ручка СЛУШАТЕЛЯ, а не ведущего: иначе
       // один человек решал бы за всю комнату, насколько громко играет его
@@ -766,6 +792,7 @@
         const key = s.keyNext || s.frames % KEY_EVERY_FRAMES === 0;
         s.keyNext = false;
         s.frames++;
+        st.meter.txFrames++;
         try { s.venc.encode(frame, { keyFrame: key }); } catch (e) { s.venc = null; }
       }
 
@@ -900,6 +927,7 @@
           body = await cipher.seal(type, codecId, payload);
           fl |= FLAG_ENCRYPTED;
         }
+        st.meter.txBytes += body.length + 11;
         opts.send(packV2(type, fl, codecId, tsBig, body));
       }).catch(() => {});
     }
@@ -918,6 +946,7 @@
               // один их складывать нельзя.
               voice: { dec: null, player: null },
               scrAudio: { dec: null, player: null },
+              gain: null,                   // личная громкость этого участника
               // Синхронизация губ: часы звука (метка чанка + когда встал в
               // буфер), глубина буфера плеера и придержанные видеокадры.
               aClock: null, aDepth: 0, frameQ: [], drainTimer: null,
@@ -928,6 +957,7 @@
     }
 
     function onBinary(buffer) {
+      st.meter.rxBytes += buffer.byteLength;
       if (buffer.byteLength < 15) return;
       const dv = new DataView(buffer);
       const type = dv.getUint8(0);
@@ -1070,6 +1100,7 @@
     }
 
     function drawFrame(sinks, isScreen, sender, frame) {
+      st.meter.rxFrames++;
       const canvas = sinks.get(sender);
       if (canvas) {
         const w = frame.displayWidth, h = frame.displayHeight;
@@ -1168,7 +1199,7 @@
         } else {
           // Плеер репортит глубину буфера — по ней считается audioPlayhead.
           sub.player.port.onmessage = (e) => { peer.aDepth = e.data; };
-          sub.player.connect(st.masterGain);
+          sub.player.connect(peerOut(peer, sender));
         }
       }
       // Часы для синхронизации губ ведёт только голос: под фонограмму
@@ -1195,7 +1226,7 @@
       if (peer.pcmCursor > now + 0.7) peer.pcmCursor = now + 0.1;
       const src = st.ctx.createBufferSource();
       src.buffer = buf;
-      src.connect(st.masterGain);
+      src.connect(peerOut(peer, sender));   // личная громкость и у legacy-PCM
       src.start(peer.pcmCursor);
       peer.pcmCursor += buf.duration;
     }
@@ -1225,6 +1256,7 @@
           if (sub.dec) { try { sub.dec.close(); } catch (e) {} }
           if (sub.player) { try { sub.player.disconnect(); } catch (e) {} }
         }
+        if (p.gain) { try { p.gain.disconnect(); } catch (e) {} }
         if (p.drainTimer) clearTimeout(p.drainTimer);
         for (const f of p.frameQ) { try { f.close(); } catch (e) {} }
         st.peers.delete(id);
@@ -1264,8 +1296,25 @@
       dropPeer, clearPeers,
       lastFrameAt: st.lastFrameAt,
       micLevel: () => st.micLevel,
-      setVolume: (v) => { st.volume = v; if (st.masterGain) st.masterGain.gain.value = v; },
+      setVolume: (v) => { st.volume = v; if (st.masterGain) st.masterGain.gain.value = masterLevel(); },
       setScreenVolume: (v) => { st.screenVolume = v; if (st.screenGain) st.screenGain.gain.value = v; },
+      // «Не слышу вас». Глушим только выход: очереди по-прежнему вычерпываются,
+      // поэтому ни картинка, ни подсветка «говорит» не встают.
+      setDeafened: (on) => {
+        st.deafened = !!on;
+        if (st.masterGain) st.masterGain.gain.value = masterLevel();
+      },
+      // Личная громкость участника (1 — как есть). Помнится и для тех, кто
+      // сейчас молчит: узел создаётся при первом же его звуке.
+      setPeerVolume: (id, v) => {
+        st.peerVolume.set(id, v);
+        const p = st.peers.get(id);
+        if (p && p.gain) p.gain.gain.value = v;
+      },
+      peerVolume: (id) => {
+        const v = st.peerVolume.get(id);
+        return v == null ? 1 : v;
+      },
       setSensitivity: (v) => { st.sens = v; },
       // Качество отправки: "cam" | "screen" | "audio" -> "low" | "med" | "high".
       // Применяется на лету — энкодер пересоздаётся со следующим чанком.
@@ -1290,6 +1339,16 @@
         forceKeyframe();
       },
       encrypted: () => !!st.cipher,
+      // Что этот браузер умеет ДЕКОДИРОВАТЬ. Для раздела «О программе»:
+      // объясняет, почему у одного участника чужая демонстрация идёт как
+      // есть, а у другого отправитель спускается на H.264.
+      decodeOk: async () => {
+        const out = [];
+        for (const id of Object.keys(VIDEO_DECODE)) {
+          if (await decoderCodecFor(Number(id))) out.push(CODEC_NAME[id] || id);
+        }
+        return out;
+      },
       // Текст чата: "🔒e2e:<base64url(iv|ct)>" — сервер хранит его как обычный текст.
       sealText: async (text) => {
         if (!st.cipher) return null;
@@ -1315,6 +1374,27 @@
         let pt = null;
         try { pt = await st.cipher.open(IMAGE_AAD_TYPE, 0, b64ToU8(s.slice(6))); } catch (e) {}
         return { encrypted: true, src: pt ? "data:image/jpeg;base64," + u8ToStdB64(pt) : null };
+      },
+      // Скорости за время с прошлого вызова. Считать «ровно за секунду» не
+      // нужно и вредно: интервал таймера плавает, а деление на реальный
+      // промежуток даёт честное число при любом дрожании.
+      metrics: () => {
+        const m = st.meter;
+        const now = Date.now();
+        const dt = m.at ? (now - m.at) / 1000 : 0;
+        const out = { rxTotal: m.rxBytes, txTotal: m.txBytes,
+                      rxKbps: 0, txKbps: 0, rxFps: 0, txFps: 0 };
+        if (dt > 0.2) {
+          out.rxKbps = Math.round((m.rxBytes - m.lastRx) * 8 / dt / 1000);
+          out.txKbps = Math.round((m.txBytes - m.lastTx) * 8 / dt / 1000);
+          out.rxFps = Math.round((m.rxFrames - m.lastRxF) / dt * 10) / 10;
+          out.txFps = Math.round((m.txFrames - m.lastTxF) / dt * 10) / 10;
+          m.at = now; m.lastRx = m.rxBytes; m.lastTx = m.txBytes;
+          m.lastRxF = m.rxFrames; m.lastTxF = m.txFrames;
+        } else if (!m.at) {
+          m.at = now;
+        }
+        return out;
       },
       stats: () => {
         const cam = choiceFor(false), scr = choiceFor(true);
