@@ -25,6 +25,14 @@
   // чтобы приёмник держал два декодера и рисовал их в разные места.
   const MSG = { VIDEO_JPEG: 1, AUDIO_PCM: 2, VIDEO_CODED: 3, AUDIO_CODED: 4,
                 SCREEN_CODED: 5, KEYFRAME_REQ: 6, SCREEN_JPEG: 7,
+                // Звук того, что показывает ведущий (видео, музыка) — отдельной
+                // полосой от его голоса. Opus 48 кГц моно, кадр 20 мс, та же
+                // шкала меток. Отдельная полоса нужна не для порядка: голос и
+                // фонограмма идут от ОДНОГО отправителя, а складывать их в один
+                // Opus-декодер нельзя — у него состояние потока. И по этой
+                // полосе не считают губы и не зажигают «говорит»: громкая
+                // музыка не означает, что человек говорит.
+                SCREEN_AUDIO: 8,
                 // «Не понимаю такой кодек» — шлём мы, когда кадр пришёл с
                 // кодеком, которого браузер не открывает. Отправитель по нему
                 // сам вернётся на H.264. Без этого ответа он не узнает, что
@@ -37,10 +45,51 @@
   const CHAT_AAD_TYPE = 250;              // «тип» для шифрования текста чата
   const IMAGE_AAD_TYPE = 251;             // …и картинок чата
 
-  // Декодер объявляем уровнем 5.2 (…34), чтобы принимать H.264 любого
-  // разрешения вплоть до 4K — иначе демонстрация экрана крупнее 720p не
-  // декодировалась бы у приёмника. См. avcCodec ниже про уровни.
-  const CODEC_BY_ID = { 1: "vp8", 2: "avc1.42E034", 3: "vp09.00.10.08", 4: "opus" };
+  const H264_ID = 2;
+  const CODEC_NAME = { 1: "VP8", 2: "H.264", 3: "VP9", 4: "Opus", 5: "HEVC", 6: "AV1" };
+
+  // Что мы умеем ПРИНИМАТЬ. Список намеренно шире того, что мы отправляем:
+  // шлём узко (все поймут), принимаем всё, что вытянет браузер. Десктопный
+  // клиент по умолчанию ведёт демонстрацию в HEVC, а камеру в VP9 — без этих
+  // строк чужая демонстрация в браузере просто не появлялась бы, пока не
+  // сработает жалоба CODEC_UNSUPPORTED и отправитель не опустится на H.264.
+  //
+  // H.264 объявляем уровнем 5.2 (…34): иначе кадр крупнее 720p (а экран
+  // именно такой) декодер не принял бы. См. avcCodec ниже про уровни.
+  // У HEVC и AV1 по нескольку написаний — какое поймёт браузер, заранее не
+  // известно, поэтому пробуем по очереди. Описания (description) не шлём:
+  // без него WebCodecs ждёт Annex B, а это ровно то, что даёт ffmpeg.
+  const VIDEO_DECODE = {
+    1: ["vp8"],
+    2: ["avc1.42E034"],
+    3: ["vp09.00.10.08"],
+    5: ["hvc1.1.6.L153.B0", "hev1.1.6.L153.B0"],
+    6: ["av01.0.12M.08", "av01.0.08M.08"],
+  };
+
+  // Проба «умеет ли браузер это декодировать» — один раз на кодек, результат
+  // кэшируется вместе с рабочей строкой. Проверяем ЗАРАНЕЕ, а не по факту
+  // ошибки: configure() на неподдержанном кодеке падает не всегда синхронно,
+  // и без пробы приёмник крутился бы в цикле «создать декодер — получить
+  // ошибку — создать заново».
+  const decodeProbe = new Map();
+  function decoderCodecFor(id) {
+    if (decodeProbe.has(id)) return decodeProbe.get(id);
+    const p = (async () => {
+      const list = VIDEO_DECODE[id];
+      if (!list || typeof VideoDecoder === "undefined") return null;
+      for (const codec of list) {
+        try {
+          const r = await VideoDecoder.isConfigSupported({ codec, optimizeForLatency: true });
+          if (r && r.supported) return codec;
+        } catch (e) { /* такой строки кодека браузер не знает вовсе */ }
+      }
+      return null;
+    })();
+    decodeProbe.set(id, p);
+    return p;
+  }
+
   const VIDEO_TRY = [
     { id: 2, codec: "avc1.42E01F", extra: { avc: { format: "annexb" } } },  // аппаратный почти везде
     { id: 1, codec: "vp8", extra: {} },
@@ -248,17 +297,25 @@
     //       onSelfSpeaking(), onSpeaking(id), onFrameActivity(id), onLocked(id, bool)
     const st = {
       quality: { cam: "med", screen: "med", audio: "med" },
-      ctx: null, masterGain: null, workletsReady: null,
-      volume: 1, sens: 1, micLevel: 0,
+      ctx: null, masterGain: null, screenGain: null, workletsReady: null,
+      volume: 1, screenVolume: 1, sens: 1, micLevel: 0,
       cipher: null,
       // отправка
       videoChoice: undefined,     // undefined = детект идёт, null = только legacy
+      videoOk: [],                // ВСЕ кодеки, которыми этот браузер умеет кодировать
+      // Куда жалоба получателя опустила полосу. null — идём общим выбором.
+      forcedCam: null, forcedScreen: null,
       audioCoded: false,
       lastForceAt: 0,
       aenc: null, aTs: 0,
       micSrc: null, capNode: null,
-      sendChains: { a: Promise.resolve(), v: Promise.resolve(), s: Promise.resolve() },
+      // Звук демонстрации на отправке: свой источник, свой кодер, своя шкала.
+      scrSrc: null, scrMono: null, scrCap: null, scrMute: null,
+      scrAenc: null, scrTs: 0,
+      sendChains: { a: Promise.resolve(), v: Promise.resolve(),
+                    s: Promise.resolve(), sa: Promise.resolve() },
       lastKeyReqAt: 0,
+      lastScreenAudioAt: 0,
       // приём
       peers: new Map(),           // id -> peer
       sinks: new Map(),           // id -> <canvas> камеры
@@ -273,13 +330,20 @@
 
     const detect = (async () => {
       st.videoChoice = null;
+      st.videoOk = [];
       if (typeof VideoEncoder !== "undefined" && typeof VideoDecoder !== "undefined") {
+        // Перебираем весь список, а не останавливаемся на первом годном:
+        // откат по жалобе получателя должен знать, доступен ли H.264 вообще.
+        // Без этого в браузере без H.264 (Firefox на части сборок Linux)
+        // жалоба переключила бы отправку на кодек, которого там нет, и видео
+        // пропало бы совсем — вместо того чтобы просто остаться как есть.
         for (const c of VIDEO_TRY) {
           try {
             const r = await VideoEncoder.isConfigSupported(videoCfg(c, 1280, 720, false));
-            if (r.supported) { st.videoChoice = c; break; }
+            if (r.supported) st.videoOk.push(c);
           } catch (e) { /* кодек неизвестен браузеру */ }
         }
+        st.videoChoice = st.videoOk[0] || null;
       }
       if (typeof AudioEncoder !== "undefined" && typeof AudioDecoder !== "undefined") {
         try {
@@ -317,6 +381,13 @@
       st.masterGain = st.ctx.createGain();
       st.masterGain.gain.value = st.volume;
       st.masterGain.connect(st.ctx.destination);
+      // Громкость звука демонстрации — ручка СЛУШАТЕЛЯ, а не ведущего: иначе
+      // один человек решал бы за всю комнату, насколько громко играет его
+      // фонограмма. Отдельный узел перед общим, чтобы общая громкость и
+      // «не слышу вас» продолжали работать поверх.
+      st.screenGain = st.ctx.createGain();
+      st.screenGain.gain.value = st.screenVolume;
+      st.screenGain.connect(st.masterGain);
       if (st.ctx.state === "suspended") {
         // Autoplay-policy: без жеста звук не стартует (например, после F5).
         const resume = () => {
@@ -411,6 +482,90 @@
         st.audioCoded = false;   // не вышло — до конца сессии шлём PCM
         return false;
       }
+    }
+
+    // ---------- Отправка: звук демонстрации ----------
+    // Браузер отдаёт его вместе с картинкой, когда человек отметил «Поделиться
+    // звуком» в окне выбора (Chrome и Edge умеют, Firefox и Safari — нет).
+    // Никакой отдельной настройки не заводим: галочка в системном окне и есть
+    // согласие, а вторая галочка в наших настройках означала бы, что человек
+    // разрешил, а мы всё равно не отправили.
+    //
+    // Дальше — полностью отдельный от голоса тракт: свой кодер (у Opus
+    // состояние потока, делить его нельзя), свои метки времени и полоса "sa",
+    // чтобы фонограмма не вставала в очередь за голосом.
+
+    async function startScreenAudio(stream) {
+      stopScreenAudio();
+      const track = stream && stream.getAudioTracks ? stream.getAudioTracks()[0] : null;
+      if (!track) return false;
+      await ensureAudio();
+      await detect;
+      if (!st.ctx || !st.audioCoded || !(await st.workletsReady)) return false;
+
+      st.scrSrc = st.ctx.createMediaStreamSource(new MediaStream([track]));
+      // Экран почти всегда отдаёт стерео, а протокол требует моно. Сведение
+      // делает сам граф: узел с явным channelCount = 1 микширует каналы по
+      // правилам Web Audio, складывать их руками не нужно.
+      st.scrMono = st.ctx.createGain();
+      st.scrMono.channelCount = 1;
+      st.scrMono.channelCountMode = "explicit";
+      st.scrMono.channelInterpretation = "speakers";
+
+      st.scrCap = new AudioWorkletNode(st.ctx, "mu-capture",
+        { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+      // Узел обязан быть в графе до destination, иначе не тикает; выход
+      // глушим — свою же фонограмму возвращать себе в уши незачем.
+      st.scrMute = st.ctx.createGain();
+      st.scrMute.gain.value = 0;
+      st.scrCap.connect(st.scrMute).connect(st.ctx.destination);
+      st.scrSrc.connect(st.scrMono).connect(st.scrCap);
+      st.scrCap.port.onmessage = (e) => onScreenAudioChunk(e.data);
+      return true;
+    }
+
+    function onScreenAudioChunk(f32) {
+      if (!ensureScreenAudioEncoder()) return;
+      if (st.scrAenc.encodeQueueSize > 4) return;   // не успеваем — роняем кадр
+      const ad = new AudioData({ format: "f32", sampleRate: AUDIO_RATE,
+                                 numberOfFrames: f32.length, numberOfChannels: 1,
+                                 timestamp: st.scrTs, data: f32 });
+      st.scrTs += Math.round(f32.length * 1e6 / AUDIO_RATE);
+      try { st.scrAenc.encode(ad); } catch (e) { st.scrAenc = null; }
+      ad.close();
+    }
+
+    function ensureScreenAudioEncoder() {
+      if (st.scrAenc) return true;
+      try {
+        st.scrAenc = new AudioEncoder({
+          output: (chunk) => {
+            const u8 = new Uint8Array(chunk.byteLength);
+            chunk.copyTo(u8);
+            enqueueSend(MSG.SCREEN_AUDIO, 0, OPUS_ID, BigInt(Date.now()), u8, "sa");
+          },
+          error: () => { st.scrAenc = null; },
+        });
+        // 64 кбит/с против голосовых 32: это музыка и звук видео, и экономить
+        // на них нечего — демонстрацию со звуком включают именно ради них.
+        st.scrAenc.configure({ codec: "opus", sampleRate: AUDIO_RATE,
+                               numberOfChannels: 1, bitrate: 64000 });
+        return true;
+      } catch (e) {
+        st.scrAenc = null;
+        return false;
+      }
+    }
+
+    function stopScreenAudio() {
+      if (st.scrCap) {
+        try { st.scrCap.port.onmessage = null; st.scrCap.disconnect(); } catch (e) {}
+        st.scrCap = null;
+      }
+      for (const key of ["scrMono", "scrMute", "scrSrc"]) {
+        if (st[key]) { try { st[key].disconnect(); } catch (e) {} st[key] = null; }
+      }
+      if (st.scrAenc) { try { st.scrAenc.close(); } catch (e) {} st.scrAenc = null; }
     }
 
     // ---------- Отправка: видео ----------
@@ -510,7 +665,8 @@
       function ensureEncoder(w, h) {
         if (s.venc && s.w === w && s.h === h) return true;
         if (s.venc) { try { s.venc.close(); } catch (e) {} }
-        const choice = st.videoChoice;
+        const choice = choiceFor(screen);
+        if (!choice) return false;
         try {
           s.venc = new VideoEncoder({
             output: (chunk) => {
@@ -611,6 +767,39 @@
     const camSender = makeVideoSender(false);
     const screenSender = makeVideoSender(true);
 
+    // Кодек полосы. Обычно это общий выбор детекта, но жалоба получателя
+    // опускает КОНКРЕТНУЮ полосу на H.264 и держит её там до конца сессии:
+    // раз кто-то в комнате не разобрал наш кадр, возвращаться к тому же
+    // кодеку смысла нет.
+    function choiceFor(screen) {
+      return (screen ? st.forcedScreen : st.forcedCam) || st.videoChoice;
+    }
+
+    // Кто-то в комнате не смог разобрать наш кадр (тип 9). Сервер разослал
+    // жалобу всем, поэтому первым делом проверяем, что она вообще про нас.
+    //
+    // Молчать здесь нельзя: у пожаловавшегося просто пусто, у нас — всё
+    // хорошо, и без сообщения обе стороны так и не поймут, что происходит.
+    function onCodecComplaint(codecId, payload) {
+      const isScreen = payload.length > 0 && payload[0] === MSG.SCREEN_CODED;
+      const cur = choiceFor(isScreen);
+      if (!cur || cur.id !== codecId) return;         // жалуются не на наш поток
+
+      let switched = false;
+      if (cur.id !== H264_ID) {
+        // Только среди тех, которыми этот браузер РЕАЛЬНО умеет кодировать.
+        const h264 = st.videoOk.filter((c) => c.id === H264_ID)[0];
+        if (h264) {
+          if (isScreen) st.forcedScreen = h264; else st.forcedCam = h264;
+          (isScreen ? screenSender : camSender).resetEncoder();
+          switched = true;
+        }
+      }
+      if (opts.onCodecComplaint)
+        opts.onCodecComplaint({ isScreen: isScreen, switched: switched,
+                                codec: CODEC_NAME[codecId] || ("код " + codecId) });
+    }
+
     function forceKeyframe() {
       const now = Date.now();
       if (now - st.lastForceAt < 500) return;
@@ -645,10 +834,15 @@
     function ensurePeer(id) {
       let p = st.peers.get(id);
       if (!p) {
-        p = { chains: { a: Promise.resolve(), v: Promise.resolve(), s: Promise.resolve() },
+        p = { chains: { a: Promise.resolve(), v: Promise.resolve(),
+                        s: Promise.resolve(), sa: Promise.resolve() },
               cam: { dec: null, codec: 0, awaitKey: true },
               scr: { dec: null, codec: 0, awaitKey: true },
-              adec: null, player: null,
+              // Голос и звук демонстрации приходят от одного отправителя, но
+              // это два независимых потока Opus: у декодера состояние, и в
+              // один их складывать нельзя.
+              voice: { dec: null, player: null },
+              scrAudio: { dec: null, player: null },
               // Синхронизация губ: часы звука (метка чанка + когда встал в
               // буфер), глубина буфера плеера и придержанные видеокадры.
               aClock: null, aDepth: 0, frameQ: [], drainTimer: null,
@@ -667,8 +861,15 @@
       const codecId = dv.getUint8(6);
       const ts = dv.getBigUint64(7, true);
       if (type === MSG.KEYFRAME_REQ) { forceKeyframe(); return; }
+      // Служебные кадры разбираем до E2E: они и не шифруются — сервер должен
+      // уметь их релеить, а мы понимать без ключа.
+      if (type === MSG.CODEC_UNSUPPORTED) {
+        onCodecComplaint(codecId, new Uint8Array(buffer, 15));
+        return;
+      }
       const payload = new Uint8Array(buffer, 15);
-      const lane = (type === MSG.AUDIO_PCM || type === MSG.AUDIO_CODED) ? "a"
+      const lane = type === MSG.SCREEN_AUDIO ? "sa"
+                 : (type === MSG.AUDIO_PCM || type === MSG.AUDIO_CODED) ? "a"
                  : (type === MSG.SCREEN_CODED || type === MSG.SCREEN_JPEG) ? "s" : "v";
       const peer = ensurePeer(sender);
       peer.chains[lane] = peer.chains[lane]
@@ -689,12 +890,15 @@
       peer.fails = 0;
       setLocked(peer, sender, false);
 
+      // decodeVideo ждёт пробу декодера — без await кадры обгоняли бы друг
+      // друга и опорный кадр мог прийти позже дельты, которая его ждёт.
       switch (type) {
-        case MSG.VIDEO_CODED:  decodeVideo(peer, peer.cam, st.sinks, false, sender, flags, codecId, ts, body); break;
-        case MSG.SCREEN_CODED: decodeVideo(peer, peer.scr, st.screenSinks, true, sender, flags, codecId, ts, body); break;
+        case MSG.VIDEO_CODED:  await decodeVideo(peer, peer.cam, st.sinks, false, sender, flags, codecId, ts, body); break;
+        case MSG.SCREEN_CODED: await decodeVideo(peer, peer.scr, st.screenSinks, true, sender, flags, codecId, ts, body); break;
         case MSG.VIDEO_JPEG:   paintJpeg(st.sinks, false, sender, body); break;
         case MSG.SCREEN_JPEG:  paintJpeg(st.screenSinks, true, sender, body); break;
-        case MSG.AUDIO_CODED:  decodeAudio(peer, codecId, ts, body, sender); break;
+        case MSG.AUDIO_CODED:  decodeAudio(peer, peer.voice, false, codecId, ts, body, sender); break;
+        case MSG.SCREEN_AUDIO: decodeAudio(peer, peer.scrAudio, true, codecId, ts, body, sender); break;
         case MSG.AUDIO_PCM:    playPcm(peer, sender, body); break;
       }
     }
@@ -716,19 +920,18 @@
                        new Uint8Array([isScreen ? MSG.SCREEN_CODED : MSG.VIDEO_CODED])));
     }
 
-    function decodeVideo(peer, sub, sinks, isScreen, sender, flags, codecId, ts, body) {
-      // Кодек нам вовсе неизвестен (HEVC, AV1 — их в CODEC_BY_ID нет).
-      if (!CODEC_BY_ID[codecId]) { complainCodec(codecId, isScreen); return; }
+    async function decodeVideo(peer, sub, sinks, isScreen, sender, flags, codecId, ts, body) {
       if (!sub.dec || sub.codec !== codecId) {
+        // Кодек нам незнаком, или браузер его не открывает (нет аппаратного
+        // декодера). Для отправителя это одно и то же: пусть шлёт H.264.
+        const codec = await decoderCodecFor(codecId);
+        if (!codec) { complainCodec(codecId, isScreen); return; }
         if (sub.dec) { try { sub.dec.close(); } catch (e) {} }
-        if (typeof VideoDecoder === "undefined") return;
         sub.dec = new VideoDecoder({
           output: (frame) => paintFrame(peer, sinks, isScreen, sender, frame),
           error: () => { sub.dec = null; sub.awaitKey = true; requestKeyframe(); },
         });
-        // Кодек знаком, но браузер его не открывает — например, нет
-        // аппаратного декодера. Для отправителя это то же самое.
-        try { sub.dec.configure({ codec: CODEC_BY_ID[codecId], optimizeForLatency: true }); }
+        try { sub.dec.configure({ codec, optimizeForLatency: true }); }
         catch (e) { sub.dec = null; complainCodec(codecId, isScreen); return; }
         sub.codec = codecId;
         sub.awaitKey = true;
@@ -827,26 +1030,28 @@
       }).catch(() => {});
     }
 
-    function decodeAudio(peer, codecId, ts, body, sender) {
+    // sub — peer.voice или peer.scrAudio: у голоса и фонограммы демонстрации
+    // свои декодер и плеер, хотя отправитель у них один.
+    function decodeAudio(peer, sub, isScreen, codecId, ts, body, sender) {
       if (codecId !== OPUS_ID || typeof AudioDecoder === "undefined") return;
-      if (!peer.adec) {
+      if (!sub.dec) {
         try {
-          peer.adec = new AudioDecoder({
-            output: (ad) => playDecoded(peer, sender, ad),
-            error: () => { peer.adec = null; },
+          sub.dec = new AudioDecoder({
+            output: (ad) => playDecoded(peer, sub, isScreen, sender, ad),
+            error: () => { sub.dec = null; },
           });
-          peer.adec.configure({ codec: "opus", sampleRate: AUDIO_RATE, numberOfChannels: 1 });
-        } catch (e) { peer.adec = null; return; }
+          sub.dec.configure({ codec: "opus", sampleRate: AUDIO_RATE, numberOfChannels: 1 });
+        } catch (e) { sub.dec = null; return; }
       }
       try {
-        peer.adec.decode(new EncodedAudioChunk({ type: "key", timestamp: Number(ts), data: body }));
+        sub.dec.decode(new EncodedAudioChunk({ type: "key", timestamp: Number(ts), data: body }));
       } catch (e) {
-        try { peer.adec.close(); } catch (e2) {}
-        peer.adec = null;
+        try { sub.dec.close(); } catch (e2) {}
+        sub.dec = null;
       }
     }
 
-    async function playDecoded(peer, sender, ad) {
+    async function playDecoded(peer, sub, isScreen, sender, ad) {
       const n = ad.numberOfFrames;
       const adTs = ad.timestamp;   // метка чанка = Date.now() отправителя (мс)
       const f32 = new Float32Array(n);
@@ -862,20 +1067,40 @@
       } catch (e) { ad.close(); return; }
       ad.close();
 
-      let sum = 0, m = 0;
-      for (let i = 0; i < n; i += 16) { sum += f32[i] * f32[i]; m++; }
-      if (m && Math.sqrt(sum / m) > 0.02) opts.onSpeaking(sender);
+      if (isScreen) {
+        // «Звук демонстрации идёт» — факт о ПОТОКЕ, а не о наших динамиках,
+        // поэтому отмечаем его до проверки аудиографа. Иначе при
+        // заблокированном автозвуке (обновили страницу и ни разу не кликнули)
+        // человек не увидел бы даже намёка, что звук есть, — и не понял бы,
+        // что надо кликнуть по странице.
+        st.lastScreenAudioAt = Date.now();
+        if (opts.onScreenAudio) opts.onScreenAudio(sender);
+      } else {
+        // «Говорит» — только по голосу. Громкая фонограмма демонстрации не
+        // означает, что человек говорит, и подсвечивать его плитку по ней
+        // значило бы врать (см. §5.3 методички).
+        let sum = 0, m = 0;
+        for (let i = 0; i < n; i += 16) { sum += f32[i] * f32[i]; m++; }
+        if (m && Math.sqrt(sum / m) > 0.02) opts.onSpeaking(sender);
+      }
 
       if (!st.ctx || st.ctx.state !== "running" || !(await st.workletsReady)) return;
-      if (!peer.player) {
-        peer.player = new AudioWorkletNode(st.ctx, "mu-player",
+      if (!sub.player) {
+        sub.player = new AudioWorkletNode(st.ctx, "mu-player",
           { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [1] });
-        // Плеер репортит глубину буфера — по ней считается audioPlayhead.
-        peer.player.port.onmessage = (e) => { peer.aDepth = e.data; };
-        peer.player.connect(st.masterGain);
+        if (isScreen) {
+          sub.player.connect(st.screenGain);   // своя громкость у слушателя
+        } else {
+          // Плеер репортит глубину буфера — по ней считается audioPlayhead.
+          sub.player.port.onmessage = (e) => { peer.aDepth = e.data; };
+          sub.player.connect(st.masterGain);
+        }
       }
-      peer.aClock = { ts: adTs, at: performance.now() };
-      peer.player.port.postMessage(f32, [f32.buffer]);
+      // Часы для синхронизации губ ведёт только голос: под фонограмму
+      // придерживать картинку не нужно и вредно. И ставим их здесь, а не
+      // выше: если звук не играет, видео не должно его ждать.
+      if (!isScreen) peer.aClock = { ts: adTs, at: performance.now() };
+      sub.player.port.postMessage(f32, [f32.buffer]);
     }
 
     // Legacy PCM 16 кГц: планирование BufferSource по курсору (как раньше).
@@ -921,8 +1146,10 @@
       if (p) {
         if (p.cam.dec) { try { p.cam.dec.close(); } catch (e) {} }
         if (p.scr.dec) { try { p.scr.dec.close(); } catch (e) {} }
-        if (p.adec) { try { p.adec.close(); } catch (e) {} }
-        if (p.player) { try { p.player.disconnect(); } catch (e) {} }
+        for (const sub of [p.voice, p.scrAudio]) {
+          if (sub.dec) { try { sub.dec.close(); } catch (e) {} }
+          if (sub.player) { try { sub.player.disconnect(); } catch (e) {} }
+        }
         if (p.drainTimer) clearTimeout(p.drainTimer);
         for (const f of p.frameQ) { try { f.close(); } catch (e) {} }
         st.peers.delete(id);
@@ -937,6 +1164,7 @@
     function stop() {
       camSender.stop();
       screenSender.stop();
+      stopScreenAudio();
       clearPeers();
       if (st.aenc) { try { st.aenc.close(); } catch (e) {} st.aenc = null; }
       if (st.micSrc) { try { st.micSrc.disconnect(); } catch (e) {} }
@@ -948,7 +1176,13 @@
       startVideo: (stream) => camSender.start(stream),
       stopVideo: () => camSender.stop(),
       startScreen: (stream) => screenSender.start(stream),
-      stopScreen: () => screenSender.stop(),
+      stopScreen: () => { screenSender.stop(); stopScreenAudio(); },
+      // Звук демонстрации. Возвращает true, если браузер отдал звуковую
+      // дорожку и мы её действительно повезём.
+      startScreenAudio, stopScreenAudio,
+      // Идёт ли звук демонстрации прямо сейчас — по нему показывают ручку
+      // громкости на сцене: пока звука нет, ручке там делать нечего.
+      screenAudioLive: () => Date.now() - st.lastScreenAudioAt < 2000,
       onBinary, forceKeyframe, requestKeyframe,
       videoSinkRef: (id) => sinkRefFor(st.sinks, st.sinkRefs, id),
       screenSinkRef: (id) => sinkRefFor(st.screenSinks, st.screenSinkRefs, id),
@@ -956,6 +1190,7 @@
       lastFrameAt: st.lastFrameAt,
       micLevel: () => st.micLevel,
       setVolume: (v) => { st.volume = v; if (st.masterGain) st.masterGain.gain.value = v; },
+      setScreenVolume: (v) => { st.screenVolume = v; if (st.screenGain) st.screenGain.gain.value = v; },
       setSensitivity: (v) => { st.sens = v; },
       // Качество отправки: "cam" | "screen" | "audio" -> "low" | "med" | "high".
       // Применяется на лету — энкодер пересоздаётся со следующим чанком.
@@ -1006,8 +1241,17 @@
         try { pt = await st.cipher.open(IMAGE_AAD_TYPE, 0, b64ToU8(s.slice(6))); } catch (e) {}
         return { encrypted: true, src: pt ? "data:image/jpeg;base64," + u8ToStdB64(pt) : null };
       },
-      stats: () => ({ videoCodec: st.stats.videoCodec, audioCodec: st.stats.audioCodec,
-                      encrypted: !!st.cipher }),
+      stats: () => {
+        const cam = choiceFor(false), scr = choiceFor(true);
+        return { videoCodec: st.stats.videoCodec, audioCodec: st.stats.audioCodec,
+                 camCodec: cam ? (CODEC_NAME[cam.id] || cam.codec) : "JPEG",
+                 screenCodec: scr ? (CODEC_NAME[scr.id] || scr.codec) : "JPEG",
+                 // Чем этот браузер умеет кодировать — пригодится в разделе
+                 // диагностики и объясняет, почему откат возможен не всегда.
+                 encodeOk: st.videoOk.map((c) => CODEC_NAME[c.id] || c.codec),
+                 screenAudio: !!st.scrAenc,
+                 encrypted: !!st.cipher };
+      },
       codecsReady: detect,
     };
   }

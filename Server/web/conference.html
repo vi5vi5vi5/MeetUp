@@ -361,6 +361,10 @@
     const [mic, setMic] = useState(true);
     const [cam, setCam] = useState(true);
     const [sharing, setSharing] = useState(false);
+    // Везём ли мы звук вместе с картинкой (человек отметил «Поделиться
+    // звуком») и идёт ли звук чужой демонстрации прямо сейчас.
+    const [shareAudio, setShareAudio] = useState(false);
+    const [screenAudioIn, setScreenAudioIn] = useState(false);
     // Кто ведёт демонстрацию экрана (id участника, может быть свой) — одна
     // на комнату, закрепляется сервером.
     const [screenId, setScreenId] = useState(null);
@@ -404,6 +408,9 @@
         ws: null, myId: null, manualClose: false, fatal: false, attempts: 0,
         roomPass: "", waitTimer: null, noticeTimer: null,
         camStream: null, micStream: null, displayStream: null,
+        // Состояние тумблеров вне React: joinMsg вызывается из обработчика
+        // сокета, где свежего состояния из useState ещё нет.
+        mic: true, cam: true,
         speakingUntil: new Map(), chatChain: Promise.resolve(),
         mediaStarted: false, joinedAt: 0, profile: null,
         // pref — выбранные устройства и гейны из localStorage.
@@ -457,6 +464,20 @@
             return n;
           });
         },
+        // Пришёл звук чужой демонстрации. Ставим флаг один раз, снимает его
+        // сторож ниже: пакеты идут потоком, а состояние меняется дважды.
+        onScreenAudio: () => {
+          if (!screenAudioInRef.current) setScreenAudioIn(true);
+        },
+        // Кто-то в комнате не разобрал наше видео. Молчать нельзя: у него
+        // пусто, у нас всё хорошо, и без этой строки ни одна сторона не
+        // поймёт, почему.
+        onCodecComplaint: (info) => {
+          const where = info.isScreen ? "Демонстрация" : "Камера";
+          showNotice(info.switched
+            ? where + ": участник не понимает " + info.codec + " — перешли на H.264."
+            : where + ": участник не может показать ваше видео (" + info.codec + ").");
+        },
       });
     }
     const engine = M.engine;
@@ -478,8 +499,14 @@
     }
 
     // Пароль нужен только личной комнате — для остальных сервер его игнорирует.
+    //
+    // mic/cam шлём прямо в join, и это не мелочь: сервер до сих пор рассылал
+    // остальным своё умолчание (оба включены) РАНЬШЕ, чем долетал наш первый
+    // state, и собеседники видели у вошедшего «камера подключается», которой
+    // нет. Старый сервер лишние поля просто игнорирует.
     function joinMsg() {
-      return { type: "join", room: roomCode, name: nameRef.current, password: M.roomPass };
+      return { type: "join", room: roomCode, name: nameRef.current, password: M.roomPass,
+               mic: !!M.mic, cam: !!M.cam };
     }
 
     // Повторный join: по живому сокету сервер разрешает ещё одну попытку
@@ -606,6 +633,9 @@
             setPinnedId(null);   // новая демонстрация выходит на сцену
             if (msg.id === M.myId && M.displayStream) {
               engine.startScreen(M.displayStream);
+              // Звук — той же командой: если человек отметил «Поделиться
+              // звуком», в потоке есть дорожка, и она поедет отдельной полосой.
+              engine.startScreenAudio(M.displayStream).then((ok) => setShareAudio(!!ok));
               setSharing(true);
             }
           } else {
@@ -692,6 +722,9 @@
     }
 
     function pushState(micVal, camVal) {
+      // Зеркало для joinMsg: реконнект посреди звонка должен представиться с
+      // тем состоянием, которое есть на самом деле, а не со стартовым.
+      M.mic = micVal; M.cam = camVal;
       if (M.ws && M.ws.readyState === 1)
         M.ws.send(JSON.stringify({ type: "state", mic: micVal, cam: camVal }));
     }
@@ -720,6 +753,9 @@
 
     const screenFramesRef = useRef(screenFrames);
     useEffect(() => { screenFramesRef.current = screenFrames; }, [screenFrames]);
+
+    const screenAudioInRef = useRef(screenAudioIn);
+    useEffect(() => { screenAudioInRef.current = screenAudioIn; }, [screenAudioIn]);
 
     const messagesRef = useRef(messages);
     useEffect(() => { messagesRef.current = messages; }, [messages]);
@@ -837,13 +873,25 @@
       if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) return;
       let stream;
       try {
-        stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+        // audio: true — просим ещё и звук показываемого. Chrome и Edge на этом
+        // рисуют в своём окне выбора галочку «Поделиться звуком»; Firefox и
+        // Safari её не покажут и просто вернут поток без звуковой дорожки —
+        // отдельной проверки браузера не нужно, достаточно посмотреть, что
+        // приехало. Своей настройки не заводим: галочка в системном окне и
+        // есть согласие человека.
+        stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
       } catch (e) {
         return;   // пользователь отменил выбор
       }
       M.displayStream = stream;
       const track = stream.getVideoTracks()[0];
       if (track) track.onended = () => stopSharing(true);   // «Прекратить доступ»
+      // Звуковую дорожку человек может закрыть отдельно от картинки. Сам
+      // кодер поднимется по подтверждению слота (case "screen"), как и видео:
+      // до подтверждения сервер наши кадры всё равно выбрасывает.
+      const atrack = stream.getAudioTracks()[0];
+      if (atrack) atrack.onended = () => { engine.stopScreenAudio(); setShareAudio(false); };
+      setShareAudio(false);
       if (M.ws && M.ws.readyState === 1)
         M.ws.send(JSON.stringify({ type: "screen", on: true }));
       else
@@ -855,8 +903,9 @@
         M.displayStream.getTracks().forEach(t => t.stop());
         M.displayStream = null;
       }
-      engine.stopScreen();
+      engine.stopScreen();      // гасит и звук демонстрации
       setSharing(false);
+      setShareAudio(false);
       // Локально гасим сцену сразу; остальным сервер разошлёт "screen off".
       setScreenId(cur => (cur === M.myId ? null : cur));
       if (notifyServer && M.ws && M.ws.readyState === 1)
@@ -1226,6 +1275,11 @@
         });
         if (stale.length)
           setHasFrame(prev => { const n = new Set(prev); stale.forEach(id => n.delete(id)); return n; });
+        // Звук демонстрации мог просто кончиться (ведущий закрыл дорожку или
+        // на показываемом наступила тишина) — сообщений «звук кончился» в
+        // протоколе нет, поэтому смотрим, шли ли пакеты последние две секунды.
+        const live = engine.screenAudioLive();
+        if (live !== screenAudioInRef.current) setScreenAudioIn(live);
       }, 3000);
 
       // Индикатор «говорит»: по громкости, с затуханием.
@@ -1550,6 +1604,8 @@
                   <div className="stage-chip">
                     <Icon name="screen" size={14} />
                     {screenSelf ? "Вы демонстрируете экран" : "Демонстрация — " + (sharerName || "участник")}
+                    {(screenSelf ? shareAudio : screenAudioIn) &&
+                      <span style={{ color: "var(--accent-ink)" }}>· со звуком</span>}
                   </div>
                 </>}
               </div>
