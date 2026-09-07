@@ -402,31 +402,42 @@
   }
   .chatscroll {
     flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain;
-    padding: 16px; display: flex; flex-direction: column; gap: 12px;
+    padding: 16px; display: flex; flex-direction: column;
   }
-  /* Группа — подряд идущие сообщения одного автора: имя и время пишутся
-     один раз, пузыри внутри жмутся друг к другу. Так же устроен любой
-     мессенджер, и читается это заметно легче ленты одинаковых карточек. */
-  .chat-group { display: flex; flex-direction: column; gap: 3px; }
-  .chat-group.self { align-items: flex-end; }
+  /* Лента прижата к НИЗУ: разговор начинается снизу и растёт вверх, как в
+     десктопном клиенте и в любом мессенджере. `justify-content: flex-end`
+     здесь не годится — в прокручиваемом контейнере он обрезает верх и до
+     него не домотать; поэтому пустоту забирает отступ первого элемента. */
+  .chatfeed { margin-top: auto; display: flex; flex-direction: column; gap: 12px; }
+  .chat-msg { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; }
+  .chat-msg.self { align-items: flex-end; }
+  /* Шапка только у чужих сообщений: своё имя человек и так знает, а лишняя
+     строка над каждым своим пузырём — это половина ленты, занятая собой. */
   .chat-head {
-    display: flex; gap: 6px; margin: 0 4px 2px;
+    display: flex; gap: 6px; padding-left: 4px;
     font-size: var(--text-2xs); color: var(--text-faint);
   }
-  .chat-head b { font-weight: 700; color: var(--text-muted); }
-  .chat-group.self .chat-head b { color: var(--accent-ink); }
+  .chat-head b { font-weight: 600; color: var(--text-muted); }
+  /* Пузырь по ширине текста, а не во всю колонку: короткое «ага» не должно
+     разъезжаться на всю панель. Отсюда inline-block и max-width. */
   .chat-bubble {
-    max-width: 82%; padding: 8px 12px; border-radius: var(--radius-sm);
+    display: inline-block; max-width: 82%;
+    padding: 9px 12px; border-radius: var(--radius-sm);
+    border-top-left-radius: 3px;
     background: var(--surface-2); color: var(--text);
     font-size: var(--text-sm); font-weight: var(--weight-medium);
-    line-height: var(--leading-snug); overflow-wrap: anywhere;
+    line-height: var(--leading-snug); overflow-wrap: anywhere; white-space: pre-wrap;
   }
-  .chat-group.self .chat-bubble { background: var(--accent); color: var(--on-accent); }
-  /* Уголок только у первого пузыря группы — как «хвостик» у мессенджеров. */
-  .chat-group:not(.self) .chat-bubble:first-of-type { border-top-left-radius: 3px; }
-  .chat-group.self .chat-bubble:first-of-type { border-top-right-radius: 3px; }
-  .chat-locked { opacity: .75; font-style: italic; }
-  /* «Есть новое ниже» — появляется, только если человек ушёл читать историю. */
+  .chat-msg.self .chat-bubble {
+    background: var(--accent); color: var(--on-accent);
+    border-top-left-radius: var(--radius-sm); border-top-right-radius: 3px;
+  }
+  /* Зашифрованное чужим ключом: пунктирная рамка вместо заливки — чтобы её
+     не приняли за пришедший текст. */
+  .chat-locked {
+    background: none; border: 1px dashed var(--border-strong);
+    color: var(--text-muted); font-style: italic; font-weight: 400;
+  }
   .chat-new {
     position: absolute; left: 50%; transform: translateX(-50%); bottom: 78px; z-index: 5;
     display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px;
@@ -803,6 +814,13 @@
         // Кто-то в комнате не разобрал наше видео. Молчать нельзя: у него
         // пусто, у нас всё хорошо, и без этой строки ни одна сторона не
         // поймёт, почему.
+        // Буфер сбросился сам — сказать об этом. Молча «моргнувшая»
+        // картинка выглядит как сбой связи, а это была помощь.
+        onBufferReset: (info) => {
+          if (!info.lagMs) return;   // ручной сброс человек и так видит
+          showNotice((info.isScreen ? "Демонстрация" : "Видео")
+            + " отставало на " + (info.lagMs / 1000).toFixed(1) + " с — буфер сброшен.");
+        },
         onCodecComplaint: (info) => {
           const where = info.isScreen ? "Демонстрация" : "Камера";
           showNotice(info.switched
@@ -1419,6 +1437,13 @@
     // Свой режим (CSS) — основной, полноэкранный API просим дополнительно:
     // на iOS его для произвольных элементов нет, и без своего режима кнопка
     // там просто не работала бы.
+    // Сброс буфера руками. Живёт и на сцене, и в «Диагностике»: замечают
+    // отставание, глядя на картинку, а не в настройки.
+    function resetBuffers() {
+      const n = engine.resetBuffers();
+      showNotice(n ? "Буфер сброшен — ждём опорный кадр." : "Сбрасывать нечего: чужого видео нет.");
+    }
+
     function toggleTheater() {
       const next = !theater;
       setTheater(next);
@@ -2191,6 +2216,8 @@
         "  экран:  " + st.screenCodec + " " + Math.round(st.screenRate * 100) + "% битрейта, " + n(m.scrFps) + " к/с",
         "Очередь в сокете: " + Math.round(st.buffered / 1024) + " КБ",
         "Пропуск кадров: камера " + ((m.camDrop || {}).all || 0) + "% · экран " + ((m.scrDrop || {}).all || 0) + "%",
+        "Отставание декодера: камера " + n(m.lagCam) + " мс · экран " + n(m.lagScr) + " мс"
+          + ", сбросов " + n(m.resets),
         "Умеем кодировать: " + st.encodeOk.join(", "),
         "Шифрование: " + (st.encrypted ? "включено" : "выключено"),
         "Браузер: " + navigator.userAgent,
@@ -2474,6 +2501,16 @@
             <Metric cap="Очередь в сокете" val={String(Math.round(st.buffered / 1024))} unit="КБ"
                     sub={st.buffered > 200e3 ? "канал не успевает" : "затора нет"}
                     idle={!st.buffered} />
+
+            {/* Отставание декодера — то, из-за чего чужая картинка «плывёт»
+                позади звука. Считается по меткам: сколько времени между тем,
+                что мы отдали декодеру, и тем, что он выдал. */}
+            <Metric cap="Отставание · экран" val={String(n(m.lagScr))} unit="мс"
+                    sub={n(m.lagScr) > 400 ? "декодер не поспевает" : "декодер успевает"}
+                    idle={!rxScr} />
+            <Metric cap="Отставание · камеры" val={String(n(m.lagCam))} unit="мс"
+                    sub={n(m.lagCam) > 400 ? "декодер не поспевает" : "декодер успевает"}
+                    idle={!rxCam} />
           </div>
 
           <Field label="Пропуск кадров" hint={dropHint}>
@@ -2489,14 +2526,24 @@
             </div>
           </Field>
 
+          <Field label="Буфер приёма"
+                 hint={"Сбрасывается сам, когда картинка отстаёт больше чем на 0,9 с"
+                       + (n(m.resets) ? " (уже " + n(m.resets) + " раз за сеанс)" : "")
+                       + ". Кнопка — то же самое, но прямо сейчас; та же есть и на демонстрации."}>
+            <Button variant="secondary" block icon="activity" onClick={resetBuffers}>
+              Сбросить буфер
+            </Button>
+          </Field>
+
           <Button variant="secondary" block icon={copied ? "check" : "copy"}
                   onClick={() => copyText(diagReport())}>
             {copied ? "Скопировано" : "Скопировать отчёт"}
           </Button>
           <p className="set-note">
             Потерь пакетов здесь нет и не будет: всё идёт по TCP — данные не
-            теряются, а опаздывают. Признак затора — растущая очередь в сокете
-            и кадры, пропущенные по причине «забит канал».
+            теряются, а опаздывают. Отставание растёт, когда декодер медленнее
+            потока (так бывает с AV1 и HEVC на слабом железе): кадры копятся
+            внутри декодера, и догнать их нельзя — только сбросить.
           </p>
         </>;
       }
@@ -2529,23 +2576,6 @@
       </>;
 
       default: return null;
-      }
-    }
-
-    // Подряд идущие сообщения одного автора в пределах пяти минут — одна
-    // группа: имя и время пишутся один раз. Так устроен любой мессенджер, и
-    // лента перестаёт быть стопкой одинаковых карточек.
-    const CHAT_GROUP_MS = 5 * 60 * 1000;
-    const chatGroups = [];
-    for (const m of messages) {
-      const g = chatGroups[chatGroups.length - 1];
-      if (g && g.self === m.self && g.author === m.author
-          && (m.ts || 0) - g.lastTs < CHAT_GROUP_MS) {
-        g.items.push(m);
-        g.lastTs = m.ts || g.lastTs;
-      } else {
-        chatGroups.push({ key: m.key, self: m.self, author: m.author, time: m.time,
-                          lastTs: m.ts || 0, items: [m] });
       }
     }
 
@@ -2634,6 +2664,11 @@
                                style={{ background: rangeFill(screenVol, 200) }} />
                         <span className="pct">{screenVol}%</span>
                       </div>}
+                    {!screenSelf &&
+                      <button className="stage-btn" onClick={resetBuffers}
+                              aria-label="Сбросить буфер" title="Сбросить буфер: перескочить на живой край">
+                        <Icon name="activity" size={18} />
+                      </button>}
                     <button className="stage-btn" onClick={toggleTheater}
                             aria-label={theater ? "Свернуть" : "Во весь экран"}
                             title={theater ? "Свернуть (Esc)" : "Во весь экран"}>
@@ -2781,19 +2816,18 @@
           ) : (
             <>
               <div ref={msgRef} className="chatscroll" onScroll={onChatScroll}>
-                {chatGroups.map(g => (
-                  <div key={g.key} className={"chat-group" + (g.self ? " self" : "")}>
-                    <div className="chat-head">
-                      <b>{g.self ? "Вы" : g.author}</b><span>{g.time}</span>
-                    </div>
-                    {g.items.map(m => (
-                      <div key={m.key} className={"chat-bubble" + (m.locked ? " chat-locked" : "")}
+                <div className="chatfeed">
+                  {messages.map(m => (
+                    <div key={m.key} className={"chat-msg" + (m.self ? " self" : "")}>
+                      {!m.self &&
+                        <div className="chat-head"><b>{m.author}</b><span>{m.time}</span></div>}
+                      <div className={"chat-bubble" + (m.locked ? " chat-locked" : "")}
                            title={m.time}>
                         {msgContent(m)}
                       </div>
-                    ))}
-                  </div>
-                ))}
+                    </div>
+                  ))}
+                </div>
               </div>
               {newBelow &&
                 <button className="chat-new" onClick={() => scrollChatDown(true)}>

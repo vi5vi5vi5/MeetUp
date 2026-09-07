@@ -162,6 +162,23 @@
   };
   const RATE_MIN = 0.25;                  // ниже четверти пресета не опускаемся
 
+  // Отставание декодера, после которого поток сбрасывается.
+  //
+  // Меряем во ВРЕМЕНИ, а не в кадрах: «десять кадров» на 5 к/с — это две
+  // секунды, а на 60 — одна шестая, и порог в кадрах означал бы разное на
+  // разных полосах. Метка времени у нас сквозная (стенные часы отправителя),
+  // поэтому разница «что скормили декодеру» минус «что он выдал» — это ровно
+  // столько миллисекунд, на сколько картинка отстала.
+  //
+  // 900 мс: ниже 500 бывает всплеск от одного опорного кадра, который
+  // рассасывается сам, а на секунде отставание уже мешает разговору. Ждать
+  // «нескольких секунд» поздно — к этому моменту человек успевает сказать
+  // «ты меня видишь?».
+  const DECODE_LAG_MS = 900;
+  // Второй сторож — на случай, когда меткам верить нельзя (часы отправителя
+  // прыгнули, старый клиент). Очередь в декодере просто не должна расти.
+  const DECODE_QUEUE_MAX = 24;
+
   // ---- Захват микрофона: копит кванты по 128 в чанки 960 (20 мс) ----
   const CAPTURE_WORKLET = `
     class MuCapture extends AudioWorkletProcessor {
@@ -376,6 +393,8 @@
       // последний. Без этого в диагностике во время чужой демонстрации
       // показывался наш собственный кодек отправки — то есть неправда.
       rxInfo: { v: null, s: null },
+      // Сколько раз пришлось сбросить полосу — видно в диагностике.
+      resets: { v: 0, s: 0 },
       // приём
       peers: new Map(),           // id -> peer
       sinks: new Map(),           // id -> <canvas> камеры
@@ -966,8 +985,10 @@
       if (!p) {
         p = { chains: { a: Promise.resolve(), v: Promise.resolve(),
                         s: Promise.resolve(), sa: Promise.resolve() },
-              cam: { dec: null, codec: 0, awaitKey: true },
-              scr: { dec: null, codec: 0, awaitKey: true },
+              // inTs — метка последнего кадра, отданного декодеру, outTs —
+              // последнего, который он выдал. Разница и есть отставание.
+              cam: { dec: null, codec: 0, awaitKey: true, inTs: 0, outTs: 0 },
+              scr: { dec: null, codec: 0, awaitKey: true, inTs: 0, outTs: 0 },
               // Голос и звук демонстрации приходят от одного отправителя, но
               // это два независимых потока Opus: у декодера состояние, и в
               // один их складывать нельзя.
@@ -1035,6 +1056,37 @@
       }
     }
 
+    // Сбросить полосу: закрыть декодер, забыть накопленное и попросить
+    // опорный кадр. Пересоздаём, а не flush(): flush ДОЖИДАЕТСЯ разбора всей
+    // очереди — то есть делает ровно то, от чего мы уходим.
+    function resetLane(sub, isScreen, lag, queued) {
+      if (sub.dec) { try { sub.dec.close(); } catch (e) {} }
+      sub.dec = null;
+      sub.codec = 0;
+      sub.awaitKey = true;
+      sub.inTs = 0; sub.outTs = 0;
+      st.resets[isScreen ? "s" : "v"]++;
+      requestKeyframe();
+      if (opts.onBufferReset)
+        opts.onBufferReset({ isScreen: isScreen, lagMs: Math.round(lag || 0), queued: queued || 0 });
+    }
+
+    // Сброс руками — кнопка «Сбросить буфер». Чистим ВСЕ полосы всех
+    // участников: человек нажимает её, когда отстало хоть что-то, и гадать,
+    // что именно, ему не нужно.
+    function resetBuffers() {
+      let n = 0;
+      st.peers.forEach((p) => {
+        if (p.cam.dec) { resetLane(p.cam, false, 0, 0); n++; }
+        if (p.scr.dec) { resetLane(p.scr, true, 0, 0); n++; }
+        // Придержанные ради губ кадры тоже долой: они по определению из прошлого.
+        for (const f of p.frameQ) { try { f.close(); } catch (e) {} }
+        p.frameQ.length = 0;
+        if (p.drainTimer) { clearTimeout(p.drainTimer); p.drainTimer = null; }
+      });
+      return n;
+    }
+
     function setLocked(peer, sender, locked) {
       if (peer.locked === locked) return;
       peer.locked = locked;
@@ -1060,7 +1112,10 @@
         if (!codec) { complainCodec(codecId, isScreen); return; }
         if (sub.dec) { try { sub.dec.close(); } catch (e) {} }
         sub.dec = new VideoDecoder({
-          output: (frame) => paintFrame(peer, sinks, isScreen, sender, frame),
+          output: (frame) => {
+            sub.outTs = frame.timestamp;      // чем декодер отчитался
+            paintFrame(peer, sinks, isScreen, sender, frame);
+          },
           error: () => { sub.dec = null; sub.awaitKey = true; requestKeyframe(); },
         });
         try { sub.dec.configure({ codec, optimizeForLatency: true }); }
@@ -1078,6 +1133,20 @@
       const isKey = !!(flags & FLAG_KEYFRAME);
       if (sub.awaitKey && !isKey) { requestKeyframe(); return; }   // ждём опорный кадр
       sub.awaitKey = false;
+
+      // Декодер не поспевает: кадры копятся у него внутри, и картинка
+      // отстаёт ровно на длину этой очереди. Догнать её нельзя — она
+      // наполняется быстрее, чем разгребается, — поэтому сбрасываем и
+      // прыгаем на живой край. Одно замирание до опорного кадра лучше, чем
+      // секунды отставания, о которых человек даже не догадывается.
+      const lag = sub.outTs ? Number(ts) - sub.outTs : 0;
+      const queued = sub.dec.decodeQueueSize;
+      if (lag > DECODE_LAG_MS || queued > DECODE_QUEUE_MAX) {
+        resetLane(sub, isScreen, lag, queued);
+        return;                        // этот кадр всё равно уже опоздал
+      }
+
+      sub.inTs = Number(ts);
       try {
         sub.dec.decode(new EncodedVideoChunk({
           type: isKey ? "key" : "delta", timestamp: Number(ts), data: body }));
@@ -1345,7 +1414,7 @@
       onBinary, forceKeyframe, requestKeyframe,
       videoSinkRef: (id) => sinkRefFor(st.sinks, st.sinkRefs, id),
       screenSinkRef: (id) => sinkRefFor(st.screenSinks, st.screenSinkRefs, id),
-      dropPeer, clearPeers,
+      dropPeer, clearPeers, resetBuffers,
       lastFrameAt: st.lastFrameAt,
       micLevel: () => st.micLevel,
       setVolume: (v) => { st.volume = v; if (st.masterGain) st.masterGain.gain.value = masterLevel(); },
@@ -1472,8 +1541,17 @@
                          : { busy: 0, jam: 0, all: 0 };
           };
           const fresh = (info) => (info && Date.now() - info.at < 3000) ? info : null;
+          // Текущее отставание — максимум по участникам: тормозит обычно
+          // один поток, и именно он портит впечатление.
+          let lagCam = 0, lagScr = 0;
+          st.peers.forEach((p) => {
+            if (p.cam.outTs && p.cam.inTs) lagCam = Math.max(lagCam, p.cam.inTs - p.cam.outTs);
+            if (p.scr.outTs && p.scr.inTs) lagScr = Math.max(lagScr, p.scr.inTs - p.scr.outTs);
+          });
           return { camDrop: share(m.drop.v), scrDrop: share(m.drop.s),
-                   rxCam: fresh(st.rxInfo.v), rxScreen: fresh(st.rxInfo.s) };
+                   rxCam: fresh(st.rxInfo.v), rxScreen: fresh(st.rxInfo.s),
+                   lagCam: Math.max(0, Math.round(lagCam)), lagScr: Math.max(0, Math.round(lagScr)),
+                   resets: st.resets.v + st.resets.s };
         }
       },
       stats: () => {
