@@ -63,8 +63,17 @@
     1: ["vp8"],
     2: ["avc1.42E034"],
     3: ["vp09.00.10.08"],
-    5: ["hvc1.1.6.L153.B0", "hev1.1.6.L153.B0"],
-    6: ["av01.0.12M.08", "av01.0.08M.08"],
+    // HEVC: hev1 ПЕРВЫМ, и это не вкусовщина. hvc1 означает «наборы
+    // параметров лежат вне потока и не меняются», hev1 — «могут приходить
+    // в самом потоке и меняться». Мы шлём Annex B, где SPS идёт с каждым
+    // опорным кадром, и ведущий может сменить разрешение демонстрации прямо
+    // посреди сеанса. Декодеру, настроенному как hvc1, менять геометрию
+    // незачем — он остаётся с первым разрешением, и картинка едет.
+    //
+    // Уровень объявляем с запасом (6.2 — до 8K): для приёма declared level
+    // это потолок, и занизить его значит не суметь показать 4K.
+    5: ["hev1.1.6.L186.B0", "hvc1.1.6.L186.B0", "hev1.1.6.L153.B0", "hvc1.1.6.L153.B0"],
+    6: ["av01.0.16M.08", "av01.0.12M.08", "av01.0.08M.08"],
   };
 
   // Проба «умеет ли браузер это декодировать» — один раз на кодек, результат
@@ -350,9 +359,23 @@
       // Счётчики для раздела «Диагностика». Считаем сырые байты кадров:
       // накладные расходы WebSocket и TCP сюда не входят, поэтому число
       // всегда чуть меньше того, что покажет системный монитор трафика.
-      // «Потерь пакетов» здесь нет и не будет — транспорт TCP.
-      meter: { rxBytes: 0, txBytes: 0, rxFrames: 0, txFrames: 0,
-               at: 0, lastRx: 0, lastTx: 0, lastRxF: 0, lastTxF: 0 },
+      // «Потерь пакетов» здесь нет и не будет — транспорт TCP; кадры теряем
+      // мы сами, до отправки, и их считаем отдельно по двум причинам.
+      //
+      // По полосам, а не одной кучей: «отстаёт звук» и «рвётся демонстрация»
+      // лечатся разным, и общая цифра их не различает.
+      meter: {
+        rx: { a: 0, v: 0, s: 0, sa: 0 }, tx: { a: 0, v: 0, s: 0, sa: 0 },
+        rxFrames: { v: 0, s: 0 }, txFrames: { v: 0, s: 0 },
+        // Кадр сняли, но не отправили. busy — не поспевает кодировщик,
+        // jam — забит канал. Лечатся противоположным, поэтому врозь.
+        drop: { v: { busy: 0, jam: 0, sent: 0 }, s: { busy: 0, jam: 0, sent: 0 } },
+        at: 0, prev: null,
+      },
+      // Что мы ПРИНИМАЕМ по каждой полосе: кодек, размер кадра и когда был
+      // последний. Без этого в диагностике во время чужой демонстрации
+      // показывался наш собственный кодек отправки — то есть неправда.
+      rxInfo: { v: null, s: null },
       // приём
       peers: new Map(),           // id -> peer
       sinks: new Map(),           // id -> <canvas> камеры
@@ -792,7 +815,7 @@
         const key = s.keyNext || s.frames % KEY_EVERY_FRAMES === 0;
         s.keyNext = false;
         s.frames++;
-        st.meter.txFrames++;
+        st.meter.txFrames[screen ? "s" : "v"]++;
         try { s.venc.encode(frame, { keyFrame: key }); } catch (e) { s.venc = null; }
       }
 
@@ -807,9 +830,13 @@
         }
         pace();
         const w = frame.displayWidth & ~1, h = frame.displayHeight & ~1;
-        if (w >= 2 && h >= 2 && opts.buffered() <= press.dropAt
-            && ensureEncoder(w, h) && s.venc.encodeQueueSize <= 2)
-          emitFrame(frame);
+        const d = st.meter.drop[lane === "s" ? "s" : "v"];
+        if (w >= 2 && h >= 2) {
+          if (opts.buffered() > press.dropAt) d.jam++;
+          else if (!ensureEncoder(w, h)) { /* WebCodecs отвалился */ }
+          else if (s.venc.encodeQueueSize > 2) d.busy++;
+          else { d.sent++; emitFrame(frame); }
+        }
         frame.close();
       }
 
@@ -927,7 +954,7 @@
           body = await cipher.seal(type, codecId, payload);
           fl |= FLAG_ENCRYPTED;
         }
-        st.meter.txBytes += body.length + 11;
+        if (st.meter.tx[lane] !== undefined) st.meter.tx[lane] += body.length + 11;
         opts.send(packV2(type, fl, codecId, tsBig, body));
       }).catch(() => {});
     }
@@ -957,7 +984,6 @@
     }
 
     function onBinary(buffer) {
-      st.meter.rxBytes += buffer.byteLength;
       if (buffer.byteLength < 15) return;
       const dv = new DataView(buffer);
       const type = dv.getUint8(0);
@@ -976,6 +1002,7 @@
       const lane = type === MSG.SCREEN_AUDIO ? "sa"
                  : (type === MSG.AUDIO_PCM || type === MSG.AUDIO_CODED) ? "a"
                  : (type === MSG.SCREEN_CODED || type === MSG.SCREEN_JPEG) ? "s" : "v";
+      if (st.meter.rx[lane] !== undefined) st.meter.rx[lane] += buffer.byteLength;
       const peer = ensurePeer(sender);
       peer.chains[lane] = peer.chains[lane]
         .then(() => handleMedia(peer, sender, type, flags, codecId, ts, payload))
@@ -1041,6 +1068,13 @@
         sub.codec = codecId;
         sub.awaitKey = true;
       }
+      // Кодек приёма — для диагностики. Раньше там показывался наш кодек
+      // ОТПРАВКИ, и во время чужой демонстрации это была прямая неправда.
+      const laneKey = isScreen ? "s" : "v";
+      const known = st.rxInfo[laneKey];
+      const name = CODEC_NAME[codecId] || String(codecId);
+      if (!known) st.rxInfo[laneKey] = { codec: name, w: 0, h: 0, at: Date.now() };
+      else known.codec = name;
       const isKey = !!(flags & FLAG_KEYFRAME);
       if (sub.awaitKey && !isKey) { requestKeyframe(); return; }   // ждём опорный кадр
       sub.awaitKey = false;
@@ -1100,12 +1134,30 @@
     }
 
     function drawFrame(sinks, isScreen, sender, frame) {
-      st.meter.rxFrames++;
+      const lane = isScreen ? "s" : "v";
+      st.meter.rxFrames[lane]++;
+
+      // Что именно рисуем — берём У КАДРА, а не из своих предположений.
+      // visibleRect есть не у всех реализаций; когда его нет, полагаемся на
+      // coded-размер.
+      const vr = frame.visibleRect
+        || { x: 0, y: 0, width: frame.codedWidth, height: frame.codedHeight };
+      const w = frame.displayWidth || vr.width;
+      const h = frame.displayHeight || vr.height;
+      const info = st.rxInfo[lane];
+      if (!info || info.w !== w || info.h !== h) st.rxInfo[lane] = { codec: info ? info.codec : "", w: w, h: h, at: Date.now() };
+      else info.at = Date.now();
+
       const canvas = sinks.get(sender);
       if (canvas) {
-        const w = frame.displayWidth, h = frame.displayHeight;
         if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
-        canvas.getContext("2d").drawImage(frame, 0, 0, w, h);
+        // ЯВНО задаём и источник, и приёмник (форма из девяти аргументов).
+        // Короткая форма drawImage(frame, 0, 0, w, h) задаёт только приёмник,
+        // а источником берёт «всё изображение» — и что это для VideoFrame,
+        // реализации трактуют по-разному: у HEVC coded-размер выровнен по
+        // блокам и крупнее видимой части, и картинка съезжала.
+        canvas.getContext("2d").drawImage(frame,
+          vr.x, vr.y, vr.width, vr.height, 0, 0, w, h);
       }
       frame.close();
       if (isScreen) {
@@ -1381,20 +1433,48 @@
       metrics: () => {
         const m = st.meter;
         const now = Date.now();
+        const snap = () => ({
+          rx: Object.assign({}, m.rx), tx: Object.assign({}, m.tx),
+          rxFrames: Object.assign({}, m.rxFrames), txFrames: Object.assign({}, m.txFrames),
+        });
+        const kbps = (bytes, dt) => Math.round(bytes * 8 / dt / 1000);
+        const zero = { rxKbps: 0, txKbps: 0, rxFps: 0,
+                       txVoiceKbps: 0, txCamKbps: 0, txScrKbps: 0, txScrAudioKbps: 0,
+                       camFps: 0, scrFps: 0 };
         const dt = m.at ? (now - m.at) / 1000 : 0;
-        const out = { rxTotal: m.rxBytes, txTotal: m.txBytes,
-                      rxKbps: 0, txKbps: 0, rxFps: 0, txFps: 0 };
-        if (dt > 0.2) {
-          out.rxKbps = Math.round((m.rxBytes - m.lastRx) * 8 / dt / 1000);
-          out.txKbps = Math.round((m.txBytes - m.lastTx) * 8 / dt / 1000);
-          out.rxFps = Math.round((m.rxFrames - m.lastRxF) / dt * 10) / 10;
-          out.txFps = Math.round((m.txFrames - m.lastTxF) / dt * 10) / 10;
-          m.at = now; m.lastRx = m.rxBytes; m.lastTx = m.txBytes;
-          m.lastRxF = m.rxFrames; m.lastTxF = m.txFrames;
-        } else if (!m.at) {
-          m.at = now;
+        if (dt <= 0.2) {
+          if (!m.at) { m.at = now; m.prev = snap(); }
+          return Object.assign(zero, tail());
         }
-        return out;
+        const p = m.prev || snap();
+        const out = {
+          rxKbps: kbps((m.rx.a - p.rx.a) + (m.rx.v - p.rx.v) + (m.rx.s - p.rx.s) + (m.rx.sa - p.rx.sa), dt),
+          txKbps: kbps((m.tx.a - p.tx.a) + (m.tx.v - p.tx.v) + (m.tx.s - p.tx.s) + (m.tx.sa - p.tx.sa), dt),
+          txVoiceKbps: kbps(m.tx.a - p.tx.a, dt),
+          txCamKbps: kbps(m.tx.v - p.tx.v, dt),
+          txScrKbps: kbps(m.tx.s - p.tx.s, dt),
+          txScrAudioKbps: kbps(m.tx.sa - p.tx.sa, dt),
+          rxFps: Math.round(((m.rxFrames.v - p.rxFrames.v) + (m.rxFrames.s - p.rxFrames.s)) / dt * 10) / 10,
+          camFps: Math.round((m.txFrames.v - p.txFrames.v) / dt * 10) / 10,
+          scrFps: Math.round((m.txFrames.s - p.txFrames.s) / dt * 10) / 10,
+        };
+        m.at = now; m.prev = snap();
+        return Object.assign(out, tail());
+
+        // Накопительное — не зависит от окна: доли пропусков за всё вещание
+        // и то, что реально приходит по каждой полосе.
+        function tail() {
+          const share = (d) => {
+            const total = d.sent + d.busy + d.jam;
+            return total ? { busy: Math.round(d.busy * 100 / total),
+                             jam: Math.round(d.jam * 100 / total),
+                             all: Math.round((d.busy + d.jam) * 100 / total) }
+                         : { busy: 0, jam: 0, all: 0 };
+          };
+          const fresh = (info) => (info && Date.now() - info.at < 3000) ? info : null;
+          return { camDrop: share(m.drop.v), scrDrop: share(m.drop.s),
+                   rxCam: fresh(st.rxInfo.v), rxScreen: fresh(st.rxInfo.s) };
+        }
       },
       stats: () => {
         const cam = choiceFor(false), scr = choiceFor(true);

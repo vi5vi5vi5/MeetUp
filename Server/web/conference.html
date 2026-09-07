@@ -56,7 +56,19 @@
     border-radius: 50%; object-fit: cover;
     box-shadow: 0 6px 24px rgba(0, 0, 0, .28);
   }
-  .stage-ava img { max-width: 168px; width: 20%; min-width: 72px; }
+  .stage-ava img, .stage-ava .ini { max-width: 168px; width: 20%; min-width: 72px; }
+  /* Без камеры и без аватарки показываем инициалы — но кружком, как в
+     десктопном клиенте и на главной, а не крупными буквами по центру. */
+  .tile-ava .ini {
+    width: 38%; max-width: 96px; min-width: 40px; aspect-ratio: 1;
+    border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    background: var(--surface-2); border: 1px solid var(--border-strong);
+    color: var(--text-muted); font-family: var(--font-display); font-weight: 700;
+    font-size: clamp(13px, 2.2vw, 26px); letter-spacing: -.5px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, .28);
+  }
+  .tile-ava .ini.self { color: var(--accent-ink); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+  .film-cell .tile-ava .ini { font-size: 13px; }
   .mirror { transform: scaleX(-1); }
 
   /* Демонстрация экрана: плёнка камер сверху + сцена. contain, а не cover —
@@ -220,7 +232,8 @@
   }
   .set-rail {
     border-right: 1px solid var(--border); padding: 14px 10px;
-    overflow: auto; display: flex; flex-direction: column; gap: 2px; min-width: 0;
+    overflow: auto; display: flex; flex-direction: column; gap: 2px;
+    min-width: 0; min-height: 0;
   }
   .set-rail-head { display: flex; align-items: center; gap: 8px; padding: 0 4px 10px 0; }
   .set-rail-title {
@@ -246,7 +259,10 @@
     color: var(--accent-ink);
   }
   .set-item .chev { margin-left: auto; opacity: .5; display: none; }
-  .set-body { display: flex; flex-direction: column; min-width: 0; }
+  /* min-height: 0 обязателен: без него элемент раскладки берёт минимальную
+     высоту по содержимому, и .set-page с overflow не прокручивалась вовсе —
+     до «шумоподавления» внизу раздела «Звук» было не добраться. */
+  .set-body { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
   .set-head {
     display: flex; align-items: center; gap: 10px;
     padding: 16px 20px; border-bottom: 1px solid var(--border);
@@ -254,7 +270,7 @@
   .set-title { margin: 0; font-family: var(--font-display); font-weight: 700; font-size: 19px; letter-spacing: -.5px; }
   .set-sub { margin: 2px 0 0; font-size: var(--text-xs); color: var(--text-muted); }
   .set-back { display: none; }
-  .set-page { flex: 1; overflow: auto; padding: 18px 20px 24px; }
+  .set-page { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 18px 20px 24px; }
   .set-page > * + * { margin-top: 18px; }
   /* Тумблер: те же токены, что у остальных «включено» в системе. */
   .set-toggle {
@@ -283,6 +299,44 @@
   .set-kv b { flex: none; width: 46%; font-weight: 600; color: var(--text-muted); }
   .set-kv span { min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
   .set-note { font-size: var(--text-xs); color: var(--text-faint); }
+
+  /* Диагностика: плитки с крупным числом — как в десктопном клиенте.
+     Показатель, который сейчас ни о чём (камера выключена, никто не вещает),
+     гасим, но не прячем: пустая клетка объясняет не меньше полной. */
+  .metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .metric {
+    padding: 11px 14px; border-radius: var(--radius-md);
+    background: var(--surface-2); border: 1px solid var(--border); min-width: 0;
+  }
+  .metric.idle { opacity: .62; }
+  .metric .cap {
+    font-family: var(--font-label); font-size: 10px; font-weight: 500;
+    letter-spacing: 1.4px; text-transform: uppercase; color: var(--text-faint);
+  }
+  .metric .val {
+    display: flex; align-items: baseline; gap: 5px; margin-top: 3px;
+    font-size: var(--text-lg); font-weight: 700; color: var(--text);
+  }
+  .metric .val i {
+    font-style: normal; font-size: var(--text-xs); font-weight: 600; color: var(--text-muted);
+  }
+  .metric .sub {
+    margin-top: 2px; font-size: var(--text-2xs); color: var(--text-faint);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .link-state {
+    display: flex; align-items: center; gap: 10px; padding: 12px 14px;
+    border-radius: var(--radius-md); background: var(--surface-2);
+    border: 1px solid var(--border); font-size: var(--text-sm);
+  }
+  .link-state .lamp { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+  .drop-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .drop-cell {
+    padding: 9px; text-align: center; border-radius: var(--radius-sm);
+    background: var(--surface-2); border: 1px solid var(--border);
+    font-size: var(--text-xs); font-weight: 500;
+  }
+  .drop-cell.bad { border-color: var(--danger); }
   .set-kv kbd {
     font-family: var(--font-mono); font-size: var(--text-xs);
     padding: 2px 7px; border-radius: var(--radius-xs);
@@ -338,7 +392,7 @@
 
   .side {
     border-left: 1px solid var(--border); background: var(--surface);
-    display: flex; flex-direction: column; min-height: 0;
+    display: flex; flex-direction: column; min-height: 0; position: relative;
   }
   .side-head { display: none; align-items: center; justify-content: space-between; padding: 14px 16px 0; }
   .tabs { display: flex; gap: 4px; padding: 16px 16px 0; }
@@ -346,11 +400,60 @@
     flex: 1; padding: 10px; border-radius: var(--radius-md); cursor: pointer;
     font-family: var(--font-ui); font-weight: 700; font-size: 13px; transition: var(--transition);
   }
-  .chatscroll { flex: 1; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+  .chatscroll {
+    flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain;
+    padding: 16px; display: flex; flex-direction: column; gap: 12px;
+  }
+  /* Группа — подряд идущие сообщения одного автора: имя и время пишутся
+     один раз, пузыри внутри жмутся друг к другу. Так же устроен любой
+     мессенджер, и читается это заметно легче ленты одинаковых карточек. */
+  .chat-group { display: flex; flex-direction: column; gap: 3px; }
+  .chat-group.self { align-items: flex-end; }
+  .chat-head {
+    display: flex; gap: 6px; margin: 0 4px 2px;
+    font-size: var(--text-2xs); color: var(--text-faint);
+  }
+  .chat-head b { font-weight: 700; color: var(--text-muted); }
+  .chat-group.self .chat-head b { color: var(--accent-ink); }
+  .chat-bubble {
+    max-width: 82%; padding: 8px 12px; border-radius: var(--radius-sm);
+    background: var(--surface-2); color: var(--text);
+    font-size: var(--text-sm); font-weight: var(--weight-medium);
+    line-height: var(--leading-snug); overflow-wrap: anywhere;
+  }
+  .chat-group.self .chat-bubble { background: var(--accent); color: var(--on-accent); }
+  /* Уголок только у первого пузыря группы — как «хвостик» у мессенджеров. */
+  .chat-group:not(.self) .chat-bubble:first-of-type { border-top-left-radius: 3px; }
+  .chat-group.self .chat-bubble:first-of-type { border-top-right-radius: 3px; }
+  .chat-locked { opacity: .75; font-style: italic; }
+  /* «Есть новое ниже» — появляется, только если человек ушёл читать историю. */
+  .chat-new {
+    position: absolute; left: 50%; transform: translateX(-50%); bottom: 78px; z-index: 5;
+    display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px;
+    border: 1px solid transparent; border-radius: var(--radius-pill);
+    background: var(--accent); color: var(--on-accent);
+    font-family: var(--font-ui); font-weight: 700; font-size: var(--text-xs);
+    cursor: pointer; box-shadow: var(--shadow-pop);
+  }
   .peoplescroll { flex: 1; overflow: auto; padding: 12px 8px; }
   .composer { display: flex; gap: 8px; padding: 14px; border-top: 1px solid var(--border); }
 
   .mobile-only { display: none !important; }
+
+  /* Интерфейс — не документ. По умолчанию текст в нём не выделяется и не
+     показывает I-образный курсор: иначе любое перетаскивание по плиткам,
+     доку и настройкам подсвечивает подписи, а щелчок по имени участника
+     выглядит так, будто туда можно печатать. Выделение возвращаем ровно
+     там, где его хочется: переписка, значения диагностики, поля ввода. */
+  .conf, .set-panel, .peervol, .share-pop, .overlay {
+    -webkit-user-select: none; user-select: none; cursor: default;
+  }
+  .chatscroll, .set-kv span, .set-note, .metric .val, .metric .sub,
+  .conf-title, .share-pop input, .peervol h3,
+  input, textarea, select, [contenteditable] {
+    -webkit-user-select: text; user-select: text; cursor: auto;
+  }
+  .chatscroll { cursor: auto; }
 
   .chat-fab {
     display: none; position: absolute; right: 20px; bottom: 96px; z-index: 40;
@@ -419,11 +522,20 @@
   // ControlDock из дизайн-системы здесь больше не берём: в нём жёстко зашиты
   // пять кнопок без «общего звука», а доку нужен ещё и компактный размер на
   // телефоне — он собран на странице (см. .dockbar).
-  const { Badge, Icon, IconButton, Input, Field, Button, Card, VideoTile, ParticipantRow, ChatMessage } =
+  const { Badge, Icon, IconButton, Input, Field, Button, Card, VideoTile, ParticipantRow } =
     window.MeetUpDesignSystem_2584b5;
 
   // Бинарный протокол, кодеки и E2E-шифрование живут в assets/meetup-media.js.
   const roomCode = new URLSearchParams(location.search).get("room") || "";
+
+  // Инициалы для кружка: одна буква имени и одна фамилии, если она есть.
+  function initials(name) {
+    const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return "?";
+    const one = parts[0][0] || "";
+    const two = parts.length > 1 ? (parts[1][0] || "") : (parts[0][1] || "");
+    return (one + two).toUpperCase();
+  }
 
   function fmtTime(ms) {
     return new Date(Number(ms)).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
@@ -545,6 +657,8 @@
     const [peers, setPeers] = useState([]);          // {id, name, mic, cam}
     const [messages, setMessages] = useState([]);    // {key, author, time, text, self}
     const [unread, setUnread] = useState(0);
+    // Пришло новое, пока человек листал историю выше.
+    const [newBelow, setNewBelow] = useState(false);
     const [draft, setDraft] = useState("");
     const [mic, setMic] = useState(true);
     const [cam, setCam] = useState(true);
@@ -588,6 +702,7 @@
     const fileRef = useRef(null);           // скрытый <input type=file> для картинок чата
     const touchX = useRef(null);
     const holdRef = useRef(null);           // долгий тап по плитке = правая кнопка
+    const chatAtBottom = useRef(true);      // человек читает свежее, а не историю
 
     // Зеркало актуального состояния для обработчиков вне рендера
     // (наполняется эффектом ниже по файлу, после вычисления pages).
@@ -803,6 +918,7 @@
             key: "h" + i + "-" + h.timestamp_ms,
             author: h.sender_name || ("Участник " + h.sender_id),
             time: fmtTime(h.timestamp_ms),
+            ts: h.timestamp_ms,
             self: h.sender_id === msg.sender_id,
             ...(await renderChatBody(h.text, h.image, h.image_dropped)),
           }))).then(setMessages);
@@ -876,6 +992,7 @@
               key: msg.timestamp_ms + "-" + msg.sender_id + "-" + prev.length,
               author: msg.sender_name || ("Участник " + msg.sender_id),
               time: fmtTime(msg.timestamp_ms),
+              ts: msg.timestamp_ms,
               self,
               ...body,
             }]);
@@ -1492,9 +1609,37 @@
       }
     }
 
+    // Прокрутка чата. Раньше любое новое сообщение швыряло ленту вниз, даже
+    // когда человек читал историю выше, — и место, где он читал, терялось.
+    // Теперь вниз уезжаем, только если мы и так были внизу; иначе показываем
+    // пилюлю «новые сообщения».
+    function onChatScroll(e) {
+      const el = e.currentTarget;
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+      chatAtBottom.current = atBottom;
+      if (atBottom && newBelow) setNewBelow(false);
+    }
+
+    function scrollChatDown(smooth) {
+      const el = msgRef.current;
+      if (!el) return;
+      chatAtBottom.current = true;
+      setNewBelow(false);
+      if (smooth && el.scrollTo) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+      else el.scrollTop = el.scrollHeight;
+    }
+
     useEffect(() => {
-      if (msgRef.current) msgRef.current.scrollTop = msgRef.current.scrollHeight;
-    }, [messages, tab, panelOpen]);
+      const el = msgRef.current;
+      if (!el) return;
+      if (chatAtBottom.current) el.scrollTop = el.scrollHeight;
+      else if (messages.length) setNewBelow(true);
+    }, [messages]);
+
+    // Открыли вкладку или панель — начинаем снизу, с самого свежего.
+    useEffect(() => {
+      if (msgRef.current) scrollChatDown(false);
+    }, [tab, panelOpen]);
 
     // Сбрасываем счётчик непрочитанного, когда чат на виду.
     useEffect(() => {
@@ -1882,8 +2027,16 @@
       } else if (t.cam && t.hasFrame && !locked && !onStage) {
         media = <canvas className="tile-media" ref={engine.videoSinkRef(t.id)} />;
       }
-      if (!media && t.avatar && !locked)
-        media = <div className="tile-ava"><img src={t.avatar} alt="" /></div>;
+      // Ни видео, ни аватарки — инициалы, но кружком: крупные буквы во всю
+      // плитку выглядели как заглушка вёрстки, а не как человек.
+      if (!media && !locked)
+        media = (
+          <div className="tile-ava">
+            {t.avatar
+              ? <img src={t.avatar} alt="" />
+              : <div className={"ini" + (t.self ? " self" : "")}>{initials(t.name)}</div>}
+          </div>
+        );
       const spanSelf = !film && featured && tiles.length === 3 && idx === 0;
       const pinned = pinActive && t.id === pinnedId;
       return (
@@ -1923,7 +2076,14 @@
         return <canvas key={"pin" + t.id} className="stage-media"
                        ref={engine.videoSinkRef(t.id)} />;
       }
-      if (t.avatar) return <div className="tile-ava stage-ava"><img src={t.avatar} alt="" /></div>;
+      if (t.avatar || !t.cam || !t.hasFrame)
+        return (
+          <div className="tile-ava stage-ava">
+            {t.avatar
+              ? <img src={t.avatar} alt="" />
+              : <div className={"ini" + (t.self ? " self" : "")}>{initials(t.name)}</div>}
+          </div>
+        );
       return <div className="stage-wait">
         {!t.self && t.cam ? "Подключаем камеру…" : "Камера выключена"}
       </div>;
@@ -2000,26 +2160,41 @@
 
     const KV = ({ k, v }) => <div className="set-kv"><b>{k}</b><span>{v}</span></div>;
 
+    // Плитка показателя (как в десктопной «Диагностике»): подпись, крупное
+    // значение с единицей и пояснение мелким. idle — показатель не про эту
+    // минуту: гасим, но не прячем.
+    const Metric = ({ cap, val, unit, sub, idle }) => (
+      <div className={"metric" + (idle ? " idle" : "")}>
+        <div className="cap">{cap}</div>
+        <div className="val">{val}{unit ? <i>{unit}</i> : null}</div>
+        {sub ? <div className="sub" title={sub}>{sub}</div> : null}
+      </div>
+    );
+
     // Отчёт для «скопировать»: то же, что видно в разделе, одним текстом —
     // его удобно приложить к жалобе «у меня всё тормозит».
     function diagReport() {
-      const s = engine.stats();
-      const m = diag || { rxKbps: 0, txKbps: 0, rxFps: 0, txFps: 0 };
+      const st = engine.stats();
+      const m = diag || {};
+      const n = (x) => (x == null ? 0 : x);
+      const rx = (i) => (i ? i.codec + (i.w ? " " + i.w + "×" + i.h : "") : "нет");
       return [
         "MeetUp — диагностика",
-        "Комната: " + (roomTitle || roomCode),
-        "Сервер: " + location.host,
-        "Задержка до сервера: " + (ping == null ? "—" : ping + " мс"),
-        "Приём: " + m.rxKbps + " кбит/с, " + m.rxFps + " кадр/с",
-        "Отправка: " + m.txKbps + " кбит/с, " + m.txFps + " кадр/с",
-        "Очередь в сокете: " + Math.round(s.buffered / 1024) + " КБ",
-        "Камера: " + s.camCodec + ", битрейт " + Math.round(s.camRate * 100) + "% от пресета",
-        "Демонстрация: " + s.screenCodec + ", битрейт " + Math.round(s.screenRate * 100) + "%",
-        "Звук: " + s.audioCodec,
-        "Умеем кодировать: " + s.encodeOk.join(", "),
-        "Шифрование: " + (s.encrypted ? "включено" : "выключено"),
+        "Комната: " + (roomTitle || roomCode) + " · сервер " + location.host,
+        "Задержка: " + (ping == null ? "—" : ping + " мс"),
+        "Приём: " + n(m.rxKbps) + " кбит/с, " + n(m.rxFps) + " к/с",
+        "  камера: " + rx(m.rxCam),
+        "  экран:  " + rx(m.rxScreen),
+        "Отправка: голос " + n(m.txVoiceKbps) + " · камера " + n(m.txCamKbps)
+          + " · экран " + n(m.txScrKbps) + " · звук экрана " + n(m.txScrAudioKbps) + " кбит/с",
+        "  камера: " + st.camCodec + " " + Math.round(st.camRate * 100) + "% битрейта, " + n(m.camFps) + " к/с",
+        "  экран:  " + st.screenCodec + " " + Math.round(st.screenRate * 100) + "% битрейта, " + n(m.scrFps) + " к/с",
+        "Очередь в сокете: " + Math.round(st.buffered / 1024) + " КБ",
+        "Пропуск кадров: камера " + ((m.camDrop || {}).all || 0) + "% · экран " + ((m.scrDrop || {}).all || 0) + "%",
+        "Умеем кодировать: " + st.encodeOk.join(", "),
+        "Шифрование: " + (st.encrypted ? "включено" : "выключено"),
         "Браузер: " + navigator.userAgent,
-      ].join("\n");
+      ].join(String.fromCharCode(10));
     }
 
     function renderSection() {
@@ -2243,25 +2418,74 @@
       </>;
 
       case "diag": {
-        const s = engine.stats();
-        const m = diag || { rxKbps: 0, txKbps: 0, rxFps: 0, txFps: 0 };
-        return <>
-          <Field label="Соединение">
-            <div>
-              <KV k="Задержка до сервера" v={ping == null ? "—" : ping + " мс"} />
-              <KV k="Приём" v={m.rxKbps + " кбит/с · " + m.rxFps + " кадр/с"} />
-              <KV k="Отправка" v={m.txKbps + " кбит/с · " + m.txFps + " кадр/с"} />
-              <KV k="Очередь в сокете" v={Math.round(s.buffered / 1024) + " КБ"} />
-            </div>
-          </Field>
+        const st = engine.stats();
+        const m = diag || {};
+        const n = (x) => (x == null ? 0 : x);
+        const rxScr = m.rxScreen, rxCam = m.rxCam;
+        const size = (i) => (i && i.w ? i.w + "×" + i.h : "размер неизвестен");
+        const camDrop = m.camDrop || { all: 0, busy: 0, jam: 0 };
+        const scrDrop = m.scrDrop || { all: 0, busy: 0, jam: 0 };
+        const dropHint = (camDrop.all + scrDrop.all) === 0
+          ? "Считается, пока вы вещаете: кадры, снятые, но не ушедшие в сеть."
+          : (camDrop.busy + scrDrop.busy) > (camDrop.jam + scrDrop.jam)
+            ? "Не поспевает кодировщик: кадр снят, а предыдущий ещё не закодирован. Лечится качеством пониже."
+            : "Забит канал: кадр снят, но в сокете уже больше, чем он успевает отдать. Лечится качеством и разрешением.";
 
-          <Field label="Кодеки"
-                 hint="Проценты — насколько сеть прижала полосу. 100% значит, что пресет отдаётся целиком.">
-            <div>
-              <KV k="Камера" v={s.camCodec + " · " + Math.round(s.camRate * 100) + "%"} />
-              <KV k="Демонстрация" v={s.screenCodec + " · " + Math.round(s.screenRate * 100) + "%"} />
-              <KV k="Звук" v={s.audioCodec} />
-              <KV k="Шифрование" v={s.encrypted ? "включено" : "выключено"} />
+        return <>
+          <div className="link-state">
+            <span className="lamp" style={{ background: ping == null ? "var(--text-faint)"
+                                            : ping < 200 ? "var(--accent)" : "var(--danger)" }} />
+            <span>{(ping == null ? "Соединение проверяется"
+                    : ping < 200 ? "Соединение устойчиво" : "Связь неровная")
+                   + " · " + location.host}</span>
+          </div>
+
+          <div className="metrics">
+            <Metric cap="Задержка" val={ping == null ? "—" : String(ping)}
+                    unit={ping == null ? "" : "мс"} sub="круг до сервера и обратно"
+                    idle={ping == null} />
+            <Metric cap="Приём" val={String(n(m.rxKbps))} unit="кбит/с"
+                    sub={n(m.rxFps) > 0 ? n(m.rxFps) + " к/с" : "видео никто не шлёт"}
+                    idle={!n(m.rxKbps)} />
+
+            <Metric cap="Отправка · голос" val={String(n(m.txVoiceKbps))} unit="кбит/с"
+                    sub={n(m.txVoiceKbps) > 0 ? "микрофон в эфире" : "микрофон молчит"}
+                    idle={!n(m.txVoiceKbps)} />
+            <Metric cap="Отправка · камера" val={String(n(m.txCamKbps))} unit="кбит/с"
+                    sub={cam ? st.camCodec + " · " + n(m.camFps) + " к/с" : "камера выключена"}
+                    idle={!cam} />
+
+            <Metric cap="Отправка · экран"
+                    val={String(n(m.txScrKbps))} unit="кбит/с"
+                    sub={sharing ? st.screenCodec + " · " + n(m.scrFps) + " к/с"
+                                   + (shareAudio ? " · со звуком" : "")
+                                 : "вы не показываете экран"}
+                    idle={!sharing} />
+            {/* Ключевая пара: что к нам ПРИХОДИТ. Раньше здесь показывался наш
+                кодек отправки, и во время чужой демонстрации это была неправда. */}
+            <Metric cap="Приём · экран"
+                    val={rxScr ? rxScr.codec : "—"}
+                    sub={rxScr ? size(rxScr) : "чужой демонстрации нет"}
+                    idle={!rxScr} />
+
+            <Metric cap="Приём · камеры" val={rxCam ? rxCam.codec : "—"}
+                    sub={rxCam ? size(rxCam) : "камер участников не видно"}
+                    idle={!rxCam} />
+            <Metric cap="Очередь в сокете" val={String(Math.round(st.buffered / 1024))} unit="КБ"
+                    sub={st.buffered > 200e3 ? "канал не успевает" : "затора нет"}
+                    idle={!st.buffered} />
+          </div>
+
+          <Field label="Пропуск кадров" hint={dropHint}>
+            <div className="drop-row">
+              <div className={"drop-cell" + (camDrop.all > 20 ? " bad" : "")}
+                   style={cam ? undefined : { color: "var(--text-faint)" }}>
+                Камера · {camDrop.all}%
+              </div>
+              <div className={"drop-cell" + (scrDrop.all > 20 ? " bad" : "")}
+                   style={sharing ? undefined : { color: "var(--text-faint)" }}>
+                Экран · {scrDrop.all}%
+              </div>
             </div>
           </Field>
 
@@ -2272,7 +2496,7 @@
           <p className="set-note">
             Потерь пакетов здесь нет и не будет: всё идёт по TCP — данные не
             теряются, а опаздывают. Признак затора — растущая очередь в сокете
-            и просевший процент битрейта.
+            и кадры, пропущенные по причине «забит канал».
           </p>
         </>;
       }
@@ -2305,6 +2529,23 @@
       </>;
 
       default: return null;
+      }
+    }
+
+    // Подряд идущие сообщения одного автора в пределах пяти минут — одна
+    // группа: имя и время пишутся один раз. Так устроен любой мессенджер, и
+    // лента перестаёт быть стопкой одинаковых карточек.
+    const CHAT_GROUP_MS = 5 * 60 * 1000;
+    const chatGroups = [];
+    for (const m of messages) {
+      const g = chatGroups[chatGroups.length - 1];
+      if (g && g.self === m.self && g.author === m.author
+          && (m.ts || 0) - g.lastTs < CHAT_GROUP_MS) {
+        g.items.push(m);
+        g.lastTs = m.ts || g.lastTs;
+      } else {
+        chatGroups.push({ key: m.key, self: m.self, author: m.author, time: m.time,
+                          lastTs: m.ts || 0, items: [m] });
       }
     }
 
@@ -2539,12 +2780,26 @@
             </div>
           ) : (
             <>
-              <div ref={msgRef} className="chatscroll">
-                {messages.map(m => (
-                  <ChatMessage key={m.key} author={m.author} time={m.time} self={m.self}
-                               text={msgContent(m)} />
+              <div ref={msgRef} className="chatscroll" onScroll={onChatScroll}>
+                {chatGroups.map(g => (
+                  <div key={g.key} className={"chat-group" + (g.self ? " self" : "")}>
+                    <div className="chat-head">
+                      <b>{g.self ? "Вы" : g.author}</b><span>{g.time}</span>
+                    </div>
+                    {g.items.map(m => (
+                      <div key={m.key} className={"chat-bubble" + (m.locked ? " chat-locked" : "")}
+                           title={m.time}>
+                        {msgContent(m)}
+                      </div>
+                    ))}
+                  </div>
                 ))}
               </div>
+              {newBelow &&
+                <button className="chat-new" onClick={() => scrollChatDown(true)}>
+                  <Icon name="arrow-right" size={14} style={{ transform: "rotate(90deg)" }} />
+                  Новые сообщения
+                </button>}
               <div className="composer">
                 <input ref={fileRef} type="file" accept="image/*"
                        style={{ display: "none" }} onChange={onPickImage} />

@@ -42,11 +42,19 @@ const FAKES = [
   { id: 2, name: "Анна Кольцова", mic: true, cam: false },
   { id: 3, name: "Борис", mic: false, cam: false },
 ];
+// Подряд идущие сообщения одного автора — специально: на них видно
+// склейку в группы (имя и время пишутся один раз).
 const HISTORY = [
   { sender_id: 2, sender_name: "Анна Кольцова", text: "Всем привет! Начинаем через минуту.",
     timestamp_ms: Date.now() - 300000 },
+  { sender_id: 2, sender_name: "Анна Кольцова", text: "Захватила слайды, покажу с экрана.",
+    timestamp_ms: Date.now() - 290000 },
+  { sender_id: 2, sender_name: "Анна Кольцова", text: "Если плохо видно — скажите, подниму разрешение.",
+    timestamp_ms: Date.now() - 285000 },
   { sender_id: 3, sender_name: "Борис", text: "Я на месте, слышно хорошо.",
     timestamp_ms: Date.now() - 240000 },
+  { sender_id: 3, sender_name: "Борис", text: "Картинка тоже чёткая.",
+    timestamp_ms: Date.now() - 238000 },
 ];
 const clients = new Set();
 let nextId = 10;
@@ -202,6 +210,18 @@ setTimeout(function () {
     if (r.right > max) { max = r.right; widest = e.className || e.tagName; }
   });
   out.widest = [String(widest).slice(0, 40), Math.round(max)];
+  var sp = document.querySelector(".set-page");
+  if (sp) {
+    out.setPanel = box(".set-panel");
+    out.setPage = { view: Math.round(sp.clientHeight), all: sp.scrollHeight,
+                    scrolls: sp.scrollHeight > sp.clientHeight + 2 };
+    out.setTitle = (document.querySelector(".set-title") || {}).textContent;
+  }
+  var cs = document.querySelector(".chatscroll");
+  if (cs) out.chat = { groups: document.querySelectorAll(".chat-group").length,
+                       bubbles: document.querySelectorAll(".chat-bubble").length,
+                       atBottom: cs.scrollHeight - cs.scrollTop - cs.clientHeight < 5 };
+  out.initials = document.querySelectorAll(".tile-ava .ini").length;
   document.title = "PROBE " + JSON.stringify(out);
 }, 3500);
 </scr` + `ipt>`;
