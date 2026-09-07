@@ -1,0 +1,27 @@
+{
+  "name": "MeetUp — видеовстречи",
+  "short_name": "MeetUp",
+  "description": "Видеовстречи на вашем сервере: без установки, без регистрации, со сквозным шифрованием.",
+  "lang": "ru",
+  "dir": "ltr",
+  "start_url": "./login.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0e0e10",
+  "theme_color": "#0e0e10",
+  "icons": [
+    {
+      "src": "assets/brand/meetup-avatar-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/brand/meetup-avatar-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

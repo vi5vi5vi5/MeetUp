@@ -209,6 +209,10 @@ QByteArray HttpFileServer::mimeFor(const QString &path)
     if (path.endsWith(QLatin1String(".js")))    return "application/javascript; charset=utf-8";
     if (path.endsWith(QLatin1String(".css")))   return "text/css; charset=utf-8";
     if (path.endsWith(QLatin1String(".json")))  return "application/json; charset=utf-8";
+    // Манифест PWA («добавить на главный экран»): по спецификации у него
+    // собственный тип, и без него часть браузеров манифест игнорирует.
+    if (path.endsWith(QLatin1String(".webmanifest")))
+        return "application/manifest+json; charset=utf-8";
     if (path.endsWith(QLatin1String(".woff2"))) return "font/woff2";
     if (path.endsWith(QLatin1String(".png")))   return "image/png";
     if (path.endsWith(QLatin1String(".jpg")) || path.endsWith(QLatin1String(".jpeg")))

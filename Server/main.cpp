@@ -46,7 +46,7 @@ int main(int argc, char *argv[])
         
     QCommandLineOption webRootOption(
         QStringList{"w", "web-root"},
-        QStringLiteral("Directory with the web client (index.html)."),
+        QStringLiteral("Directory with the web client (entry point login.html)."),
         QStringLiteral("dir"), QStringLiteral(WEB_ROOT_DEFAULT));
 
     // Всё персистентное (SQLite) живёт в одной папке: при запуске в docker

@@ -2,11 +2,14 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>MeetUp — Конференция</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" href="assets/brand/meetup-mark-auto.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="assets/brand/meetup-avatar-512.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0e0e10">
+<meta name="mobile-web-app-capable" content="yes">
 <!-- Ссылку на комнату кидают в мессенджер чаще всех остальных — превью
      здесь самое важное. Адрес картинки абсолютный: относительный
      разворачивают не все клиенты. -->
@@ -25,7 +28,16 @@
     font-size: var(--text-md); line-height: var(--leading-base);
     transition: background .24s var(--ease);
   }
-  #root { position: fixed; inset: 0; }
+  #root { position: fixed; top: 0; left: 0; right: 0; height: 100dvh; }
+  /* Безопасные зоны телефона: чёлка сверху, полоса жеста снизу. Держим их
+     в переменных — иначе env() пришлось бы повторять в десятке мест, а на
+     браузерах без поддержки он молча даёт пустоту вместо нуля. */
+  :root {
+    --safe-t: env(safe-area-inset-top, 0px);
+    --safe-b: env(safe-area-inset-bottom, 0px);
+    --safe-l: env(safe-area-inset-left, 0px);
+    --safe-r: env(safe-area-inset-right, 0px);
+  }
   a { color: var(--accent-ink); text-decoration: none; }
   a:hover { opacity: .8; }
   ::selection { background: var(--accent); color: var(--on-accent); }
@@ -33,7 +45,8 @@
   .conf { position: absolute; inset: 0; display: grid; grid-template-columns: 1fr 340px; }
   .stage { display: flex; flex-direction: column; min-width: 0; position: relative; }
 
-  .confbar { display: flex; align-items: center; gap: 12px; padding: 20px 26px; flex-wrap: wrap; }
+  .confbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+             padding: calc(20px + var(--safe-t)) calc(26px + var(--safe-r)) 20px calc(26px + var(--safe-l)); }
   .conf-mark {
     font-family: var(--font-label); font-weight: 700; font-size: 15px;
     letter-spacing: 2px; text-transform: uppercase; color: var(--text-muted);
@@ -94,7 +107,8 @@
 
   /* всплывающее уведомление над доком (демонстрация занята и т.п.) */
   .notice {
-    position: absolute; left: 50%; transform: translateX(-50%); bottom: 100px; z-index: 45;
+    position: absolute; left: 50%; transform: translateX(-50%);
+    bottom: calc(100px + var(--safe-b)); z-index: 45;
     background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-pill);
     padding: 10px 18px; font-size: var(--text-sm); font-weight: var(--weight-semibold);
     box-shadow: var(--shadow-pop); white-space: nowrap; max-width: calc(100% - 32px);
@@ -119,7 +133,8 @@
 
   /* пагинация плиток: стрелки по краям + точки над доком */
   .pager-dots {
-    position: absolute; left: 50%; transform: translateX(-50%); bottom: 108px;
+    position: absolute; left: 50%; transform: translateX(-50%);
+    bottom: calc(108px + var(--safe-b));
     display: flex; gap: 8px; z-index: 30;
   }
   .pager-dot {
@@ -128,7 +143,7 @@
   }
   .pager-dot.on { background: var(--accent); width: 22px; }
 
-  .dock { position: absolute; left: 50%; bottom: 26px; transform: translateX(-50%); max-width: calc(100% - 32px); }
+  .dock { position: absolute; left: 50%; bottom: calc(26px + var(--safe-b)); transform: translateX(-50%); max-width: calc(100% - 32px); }
   /* Док собран здесь, а не взят из дизайн-системы: там жёстко зашиты пять
      кнопок без «общего звука», а на телефоне доку нужен компактный размер. */
   .dockbar {
@@ -141,7 +156,7 @@
 
   /* Кнопки на самой демонстрации: во весь экран и громкость её звука. */
   .stage-tools {
-    position: absolute; right: 12px; bottom: 12px; z-index: 6;
+    position: absolute; right: calc(12px + var(--safe-r)); bottom: calc(12px + var(--safe-b)); z-index: 6;
     display: flex; align-items: center; gap: 8px;
   }
   .stage-btn {
@@ -299,6 +314,14 @@
   .set-kv b { flex: none; width: 46%; font-weight: 600; color: var(--text-muted); }
   .set-kv span { min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
   .set-note { font-size: var(--text-xs); color: var(--text-faint); }
+  /* Предпросмотр камеры. Ширина ограничена: 16:9 во всю колонку съедало бы
+     треть раздела и отталкивало вниз всё остальное. */
+  .cam-preview {
+    max-width: 360px; aspect-ratio: 16 / 9; overflow: hidden;
+    border-radius: var(--radius-md); border: 1px solid var(--border);
+    background: linear-gradient(160deg, var(--tile-from), var(--tile-to));
+  }
+  .cam-preview video { width: 100%; height: 100%; object-fit: cover; display: block; }
 
   /* Диагностика: плитки с крупным числом — как в десктопном клиенте.
      Показатель, который сейчас ни о чём (камера выключена, никто не вещает),
@@ -439,7 +462,8 @@
     color: var(--text-muted); font-style: italic; font-weight: 400;
   }
   .chat-new {
-    position: absolute; left: 50%; transform: translateX(-50%); bottom: 78px; z-index: 5;
+    position: absolute; left: 50%; transform: translateX(-50%);
+    bottom: calc(78px + var(--safe-b)); z-index: 5;
     display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px;
     border: 1px solid transparent; border-radius: var(--radius-pill);
     background: var(--accent); color: var(--on-accent);
@@ -447,7 +471,8 @@
     cursor: pointer; box-shadow: var(--shadow-pop);
   }
   .peoplescroll { flex: 1; overflow: auto; padding: 12px 8px; }
-  .composer { display: flex; gap: 8px; padding: 14px; border-top: 1px solid var(--border); }
+  .composer { display: flex; gap: 8px; border-top: 1px solid var(--border);
+              padding: 14px calc(14px + var(--safe-r)) calc(14px + var(--safe-b)) calc(14px + var(--safe-l)); }
 
   .mobile-only { display: none !important; }
 
@@ -467,7 +492,8 @@
   .chatscroll { cursor: auto; }
 
   .chat-fab {
-    display: none; position: absolute; right: 20px; bottom: 96px; z-index: 40;
+    display: none; position: absolute; right: calc(20px + var(--safe-r));
+    bottom: calc(96px + var(--safe-b)); z-index: 40;
     align-items: center; gap: 8px; padding: 12px 18px;
     border: 1px solid transparent; border-radius: var(--radius-pill);
     background: var(--accent); color: var(--on-accent);
@@ -480,6 +506,23 @@
     font-size: 11px; font-weight: 800; display: inline-flex; align-items: center; justify-content: center;
   }
 
+  /* ---- Телефон в ландшафте ----
+     Высоты меньше четырёхсот точек: шапка, док и отступы сетки съедают почти
+     всю сцену. Ужимаем всё вертикальное, горизонтальное не трогаем. */
+  @media (max-height: 480px) and (orientation: landscape) {
+    .confbar { padding-top: calc(8px + var(--safe-t)); padding-bottom: 8px; gap: 8px; }
+    .conf-title { font-size: 16px; }
+    .grid { padding-bottom: 92px; }
+    .stagebox { margin-bottom: 92px; }
+    .film { padding-bottom: 6px; }
+    .film-cell { width: 104px; height: 60px; }
+    .dock { bottom: calc(10px + var(--safe-b)); }
+    .dockbar { padding: 6px; gap: 6px; }
+    .pager-dots { bottom: calc(74px + var(--safe-b)); }
+    .chat-fab { bottom: calc(70px + var(--safe-b)); }
+    .notice { bottom: calc(70px + var(--safe-b)); }
+  }
+
   /* ---- Mobile ---- */
   @media (max-width: 820px) {
     .conf { grid-template-columns: 1fr; }
@@ -489,8 +532,8 @@
     .film { padding: 4px 16px 8px; }
     .film-cell { width: 128px; height: 74px; }
     .stagebox { margin: 0 16px 132px; }
-    .dock { bottom: 20px; }
-    .stage-tools { right: 10px; bottom: 10px; }
+    .dock { bottom: calc(20px + var(--safe-b)); }
+    .stage-tools { right: calc(10px + var(--safe-r)); bottom: calc(10px + var(--safe-b)); }
     .pager-dots { bottom: 102px; }
     .share-pop { right: 16px; top: 64px; }
     .side {
@@ -512,6 +555,8 @@
     .set-item .chev { display: block; }
     .set-back { display: inline-flex; }
     .set-rail-close { display: inline-flex; }
+    .set-panel { padding-top: var(--safe-t); padding-bottom: var(--safe-b); }
+    .side { padding-top: var(--safe-t); }
     .set-rail-head { padding: 4px 4px 10px 0; }
     .tabs { padding: 8px 16px 0; }
     .mobile-only { display: inline-flex !important; }
@@ -579,7 +624,11 @@
                   // до нашего захвата: в worklet приходит уже очищенный трек.
                   noise: true, echo: true, agc: true,
                   // Интерфейс
-                  mirror: true, perPage: "auto", hideNoVideo: false, showSelf: true };
+                  mirror: true, perPage: "auto", hideNoVideo: false, showSelf: true,
+                  // Режим разработчика: показывает служебное — диагностику и
+                  // сброс буфера. Обычной встрече это не нужно, а глазами по
+                  // нему всё равно ходят и пытаются понять, зачем он тут.
+                  devMode: false };
     let s = def;
     try { s = { ...def, ...JSON.parse(localStorage.getItem(AV_KEY) || "{}") }; } catch (e) {}
     s.volume = clampPct(s.volume);
@@ -587,7 +636,7 @@
     for (const k of ["qCam", "qScreen", "qAudio"])
       if (!Q_LEVELS.includes(s[k])) s[k] = "med";
     if (!PER_PAGE.includes(String(s.perPage))) s.perPage = "auto";
-    for (const k of ["noise", "echo", "agc", "mirror", "hideNoVideo", "showSelf"])
+    for (const k of ["noise", "echo", "agc", "mirror", "hideNoVideo", "showSelf", "devMode"])
       s[k] = !!s[k];
     return s;
   }
@@ -615,7 +664,9 @@
     { id: "crypto", icon: "lock",     title: "Шифрование",   sub: "Сквозное шифрование медиа и переписки" },
     { id: "keys",   icon: "keyboard", title: "Управление",   sub: "Сочетания клавиш в этой вкладке" },
     { id: "iface",  icon: "layout",   title: "Интерфейс",    sub: "Тема и сетка участников" },
-    { id: "diag",   icon: "activity", title: "Диагностика",  sub: "Живые показатели соединения и кодеков" },
+    // dev: true — раздел режима разработчика. Без него его нет вовсе, а не
+    // «есть, но серый»: приглушённый пункт человек всё равно читает.
+    { id: "diag",   icon: "activity", title: "Диагностика",  sub: "Живые показатели соединения и кодеков", dev: true },
     { id: "about",  icon: "info",     title: "О программе",  sub: "Сервер, протокол и возможности браузера" },
   ];
 
@@ -671,8 +722,10 @@
     // Пришло новое, пока человек листал историю выше.
     const [newBelow, setNewBelow] = useState(false);
     const [draft, setDraft] = useState("");
-    const [mic, setMic] = useState(true);
-    const [cam, setCam] = useState(true);
+    // Выключены по умолчанию, как в десктопном клиенте: входить в комнату
+    // говорящим и снимающим человек не просил.
+    const [mic, setMic] = useState(false);
+    const [cam, setCam] = useState(false);
     const [sharing, setSharing] = useState(false);
     // Везём ли мы звук вместе с картинкой (человек отметил «Поделиться
     // звуком») и идёт ли звук чужой демонстрации прямо сейчас.
@@ -713,6 +766,7 @@
     const fileRef = useRef(null);           // скрытый <input type=file> для картинок чата
     const touchX = useRef(null);
     const holdRef = useRef(null);           // долгий тап по плитке = правая кнопка
+    const previewRef = useRef(null);        // <video> предпросмотра в настройках
     const chatAtBottom = useRef(true);      // человек читает свежее, а не историю
 
     // Зеркало актуального состояния для обработчиков вне рендера
@@ -732,7 +786,7 @@
         camStream: null, micStream: null, displayStream: null,
         // Состояние тумблеров вне React: joinMsg вызывается из обработчика
         // сокета, где свежего состояния из useState ещё нет.
-        mic: true, cam: true,
+        mic: false, cam: false,
         speakingUntil: new Map(), chatChain: Promise.resolve(),
         mediaStarted: false, joinedAt: 0, profile: null,
         // pref — выбранные устройства и гейны из localStorage.
@@ -768,6 +822,7 @@
     const [perPagePref, setPerPagePref] = useState(String(M.pref.perPage));
     const [hideNoVideo, setHideNoVideo] = useState(M.pref.hideNoVideo);
     const [showSelf, setShowSelf] = useState(M.pref.showSelf);
+    const [devMode, setDevMode] = useState(M.pref.devMode);
     // Живые показатели — тикают только пока открыт раздел «Диагностика».
     const [diag, setDiag] = useState(null);
     // Что браузер умеет декодировать — узнаём один раз, когда открыли
@@ -1125,8 +1180,11 @@
       engine.setQuality("screen", M.pref.qScreen);
       engine.setQuality("audio", M.pref.qAudio);
       if (M.pref.outId) engine.setSinkId(M.pref.outId);
-      await startMic();
-      await startCamera();
+      // Ни микрофон, ни камеру на входе НЕ трогаем. Разрешение спрашивается,
+      // когда человек нажимает кнопку, — и тогда браузерное окно доступа
+      // появляется в ответ на его собственное действие, а не встречает его на
+      // пороге комнаты. Слышать других это не мешает: аудиограф поднят выше
+      // (ensureAudio), он нужен для воспроизведения, а не для захвата.
     }
 
     // getUserMedia с выбранным устройством; если оно пропало — системное.
@@ -2003,6 +2061,79 @@
       return () => clearInterval(t);
     }, [settingsOpen, section]);
 
+    // Не давать экрану гаснуть, пока идёт разговор. На телефоне это не
+    // удобство, а необходимость: человек слушает, не касаясь экрана, и через
+    // полминуты тот тухнет вместе с разговором. Блокировку снимает и сам
+    // браузер, когда вкладка уходит в фон, — поэтому берём её заново при
+    // возвращении.
+    useEffect(() => {
+      if (phase !== "live" || !navigator.wakeLock) return;
+      let lock = null, alive = true;
+      const take = () => {
+        if (!alive || document.visibilityState !== "visible") return;
+        navigator.wakeLock.request("screen")
+          .then(l => { if (alive) lock = l; else l.release().catch(() => {}); })
+          .catch(() => { /* батарея на исходе или запрещено политикой */ });
+      };
+      take();
+      const onVis = () => { if (document.visibilityState === "visible") take(); };
+      document.addEventListener("visibilitychange", onVis);
+      return () => {
+        alive = false;
+        document.removeEventListener("visibilitychange", onVis);
+        if (lock) lock.release().catch(() => {});
+      };
+    }, [phase]);
+
+    // Вкладка ушла в фон — на телефоне перестаём ОТПРАВЛЯТЬ видео. Камера
+    // остаётся захваченной (иначе на возврате будет пауза и моргнёт индикатор),
+    // но кадры в сеть не идут: они всё равно никому не нужны, а батарею и
+    // трафик едят. Звук продолжается — ради него в фон и уходят.
+    //
+    // Только на телефоне: на компьютере переключиться на другое окно посреди
+    // разговора — обычное дело, и пропадать из эфира там неправильно.
+    useEffect(() => {
+      if (!isMobile || phase !== "live") return;
+      const onVis = () => {
+        if (!M.camStream || !stateRef.current.cam) return;
+        if (document.visibilityState === "hidden") engine.stopVideo();
+        else engine.startVideo(M.camStream);
+      };
+      document.addEventListener("visibilitychange", onVis);
+      return () => document.removeEventListener("visibilitychange", onVis);
+    }, [isMobile, phase]);
+
+    // Предпросмотр камеры в разделе «Видео». Если камера уже в эфире —
+    // показываем тот же поток; если выключена — берём временный, и он живёт
+    // ровно пока открыт раздел. Именно так и в десктопном клиенте: настроить
+    // камеру, не показывая себя собеседникам, иначе нельзя.
+    useEffect(() => {
+      const on = settingsOpen && curSection.id === "video";
+      const el = previewRef.current;
+      if (!on || !el) return;
+
+      let alive = true;
+      let temp = null;
+      (async () => {
+        let stream = M.camStream;
+        if (!stream) {
+          try { stream = temp = await grabStream("video", M.pref.camId); }
+          catch (e) { return; }               // не дали доступ — просто нет картинки
+        }
+        if (!alive) { if (temp) temp.getTracks().forEach(t => t.stop()); return; }
+        el.srcObject = stream;
+        const pr = el.play();
+        if (pr && pr.catch) pr.catch(() => {});
+      })();
+
+      return () => {
+        alive = false;
+        if (el) el.srcObject = null;
+        // Гасим только свой временный поток: общий принадлежит конференции.
+        if (temp) temp.getTracks().forEach(t => t.stop());
+      };
+    }, [settingsOpen, section, devMode, camId, quality.cam]);
+
     // Проба декодеров — один раз за сессию, при первом заходе в «О программе».
     useEffect(() => {
       if (!settingsOpen || section !== "about" || decodeOk) return;
@@ -2162,7 +2293,11 @@
     // WebCodecs, разрешение демонстрации задаёт системное окно выбора,
     // глобальных клавиш нет вовсе). Заглушек «скоро» не ставим: если чего-то
     // в вебе быть не может, честнее объяснить почему.
-    const curSection = SECTIONS.find(s => s.id === section) || SECTIONS[0];
+    const visibleSections = SECTIONS.filter(x => !x.dev || devMode);
+    // Раздел храним ИМЕНЕМ, а не номером: номера едут, когда «Диагностика»
+    // уходит из середины списка. И если текущий раздел спрятали — честно
+    // возвращаемся к первому, а не показываем пустоту.
+    const curSection = visibleSections.find(x => x.id === section) || visibleSections[0];
 
     function closeSettings() {
       setSettingsOpen(false);
@@ -2225,7 +2360,7 @@
     }
 
     function renderSection() {
-      switch (section) {
+      switch (curSection.id) {
 
       case "audio": return <>
         <Field label="Микрофон" htmlFor="set-mic">
@@ -2298,6 +2433,14 @@
               <option value={camId}>Системная по умолчанию</option>}
             {devices.cams.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
           </select>
+        </Field>
+
+        <Field label="Предпросмотр"
+               hint="Камера снимает, пока открыт этот раздел. Собеседники видят вас, только когда камера включена в конференции.">
+          <div className="cam-preview">
+            <video ref={previewRef} autoPlay muted playsInline
+                   className={mirror ? "mirror" : undefined} />
+          </div>
         </Field>
 
         <Field label="Качество отправки" htmlFor="set-qcam"
@@ -2431,7 +2574,7 @@
         <Field label="Сетка участников">
           <div style={{ display: "grid", gap: 8 }}>
             <Toggle on={showSelf} label="Показывать себя в сетке"
-                    sub="Своё видео всё равно видно в предпросмотре камеры"
+                    sub="Своё видео всё равно видно в настройках, в разделе «Видео»"
                     onToggle={() => { const v = !showSelf; setShowSelf(v); setPref("showSelf", v); }} />
             <Toggle on={hideNoVideo} label="Скрывать участников без видео"
                     sub="В большой комнате остаются только те, кого видно"
@@ -2567,6 +2710,14 @@
           </div>
         </Field>
 
+        <Field label="Для разработки">
+          <Toggle on={devMode} label="Режим разработчика"
+                  sub={devMode
+                    ? "Показаны «Диагностика» и сброс буфера на демонстрации"
+                    : "Покажет диагностику соединения и сброс буфера приёма"}
+                  onToggle={() => { const v = !devMode; setDevMode(v); setPref("devMode", v); }} />
+        </Field>
+
         <p className="set-note">
           Открытый исходный код:{" "}
           <a href="https://github.com/vi5vi5vi5/MeetUp" target="_blank" rel="noopener noreferrer">
@@ -2664,7 +2815,7 @@
                                style={{ background: rangeFill(screenVol, 200) }} />
                         <span className="pct">{screenVol}%</span>
                       </div>}
-                    {!screenSelf &&
+                    {!screenSelf && devMode &&
                       <button className="stage-btn" onClick={resetBuffers}
                               aria-label="Сбросить буфер" title="Сбросить буфер: перескочить на живой край">
                         <Icon name="activity" size={18} />
@@ -2861,10 +3012,10 @@
                     <IconButton icon="x" size="sm" label="Закрыть настройки" onClick={closeSettings} />
                   </span>
                 </div>
-                {SECTIONS.map(s => (
+                {visibleSections.map(s => (
                   <button key={s.id} type="button" role="tab"
                           aria-selected={section === s.id}
-                          className={"set-item" + (section === s.id && !isMobile ? " on" : "")}
+                          className={"set-item" + (curSection.id === s.id && !isMobile ? " on" : "")}
                           onClick={() => { setSection(s.id); setOnSection(true); }}>
                     <Icon name={s.icon} size={17} />
                     {s.title}

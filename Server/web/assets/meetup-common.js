@@ -62,6 +62,21 @@
   function deleteMyRoom() { return api("DELETE", "/api/me/room"); }
   function closeMyRoom() { return api("POST", "/api/me/room/close"); }
 
+  // --- «Добавить на главный экран» -------------------------------------------
+  // Регистрируем service worker: с ним страница ставится на телефон как
+  // приложение (свой значок, запуск без адресной строки) и не перекачивает
+  // ассеты при каждом заходе. Требует защищённого контекста — по http
+  // (локальная разработка) браузер его не даст, и это нормально.
+  function registerWorker() {
+    if (!("serviceWorker" in navigator) || !window.isSecureContext) return;
+    window.addEventListener("load", function () {
+      navigator.serviceWorker.register("/sw.js").catch(function () {
+        // Не зарегистрировался — сайт просто работает как раньше.
+      });
+    });
+  }
+  registerWorker();
+
   window.MeetUp = {
     wsUrl: wsUrl,
     api: api,
