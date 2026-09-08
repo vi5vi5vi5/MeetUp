@@ -783,6 +783,13 @@ Item {
                     sharerName: root.sharerName
                     expanded: root.theater
                     onExpandRequested: root.toggleTheater()
+                    // Ручной сброс — тот же, что в «Диагностике»; тост нужен,
+                    // иначе замершая до опорного кадра картинка выглядит как
+                    // «кнопка не сработала».
+                    onResetRequested: {
+                        Media.flushReceive()
+                        root.notify("Буфер сброшен — ждём опорный кадр.")
+                    }
                 }
             }
 

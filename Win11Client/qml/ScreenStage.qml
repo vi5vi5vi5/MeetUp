@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls.Basic
 import QtQuick.Effects
 import QtMultimedia
 import MeetUp
@@ -21,6 +22,8 @@ Item {
     // Развернуть/свернуть показ. Разворачивает не плитку, а весь экран — этим
     // занимается ConferenceScreen, сцена только просит.
     signal expandRequested()
+    // Сбросить буфер приёма. Сцена не знает про Media и тосты — просит экран.
+    signal resetRequested()
 
     // ---- Полноэкранный показ: интерфейс уходит вместе с курсором ----
     // В развёрнутом показе смотрят чужой экран, а не наши кнопки: единственный
@@ -149,6 +152,47 @@ Item {
             opacity: root.chromeShown ? 1 : 0
             visible: opacity > 0
             Behavior on opacity { NumberAnimation { duration: Theme.durMed } }
+        }
+
+        // Сброс буфера приёма — прямо на демонстрации, как у веба: отставание
+        // замечают, глядя на картинку, а не в настройки. Только в режиме
+        // разработчика (обычной встрече хватает авто-сброса) и только у ЧУЖОЙ
+        // демонстрации — свою мы не принимаем, сбрасывать нечего.
+        IconButton {
+            id: resetBtn
+            anchors.right: expandBtn.left
+            anchors.top: parent.top
+            anchors.topMargin: 12
+            anchors.rightMargin: 8
+            size: "sm"
+            icon: "activity"
+            variant: "neutral"
+            onClicked: root.resetRequested()
+
+            opacity: root.chromeShown ? 1 : 0
+            visible: !root.isSelf && AV.devMode && opacity > 0
+            Behavior on opacity { NumberAnimation { duration: Theme.durMed } }
+
+            // Значок «пульс» сам за себя не говорит — подсказка обязательна.
+            HoverHandler { id: resetHover }
+            ToolTip {
+                visible: resetHover.hovered
+                delay: 400
+                x: (resetBtn.width - width) / 2
+                y: resetBtn.height + 6
+                contentItem: Text {
+                    text: "Сбросить буфер: перескочить на живой край"
+                    color: Theme.text
+                    font.family: Theme.uiFont
+                    font.pixelSize: Theme.textXs
+                }
+                background: Rectangle {
+                    radius: Theme.radiusXs
+                    color: Theme.surface3
+                    border.width: 1
+                    border.color: Theme.borderStrong
+                }
+            }
         }
         TapHandler {
             gesturePolicy: TapHandler.ReleaseWithinBounds
