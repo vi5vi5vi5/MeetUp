@@ -62,9 +62,14 @@ Column {
 
     // ---- Динамики ----
     Field {
+        id: spkField
         width: parent.width
         label: "Динамики"
-        hint: "Проверка динамиков — скоро."
+        hint: "«Проверить» сыграет короткий сигнал в выбранное устройство — так узнают, те ли это наушники. Голоса собеседников пойдут туда же."
+        // Кнопка на секунду меняет подпись: сигнал короткий, и без этого
+        // нажатие в тишине (не то устройство) выглядело бы как «не сработало».
+        property bool _testing: false
+        Timer { id: testReset; interval: 1200; onTriggered: spkField._testing = false }
         Item {
             width: parent.width
             height: 40
@@ -81,11 +86,10 @@ Column {
                 id: testBtn
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
-                text: "Проверить"
-                variant: "ghost"
+                text: spkField._testing ? "Играет…" : "Проверить"
+                variant: spkField._testing ? "primary" : "ghost"
                 size: "sm"
-                enabled: false
-                opacity: 0.5
+                onClicked: { Sfx.test(); spkField._testing = true; testReset.restart() }
             }
         }
     }

@@ -77,6 +77,16 @@ void UiSounds::build() {
     }
 }
 
+// Звук входа в комнату — самый длинный и внятный из семейства, и к тому же
+// не уведомление: человек не спутает проверку с «кто-то пришёл». Пул мог
+// только что пересобраться под новое устройство и ещё грузить файлы —
+// QSoundEffect в состоянии Loading запоминает просьбу и сыграет по готовности.
+void UiSounds::test() {
+    QSoundEffect* fx = m_fx.value(QStringLiteral("room-join"));
+    if (!fx || fx->status() == QSoundEffect::Error) return;
+    fx->play();
+}
+
 void UiSounds::play(const QString& name) {
     if (!m_av->uiSounds()) return;
 
