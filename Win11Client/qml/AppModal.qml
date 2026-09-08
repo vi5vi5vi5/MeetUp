@@ -22,11 +22,43 @@ Item {
     visible: open
     z: 200
 
-    // Scrim: tint + click-to-close.
+    // Скрим: затемнение и «щёлкнул мимо — закрыл».
+    //
+    // TapHandler, а не MouseArea, и без поглотителя-MouseArea на панели — это
+    // не вкус, а починка. «Изменить» у имени в настройках профиля — TapHandler
+    // на Text — не нажималось никогда, а кнопки рядом (AppButton на MouseArea)
+    // нажимались. Механизм установлен стендом с настоящим кликом мыши:
+    //  · TapHandler берёт эксклюзивный захват, и на Item/Rectangle этого
+    //    хватает — доставка вниз останавливается (так живут рельс и тумблеры
+    //    SettingsModal при точно таком же поглотителе);
+    //  · но Text принимает левую кнопку ради ссылок, а без ссылки под курсором
+    //    нажатие ОТКЛОНЯЕТ — и это отклонение снимает «принято» со всей точки,
+    //    доставка идёт дальше, до MouseArea-поглотителя панели;
+    //  · тот берёт захват себе, у хендлера он отменяется (CancelGrabExclusive),
+    //    тап не случается.
+    // Ссылки-Text с TapHandler в проекте есть и снаружи модалок (AuthScaffold,
+    // HomeScreen) — там под ними нет ни одной MouseArea, и они работают; но
+    // класть такой Text поверх MouseArea нельзя, а надёжнее оборачивать
+    // хендлер в Item. Модалка же защищена и от такого: хендлер на скриме не
+    // отбирает
+    // захват ни у кого (CanTakeOverFromNothing) — ни у TapHandler, ни у
+    // MouseArea кнопки, ни у Flickable тела при прокрутке. Захват достаётся ему
+    // только когда под нажатием никого нет, и тогда он смотрит, где нажали и
+    // отпустили: внутри панели — пустое место, ничего не делаем; снаружи —
+    // закрываем.
     Rectangle {
         anchors.fill: parent
         color: Qt.rgba(6 / 255, 6 / 255, 8 / 255, 0.55)
-        MouseArea { anchors.fill: parent; onClicked: root.closed() }
+        TapHandler {
+            gesturePolicy: TapHandler.ReleaseWithinBounds
+            grabPermissions: PointerHandler.CanTakeOverFromNothing
+                           | PointerHandler.ApprovesTakeOverByAnything
+            onTapped: function (point) {
+                var pressIn = panel.contains(panel.mapFromItem(null, point.scenePressPosition))
+                var releaseIn = panel.contains(panel.mapFromItem(null, point.scenePosition))
+                if (!pressIn && !releaseIn) root.closed()
+            }
+        }
     }
 
     MultiEffect {
@@ -55,8 +87,8 @@ Item {
         border.width: 1
         border.color: Theme.border
 
-        // Absorb clicks so they don't reach the scrim behind.
-        MouseArea { anchors.fill: parent }
+        // Поглотителя кликов здесь больше нет — см. скрим выше: он сам
+        // отличает нажатие по панели от нажатия мимо.
 
         Column {
             id: col
