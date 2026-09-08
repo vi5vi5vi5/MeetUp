@@ -66,19 +66,17 @@ Item {
             anchors.verticalCenter: parent.verticalCenter
             anchors.right: parent.right
             spacing: 16
-            Text {
+            TextLink {
                 visible: root.showSignIn
                 anchors.verticalCenter: parent.verticalCenter
                 text: "ВОЙТИ"
-                color: hoverSignIn.hovered ? Theme.accentInk : Theme.textMuted
+                color: Theme.textMuted
+                hoverColor: Theme.accentInk
                 font.family: Theme.labelFont
                 font.pixelSize: Theme.text2xs
+                font.weight: Font.Normal
                 font.letterSpacing: 2
-                HoverHandler { id: hoverSignIn }
-                TapHandler {
-                    gesturePolicy: TapHandler.ReleaseWithinBounds
-                    onTapped: root.signInRequested()
-                }
+                onClicked: root.signInRequested()
             }
             IconButton {
                 anchors.verticalCenter: parent.verticalCenter

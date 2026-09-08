@@ -536,18 +536,10 @@ Item {
                             font.pixelSize: Theme.textLg
                             font.weight: Font.Bold
                         }
-                        Text {
+                        TextLink {
                             anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
                             text: "Очистить"
-                            color: Theme.accentInk
-                            font.family: Theme.uiFont
-                            font.pixelSize: Theme.textXs
-                            font.weight: Font.DemiBold
-                            HoverHandler { cursorShape: Qt.PointingHandCursor }
-                            TapHandler {
-                                gesturePolicy: TapHandler.ReleaseWithinBounds
-                                onTapped: History.clear()
-                            }
+                            onClicked: History.clear()
                         }
                     }
                     Repeater {
@@ -699,21 +691,15 @@ Item {
                     font.weight: Font.Bold
                     font.letterSpacing: -0.5
                 }
-                Text {
+                // TextLink, а не Text с TapHandler: на Text тап терялся в
+                // поглотителе модалки (см. TextLink и AppModal).
+                TextLink {
                     anchors.verticalCenter: parent.verticalCenter
                     text: "Изменить"
-                    color: Theme.accentInk
-                    font.family: Theme.uiFont
-                    font.pixelSize: Theme.textXs
-                    font.weight: Font.DemiBold
-                    HoverHandler { cursorShape: Qt.PointingHandCursor }
-                    TapHandler {
-                        gesturePolicy: TapHandler.ReleaseWithinBounds
-                        onTapped: {
-                            nameField.text = root.name
-                            nameBlock.editing = true
-                            nameField.forceActiveFocus()
-                        }
+                    onClicked: {
+                        nameField.text = root.name
+                        nameBlock.editing = true
+                        nameField.forceActiveFocus()
                     }
                 }
             }
@@ -926,18 +912,10 @@ Item {
                     font.pixelSize: 14
                     font.letterSpacing: 2
                 }
-                Text {
+                TextLink {
                     anchors.verticalCenter: parent.verticalCenter
                     text: roomModal.showPass ? "Скрыть" : "Показать"
-                    color: Theme.accentInk
-                    font.family: Theme.uiFont
-                    font.pixelSize: Theme.textXs
-                    font.weight: Font.DemiBold
-                    HoverHandler { cursorShape: Qt.PointingHandCursor }
-                    TapHandler {
-                        gesturePolicy: TapHandler.ReleaseWithinBounds
-                        onTapped: roomModal.showPass = !roomModal.showPass
-                    }
+                    onClicked: roomModal.showPass = !roomModal.showPass
                 }
                 AppButton {
                     text: "Изменить"; variant: "secondary"; size: "sm"
@@ -1124,17 +1102,9 @@ Item {
                                 font.pixelSize: Theme.text2xs
                             }
                             Item { Layout.fillWidth: true }
-                            Text {
+                            TextLink {
                                 text: aliasRow.modelData.enabled ? "Выключить" : "Включить"
-                                color: Theme.accentInk
-                                font.family: Theme.uiFont
-                                font.pixelSize: Theme.textXs
-                                font.weight: Font.DemiBold
-                                HoverHandler { cursorShape: Qt.PointingHandCursor }
-                                TapHandler {
-                                    gesturePolicy: TapHandler.ReleaseWithinBounds
-                                    onTapped: MyRoom.toggleAlias(aliasRow.modelData.id, !aliasRow.modelData.enabled)
-                                }
+                                onClicked: MyRoom.toggleAlias(aliasRow.modelData.id, !aliasRow.modelData.enabled)
                             }
                         }
                     }

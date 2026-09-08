@@ -81,17 +81,9 @@ AuthScaffold {
             font.family: Theme.uiFont
             font.pixelSize: Theme.textXs
         }
-        Text {
+        TextLink {
             text: "Войти"
-            color: Theme.accentInk
-            font.family: Theme.uiFont
-            font.pixelSize: Theme.textXs
-            font.weight: Font.DemiBold
-            HoverHandler { cursorShape: Qt.PointingHandCursor }
-            TapHandler {
-                gesturePolicy: TapHandler.ReleaseWithinBounds
-                onTapped: root.signInRequested()
-            }
+            onClicked: root.signInRequested()
         }
     }
 
