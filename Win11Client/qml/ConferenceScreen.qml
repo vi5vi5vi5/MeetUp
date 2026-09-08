@@ -119,6 +119,7 @@ Item {
 
     function toggleTheater() {
         theater = !theater
+        sharePop.open = false            // шапка с кнопкой уходит — уходит и поповер
         if (theater !== fullScreen) fullScreenRequested()
     }
 
@@ -193,6 +194,7 @@ Item {
     // Честный бейдж эфира: считаем от момента СВОЕГО входа (начало эфира
     // разовой комнаты серверу неизвестно — вебу, впрочем, тоже).
     property bool linkCopied: false
+    property bool keyCopied: false
     property double joinedAtMs: 0
     property double nowMs: Date.now()
 
@@ -235,6 +237,27 @@ Item {
         }
     }
     Timer { id: linkCopyReset; interval: 1400; onTriggered: root.linkCopied = false }
+    Timer { id: keyCopyReset; interval: 1400; onTriggered: root.keyCopied = false }
+
+    // Ссылка-приглашение — как у веба: кнопка в шапке открывает поповер и
+    // СРАЗУ кладёт обычную ссылку в буфер; в поповере её можно скопировать
+    // ещё раз и, если включено шифрование, забрать ссылку с ключом (#k=…).
+    function copyInvite() {
+        Sys.copyText(Sys.roomLink(root.roomCode))
+        root.linkCopied = true
+        linkCopyReset.restart()
+    }
+    function copyKeyInvite() {
+        var url = Crypto.inviteWithKey()
+        if (url === "") return
+        Sys.copyText(url)
+        root.keyCopied = true
+        keyCopyReset.restart()
+    }
+    function openShare() {
+        sharePop.open = true
+        copyInvite()
+    }
 
     // ---------------------------------------------------------------- Звуки
     // Каталог и правила «когда молчать» живут в C++ (src/media/UiSounds.cpp);
@@ -686,15 +709,11 @@ Item {
 
                 Item { Layout.fillWidth: true }
 
-                IconButton { // поделиться ссылкой на комнату
+                IconButton { // поделиться ссылкой на комнату (см. openShare)
                     size: "sm"
                     icon: root.linkCopied ? "check" : "copy"
                     variant: root.linkCopied ? "active" : "neutral"
-                    onClicked: {
-                        Sys.copyText(Sys.roomLink(root.roomCode))
-                        root.linkCopied = true
-                        linkCopyReset.restart()
-                    }
+                    onClicked: root.openShare()
                 }
                 IconButton { size: "sm"; icon: Theme.dark ? "sun" : "moon"; variant: "neutral"; onClicked: Theme.toggle() }
             }
@@ -1099,6 +1118,22 @@ Item {
 
     // Личная громкость участника — открывается правой кнопкой по его плитке.
     PeerVolumePopup { id: peerVolume }
+
+    // Поповер «поделиться ссылкой» — под кнопкой копирования в шапке, у
+    // правого края сцены (в шапке она крайняя справа перед темой).
+    SharePopup {
+        id: sharePop
+        link: Sys.roomLink(root.roomCode)
+        // inviteWithKey() — метод, но привязка живая: читает Crypto.active,
+        // а он меняется вместе с ключом.
+        keyLink: Crypto.active ? Crypto.inviteWithKey() : ""
+        copied: root.linkCopied
+        keyCopied: root.keyCopied
+        anchorRight: stage.x + stage.width - Theme.padStage
+        anchorTop: 72
+        onCopyRequested: root.copyInvite()
+        onCopyKeyRequested: root.copyKeyInvite()
+    }
 
     // Настройки: устройства, громкость/чувствительность, качество отправки.
     SettingsModal {

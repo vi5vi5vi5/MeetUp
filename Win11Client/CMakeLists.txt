@@ -2,7 +2,7 @@
 # RC — ради resources/app.rc: значок .exe (панель задач, Alt+Tab, ярлык).
 # Без него CMake не знает, чем собирать .rc, и молча его пропустит.
 # C — ради third_party/rnnoise: шумоподавление написано на чистом C.
-project(Win11Client VERSION 1.09 LANGUAGES C CXX RC)
+project(Win11Client VERSION 1.10 LANGUAGES C CXX RC)
 
 # ---- MeetUp Win11 client ----------------------------------------------------
 # Qt6/QML desktop client for the MeetUp conference server.
@@ -152,6 +152,7 @@ qt_add_qml_module(Win11Client
         qml/PercentSlider.qml
         qml/StepSlider.qml
         qml/TextLink.qml
+        qml/SharePopup.qml
         qml/UpdatePill.qml
         qml/KeyBind.qml
         qml/Card.qml
