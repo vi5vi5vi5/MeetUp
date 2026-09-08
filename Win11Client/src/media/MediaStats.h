@@ -68,10 +68,16 @@ class MediaStats : public QObject {
     Q_PROPERTY(QString rxScrDecoder READ rxScrDecoder NOTIFY updated)
     // Кадры, принятые из сети, но ещё не разобранные. Ноль — декодер идёт
     // вровень с потоком; устойчиво растущее число — он отстаёт, и всё, что
-    // здесь стоит, зритель увидит с этим опозданием. Рядом — сколько кадров
-    // выброшено, не дойдя до декодера (буфер приёма выключен).
+    // здесь стоит, зритель увидит с этим опозданием.
     Q_PROPERTY(int rxQueue READ rxQueue NOTIFY updated)
-    Q_PROPERTY(int rxDropped READ rxDropped NOTIFY updated)
+    // То же опоздание во времени: сколько миллисекунд пролежал в очереди самый
+    // залежавшийся кадр за последнюю секунду, по полосам. Именно это число
+    // сравнивает с порогом авто-сброс (MediaSettings::rxAutoResetMs).
+    Q_PROPERTY(int rxLagCamMs READ rxLagCamMs NOTIFY updated)
+    Q_PROPERTY(int rxLagScrMs READ rxLagScrMs NOTIFY updated)
+    // Сколько раз за эту конференцию очередь приёма сбрасывали — сама или
+    // кнопкой. Ноль — порог ни разу не понадобился.
+    Q_PROPERTY(int rxResets READ rxResets NOTIFY updated)
 public:
     explicit MediaStats(SignalingClient* conf, QObject* parent = nullptr);
 
@@ -102,7 +108,9 @@ public:
     QString rxCamDecoder() const { return m_camDecoder; }
     QString rxScrDecoder() const { return m_scrDecoder; }
     int rxQueue() const { return m_rxQueue; }
-    int rxDropped() const { return m_rxDropped; }
+    int rxLagCamMs() const { return m_rxLagCam; }
+    int rxLagScrMs() const { return m_rxLagScr; }
+    int rxResets() const { return m_rxResets; }
 
     // ---- со стороны движков ----
     void noteTxVideo(bool screen, int bytes);
@@ -128,7 +136,12 @@ public:
     void noteRxOff(bool screen);                // полосу нам больше не шлют
     // Состояние очереди приёма — снимком раз в секунду: движок опрашивает
     // атомики воркеров и приносит числа сюда (см. VideoEngine::sweepStale).
-    void noteRxQueue(int queued, int droppedSinceLast);
+    // lag — пик отставания за прошедшую секунду по каждой полосе.
+    void noteRxQueue(int queued, int lagCamMs, int lagScrMs);
+    // Очередь приёма сброшена (авто-сбросом или кнопкой); конференция
+    // закончилась — счёт заново.
+    void noteRxReset();
+    void clearRxResets();
     // Видео придержано под свой звук. Счётчик общий на обе полосы: и губы под
     // микрофон, и картинка демонстрации под её фонограмму — механизм один и тот
     // же, а два числа в «Диагностике» разошлись бы там, где человеку нужно одно.
@@ -171,8 +184,8 @@ private:
     Timing m_camEnc, m_scrEnc, m_camDec, m_scrDec;
     QString m_camDecoder, m_scrDecoder;
     int m_rxQueue = 0;
-    int m_rxDropped = 0;       // за последнее окно
-    int m_rxDropAccum = 0;     // копится между тиками
+    int m_rxLagCam = 0, m_rxLagScr = 0;   // пики за последнее окно
+    int m_rxResets = 0;
 
     int m_rxFrames = 0;
     QSet<quint32> m_rxSenders;     // сколько разных потоков рисовалось за окно

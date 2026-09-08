@@ -180,22 +180,33 @@ The media pipeline (see `docs/ROADMAP.md`).
   straight from the socket thread; only the finished `QVideoFrame` crosses to
   the GUI thread, because `QVideoSink` belongs to the tile.
 
-  **Both hand-off queues are bounded on purpose, and the bound is a setting.**
-  A frame crosses two thread boundaries by Qt's event queue — socket thread →
-  decode thread on the way in, WGC pool thread → GUI thread on the way out — and
-  a Qt event queue has no limit at all. Whenever the far side is slower than the
-  stream, that queue *is* the backlog, and it never drains: switch the screen
-  share from AV1 back to HEVC and the viewer keeps grinding through queued AV1
-  for another half minute. The queue cannot be emptied after the fact, so the
-  decision is made before a frame is posted, on the producing thread —
-  `VideoRecvWorker::offer()` inbound, the same in-flight counter around
-  `onScreenCapFrame` outbound. With buffering on (default) it always accepts;
-  with buffering off it accepts only when the previous frame is done and drops
-  the rest on the spot, which also raises a gap flag so the decoder asks for a
-  keyframe instead of rendering deltas onto a picture it never saw. Both
-  switches live in settings (`rxBuffer` / `txBuffer`), with a manual flush
-  beside each: flushing bumps a generation counter, so everything already
-  queued is recognised as stale and thrown away undecoded.
+  **The receive queue is watched, not capped; the capture queue is capped by a
+  setting.** A frame crosses two thread boundaries by Qt's event queue — socket
+  thread → decode thread on the way in, WGC pool thread → GUI thread on the way
+  out — and a Qt event queue has no limit at all. Whenever the far side is
+  slower than the stream, that queue *is* the backlog, and it never drains:
+  switch the screen share from AV1 back to HEVC and the viewer keeps grinding
+  through queued AV1 for another half minute. The queue cannot be emptied after
+  the fact, but it can be counted and declared stale: `VideoRecvWorker::offer()`
+  counts frames in on the transport thread and hands out a generation number,
+  and a flush bumps that number, so everything already queued is recognised as
+  stale and thrown away undecoded.
+
+  On the receive side the flush is **automatic, by age**. Each frame carries the
+  time the transport accepted it; when the decode thread finally picks it up,
+  `now − arrival` is exactly how far the picture is behind live — measured on
+  our own clock, not on the sender's timestamps (every participant has their own
+  wall clock, and the queue is one per band for all of them). Past the threshold
+  (`MediaSettings::rxAutoResetMs`, default 1 s, 0 = off, at most one reset per
+  2 s) the whole queue is dropped, the lip-sync hold is cleared, a keyframe is
+  requested and the user gets a toast — the behaviour the web client has at a
+  fixed 900 ms. There is deliberately **no "buffer off" switch** any more: it
+  accepted a frame only when the previous one was decoded and dropped the rest
+  on the spot, and the picture tore permanently even with a single queued frame,
+  because every dropped frame breaks the stream and costs a wait for the next
+  keyframe. The capture side keeps its switch (`txBuffer`) plus a manual flush:
+  there the producer is our own screen capture, and a dropped capture frame
+  costs nothing downstream.
 
   **A/V sync holds both bands, each against its own clock.** Audio reaches the
   ear later than video reaches the eye — jitter prebuffer plus the sink's own

@@ -99,42 +99,27 @@ void VideoRecvWorker::setAwaitKey(Peer& p, quint32 sender, bool awaiting) {
     emit awaitKeyChanged(sender, awaiting);
 }
 
-// Пускать ли кадр в очередь. Зовётся с потока транспорта — см. объявление.
-bool VideoRecvWorker::offer(quint32* generation) {
-    if (generation) *generation = m_generation.load(std::memory_order_acquire);
-    if (m_buffered.load(std::memory_order_relaxed)) {
-        m_inFlight.fetch_add(1, std::memory_order_release);
-        return true;
-    }
-    // Буфер выключен: место ровно на один кадр. Если предыдущий ещё не
-    // разобран, этот не встаёт в очередь, а выбрасывается здесь же — то есть
-    // отставание не может накопиться в принципе. Расплата известна: декодер
-    // теряет кусок потока и попросит опорный кадр, а это секунда заглушки
-    // вместо минуты растущего опоздания.
-    int expected = 0;
-    if (!m_inFlight.compare_exchange_strong(expected, 1,
-                                            std::memory_order_acq_rel,
-                                            std::memory_order_relaxed)) {
-        m_dropped.fetch_add(1, std::memory_order_relaxed);
-        // Отметить дыру в потоке обязательно. Декодер о выброшенном кадре не
-        // узнает никак, а следующая дельта опирается на то, чего он не видел:
-        // получилась бы рассыпающаяся картинка вместо честной паузы до
-        // опорного кадра. Флаг снимет сам воркер, на своём потоке.
-        m_gap.store(true, std::memory_order_release);
-        return false;
-    }
-    return true;
+// Кадр встаёт в очередь. Зовётся с потока транспорта — см. объявление.
+quint32 VideoRecvWorker::offer() {
+    m_inFlight.fetch_add(1, std::memory_order_release);
+    return m_generation.load(std::memory_order_acquire);
 }
 
-// Очередь была выброшена (сбросом или переполнением без буфера): декодеры
-// стоят на середине потока, и дельты им теперь не годятся.
+// Очередь была выброшена сбросом: декодеры стоят на середине потока, и дельты
+// им теперь не годятся.
 void VideoRecvWorker::restartAfterFlush() {
     for (auto it = m_peers.begin(); it != m_peers.end(); ++it)
         if (it->wanted) setAwaitKey(*it, it.key(), true);
     emit keyframeNeeded(m_codedType);
 }
 
-void VideoRecvWorker::onFrame(const QByteArray& d, quint32 generation) {
+// Наименьший промежуток между двумя авто-сбросами. Сразу после сброса очередь
+// ещё расходится (старые кадры отсеиваются по поколению), а первые новые
+// кадры ждут опорного; мерить отставание в этот момент рано, и без паузы
+// один затор давал бы серию сбросов вместо одного.
+static const qint64 kAutoResetGapMs = 2000;
+
+void VideoRecvWorker::onFrame(const QByteArray& d, quint32 generation, qint64 arrivalMs) {
     // Счётчик отпускаем в любом случае и первым делом: что бы дальше ни
     // случилось, место для следующего кадра должно освободиться.
     struct Release {
@@ -144,18 +129,41 @@ void VideoRecvWorker::onFrame(const QByteArray& d, quint32 generation) {
 
     // Кадр из прошлой жизни: между постановкой в очередь и этим моментом
     // сработал сброс. Декодировать его незачем — ради этого сброс и затевался.
-    const quint32 now = m_generation.load(std::memory_order_acquire);
-    if (generation != now) return;
+    const quint32 gen = m_generation.load(std::memory_order_acquire);
+    if (generation != gen) return;
+
+    // Отставание — сколько кадр пролежал в очереди до нас. Меряем по своим
+    // часам, а не по меткам отправителя, как веб: у каждого участника свои
+    // стенные часы, а очередь у полосы одна на всех, и разница «что приняли»
+    // минус «что разобрали» по чужим часам складывалась бы из разных шкал.
+    // Пока декодер поспевает, кадр берётся из очереди почти сразу и число
+    // здесь — единицы миллисекунд; отстаёт — очередь растёт, и с ней растёт
+    // возраст каждого следующего кадра.
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    const int lag = int(qMax<qint64>(0, nowMs - arrivalMs));
+    int peak = m_lagPeakMs.load(std::memory_order_relaxed);
+    while (lag > peak && !m_lagPeakMs.compare_exchange_weak(peak, lag,
+                                                             std::memory_order_relaxed)) {}
+
+    // Догнать растущее отставание нельзя — очередь наполняется быстрее, чем
+    // разгребается. Поэтому по порогу выбрасываем её целиком и прыгаем на
+    // живой край: одно замирание до опорного кадра лучше секунд опоздания, о
+    // которых человек даже не догадывается. Этот кадр тоже опоздал — выходим.
+    const int limit = m_autoResetMs.load(std::memory_order_relaxed);
+    if (limit > 0 && lag > limit && nowMs - m_lastAutoResetMs >= kAutoResetGapMs) {
+        m_lastAutoResetMs = nowMs;
+        m_generation.fetch_add(1, std::memory_order_release);
+        qInfo() << "VideoRecvWorker: полоса" << m_codedType << "отстала на" << lag
+                << "мс при пороге" << limit << "— очередь сброшена";
+        emit autoReset(lag);
+        return;
+    }
 
     // Первый кадр после сброса — здесь же и чиним поток: декодеры остались на
     // середине выброшенного куска, и дельты им теперь не годятся. Делать это
     // в самом flush() нельзя, он зовётся с чужого потока.
-    if (m_seenGeneration != now) {
-        m_seenGeneration = now;
-        m_gap.store(false, std::memory_order_relaxed);
-        restartAfterFlush();
-    } else if (m_gap.exchange(false, std::memory_order_acq_rel)) {
-        // Кадр (или несколько) выброшен в offer из-за выключенного буфера.
+    if (m_seenGeneration != gen) {
+        m_seenGeneration = gen;
         restartAfterFlush();
     }
     onFrameBody(d);

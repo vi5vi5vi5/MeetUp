@@ -65,17 +65,20 @@ class MediaSettings : public QObject {
     Q_PROPERTY(QString screenCodec READ screenCodec WRITE setScreenCodec
                NOTIFY screenCodecChanged)
     Q_PROPERTY(QString camCodec READ camCodec WRITE setCamCodec NOTIFY camCodecChanged)
-    // Буферы конвейера. Включены — как было всегда: кадр, который не успели
-    // обработать, ждёт своей очереди. Выключены — такой кадр выбрасывается на
-    // месте, и отставание не может накопиться в принципе.
-    //
-    // Настройка нужна потому, что правильный ответ зависит от того, что важнее
-    // здесь и сейчас. Буфер сглаживает рывки на неровной сети и на тяжёлом
-    // кодеке; он же превращает разовую заминку в постоянное опоздание, которое
-    // уже не рассасывается — его видно, когда переключаешь кодек, а зритель
-    // ещё полминуты досматривает предыдущий.
-    Q_PROPERTY(bool rxBuffer READ rxBuffer WRITE setRxBuffer NOTIFY rxBufferChanged)
+    // Буфер отправки. Включён — как было всегда: снятый кадр, который не
+    // успели обработать, ждёт своей очереди. Выключен — такой кадр
+    // выбрасывается на месте, и отставание не может накопиться в принципе.
+    // Буфер сглаживает рывки; он же превращает разовую заминку интерфейса в
+    // постоянное опоздание демонстрации от того, что человек видит у себя.
     Q_PROPERTY(bool txBuffer READ txBuffer WRITE setTxBuffer NOTIFY txBufferChanged)
+    // Приём устроен иначе: выключателя у его буфера нет. Без буфера картинка
+    // рвётся всегда — даже когда в очереди набирается один кадр (проверено:
+    // каждый выброшенный кадр рвёт поток и стоит паузы до опорного). Вместо
+    // выключателя — авто-сброс: порог отставания в миллисекундах, при котором
+    // очередь приёма выбрасывается целиком и картинка перескакивает на живой
+    // край (см. VideoRecvWorker::onFrame). 0 — выключен; иначе 300..10000.
+    Q_PROPERTY(int rxAutoResetMs READ rxAutoResetMs WRITE setRxAutoResetMs
+               NOTIFY rxAutoResetMsChanged)
     // Передавать ли вместе с картинкой звук компьютера. По умолчанию выключено:
     // делиться звуком машины — осознанное решение, а не то, что включается само.
     Q_PROPERTY(bool screenAudio READ screenAudio WRITE setScreenAudio NOTIFY screenAudioChanged)
@@ -143,10 +146,10 @@ public:
     void setScreenCodec(const QString& id);
     QString camCodec() const { return m_camCodec; }
     void setCamCodec(const QString& id);
-    bool rxBuffer() const { return m_rxBuffer; }
-    void setRxBuffer(bool on);
     bool txBuffer() const { return m_txBuffer; }
     void setTxBuffer(bool on);
+    int rxAutoResetMs() const { return m_rxAutoResetMs; }
+    void setRxAutoResetMs(int ms);
     bool screenAudio() const { return m_screenAudio; }
     int screenVolume() const { return m_screenVolume; }
     bool uiSounds() const { return m_uiSounds; }
@@ -236,8 +239,8 @@ signals:
     void screenCursorChanged();
     void screenCodecChanged();
     void camCodecChanged();
-    void rxBufferChanged();
     void txBufferChanged();
+    void rxAutoResetMsChanged();
     void screenAudioChanged();
     void screenVolumeChanged();
     void uiSoundsChanged();
@@ -271,8 +274,8 @@ private:
     bool m_screenCursor = true;
     QString m_screenCodec = "auto";
     QString m_camCodec = "auto";
-    bool m_rxBuffer = true;
     bool m_txBuffer = true;
+    int m_rxAutoResetMs = 1000;
     bool m_screenAudio = false;
     int m_screenVolume = 100;
     bool m_uiSounds = true;

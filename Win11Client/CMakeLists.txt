@@ -150,6 +150,7 @@ qt_add_qml_module(Win11Client
         qml/SettingSwitch.qml
         qml/SettingsCombo.qml
         qml/PercentSlider.qml
+        qml/StepSlider.qml
         qml/UpdatePill.qml
         qml/KeyBind.qml
         qml/Card.qml

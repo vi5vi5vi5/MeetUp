@@ -1104,6 +1104,12 @@ Item {
         target: Media
         function onScreenError(text) { root.notify(text) }
         function onCodecNotice(text) { root.notify(text) }
+        // Буфер приёма сбросился сам — сказать об этом, как веб: молча
+        // «моргнувшая» картинка выглядит как сбой связи, а это была помощь.
+        function onBufferReset(screen, lagMs) {
+            root.notify((screen ? "Демонстрация" : "Видео") + " отставало на "
+                        + (lagMs / 1000).toFixed(1).replace(".", ",") + " с — буфер сброшен.")
+        }
     }
 
     Connections {

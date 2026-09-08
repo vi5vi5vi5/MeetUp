@@ -20,6 +20,15 @@ static bool knownScreenBitrate(const QString& b) {
     return kAll.contains(b);
 }
 
+// Порог авто-сброса приёма: ноль — выключено, иначе в пределах шкалы
+// ползунка. Ниже 300 мс хранить незачем: один опорный кадр демонстрации сам
+// по себе даёт всплеск в сотни миллисекунд, и порог ниже сбрасывал бы поток
+// на каждом из них.
+static int clampAutoReset(int ms) {
+    if (ms <= 0) return 0;
+    return qBound(300, ms, 10000);
+}
+
 MediaSettings::MediaSettings(QObject* parent) : QObject(parent) {
     QSettings s;
     s.beginGroup(kGroup);
@@ -62,8 +71,10 @@ MediaSettings::MediaSettings(QObject* parent) : QObject(parent) {
     // кодировщиков значило бы тихо подсунуть человеку не тот выбор.
     m_screenCodec = s.value("codecScreen", "auto").toString();
     m_camCodec = s.value("codecCam", "auto").toString();
-    m_rxBuffer = s.value("rxBuffer", true).toBool();
     m_txBuffer = s.value("txBuffer", true).toBool();
+    // Ключ rxBuffer прежних версий не читаем: выключателя больше нет, а его
+    // «выкл» означало бы теперь совсем другое поведение.
+    m_rxAutoResetMs = clampAutoReset(s.value("rxAutoResetMs", 1000).toInt());
     m_screenAudio = s.value("screenAudio", false).toBool();
     m_screenVolume = qBound(0, s.value("screenVolume", 100).toInt(), 200);
     m_uiSounds = s.value("uiSounds", true).toBool();
@@ -202,18 +213,19 @@ void MediaSettings::setCamCodec(const QString& id) {
     emit camCodecChanged();
 }
 
-void MediaSettings::setRxBuffer(bool on) {
-    if (m_rxBuffer == on) return;
-    m_rxBuffer = on;
-    save("rxBuffer", on);
-    emit rxBufferChanged();
-}
-
 void MediaSettings::setTxBuffer(bool on) {
     if (m_txBuffer == on) return;
     m_txBuffer = on;
     save("txBuffer", on);
     emit txBufferChanged();
+}
+
+void MediaSettings::setRxAutoResetMs(int ms) {
+    ms = clampAutoReset(ms);
+    if (m_rxAutoResetMs == ms) return;
+    m_rxAutoResetMs = ms;
+    save("rxAutoResetMs", ms);
+    emit rxAutoResetMsChanged();
 }
 
 void MediaSettings::setScreenCursor(bool on) {

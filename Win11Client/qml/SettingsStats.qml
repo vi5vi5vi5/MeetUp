@@ -15,6 +15,28 @@ Column {
     property bool _copied: false
     property bool _rxFlushed: false
 
+    // Шкала авто-сброса. Неровная намеренно: внизу важны десятые доли секунды
+    // (0,3 против 0,7 — разное поведение на тяжёлом опорном кадре), вверху —
+    // целые. Крайняя позиция — «выключен», ноль в настройке.
+    readonly property var resetSteps: [
+        { value: 300,   label: "0,3" },
+        { value: 500,   label: "0,5" },
+        { value: 700,   label: "0,7" },
+        { value: 1000,  label: "1 с" },
+        { value: 1500,  label: "1,5" },
+        { value: 2000,  label: "2" },
+        { value: 3000,  label: "3" },
+        { value: 5000,  label: "5" },
+        { value: 7000,  label: "7" },
+        { value: 10000, label: "10 с" },
+        { value: 0,     label: "Выкл" }
+    ]
+    // «0,3 с», «1 с», «1,5 с» — как принято писать по-русски, с запятой.
+    function fmtSeconds(ms) {
+        var s = ms / 1000
+        return (Number.isInteger(s) ? String(s) : s.toFixed(1).replace(".", ",")) + " с"
+    }
+
     // «1 поток · 2 потока · 5 потоков». Русские числительные — та мелочь,
     // по которой видно, писали интерфейс или переводили.
     function plural(n, one, few, many) {
@@ -318,68 +340,99 @@ Column {
     // Очередь приёма. Это единственное место, где видно, что декодер отстаёт:
     // байты идут, кадры приходят, а показывается прошлое — потому что всё
     // принятое стоит здесь и ждёт своей очереди на разбор.
+    //
+    // Выключателя у буфера нет намеренно (был): без него картинка рвалась
+    // всегда, даже когда в очереди набирался один кадр. Единственная ручка —
+    // порог авто-сброса ниже; кнопка — то же самое, но прямо сейчас.
     Field {
+        id: rxField
         width: parent.width
         label: "Буфер приёма"
-        hint: AV.rxBuffer
-            ? "Кадр, который декодер не успел разобрать, ждёт своей очереди. Сглаживает рывки, но разовая заминка превращается в постоянное опоздание: переключите кодек — и собеседник ещё долго будет досматривать предыдущий."
-            : "Кадр, пришедший раньше, чем разобран предыдущий, выбрасывается сразу. Отставание не накапливается никогда, платим отдельными пропущенными кадрами и паузой до следующего опорного."
+        hint: "Кадр, который декодер не успел разобрать, ждёт своей очереди. Пока он поспевает, здесь ноль; растущее число — отставание, которое само не рассосётся."
+              + (Stats.rxResets > 0 ? " Сбросов за сеанс: " + Stats.rxResets + "." : "")
+
+        // Красным подсвечивается то, что вот-вот сбросится (или сбросилось бы,
+        // будь авто-сброс включён): порог тот же, что у него.
+        readonly property int hotMs: AV.rxAutoResetMs > 0 ? AV.rxAutoResetMs : 1000
+
+        // Клетка очереди: сколько лежит и сколько это в миллисекундах по полосам.
+        component QueueCell: Rectangle {
+            property string text: ""
+            property bool hot: false
+            property bool live: false
+            height: 34
+            radius: Theme.radiusSm
+            color: Theme.surface2
+            border.width: 1
+            border.color: hot ? Theme.danger : Theme.border
+            Text {
+                anchors.centerIn: parent
+                text: parent.text
+                color: parent.live ? Theme.text : Theme.textFaint
+                font.family: Theme.uiFont
+                font.pixelSize: Theme.textXs
+                font.weight: Font.Medium
+            }
+        }
 
         // Field кладёт содержимое в Item, а не в колонку: без своей Column
-        // тумблер, кнопка и подпись легли бы друг на друга.
+        // клетки и кнопка легли бы друг на друга.
         Column {
             width: parent.width
             spacing: 8
 
-            SettingSwitch {
-                width: parent.width
-                label: "Буферизовать приём"
-                description: "Выключите, если картинка идёт с растущим опозданием."
-                checked: AV.rxBuffer
-                onToggled: function (v) { AV.rxBuffer = v }
-            }
-
             Row {
                 width: parent.width
                 spacing: 8
-
-                Rectangle {
-                    width: (parent.width - 8) / 2
-                    height: 34
-                    radius: Theme.radiusSm
-                    color: Theme.surface2
-                    border.width: 1
+                QueueCell {
+                    width: (parent.width - 16) / 3
+                    text: "В очереди · " + Stats.rxQueue
+                    live: Stats.rxQueue > 0
                     // Очередь длиннее полусекунды на любой разумной частоте —
                     // это уже видимое опоздание, а не рабочий запас.
-                    border.color: Stats.rxQueue > 15 ? Theme.danger : Theme.border
-                    Text {
-                        anchors.centerIn: parent
-                        text: "В очереди · " + Stats.rxQueue
-                        color: Stats.rxQueue > 0 ? Theme.text : Theme.textFaint
-                        font.family: Theme.uiFont
-                        font.pixelSize: Theme.textXs
-                        font.weight: Font.Medium
-                    }
+                    hot: Stats.rxQueue > 15
                 }
-                AppButton {
-                    width: (parent.width - 8) / 2
-                    text: page._rxFlushed ? "Сброшено" : "Сбросить буфер"
-                    variant: page._rxFlushed ? "primary" : "secondary"
-                    size: "sm"
-                    onClicked: { Media.flushReceive(); page._rxFlushed = true; rxFlushed.restart() }
+                QueueCell {
+                    width: (parent.width - 16) / 3
+                    text: "Камеры · " + Stats.rxLagCamMs + " мс"
+                    live: Stats.rxLagCamMs > 0
+                    hot: Stats.rxLagCamMs > rxField.hotMs
+                }
+                QueueCell {
+                    width: (parent.width - 16) / 3
+                    text: "Экран · " + Stats.rxLagScrMs + " мс"
+                    live: Stats.rxLagScrMs > 0
+                    hot: Stats.rxLagScrMs > rxField.hotMs
                 }
             }
-
-            Text {
+            AppButton {
                 width: parent.width
-                visible: !AV.rxBuffer && Stats.rxDropped > 0
-                text: "Выброшено кадров за секунду: " + Stats.rxDropped
-                color: Theme.textFaint
-                font.family: Theme.uiFont
-                font.pixelSize: Theme.text2xs
+                text: page._rxFlushed ? "Сброшено — ждём опорный кадр" : "Сбросить буфер сейчас"
+                variant: page._rxFlushed ? "primary" : "secondary"
+                size: "sm"
+                onClicked: { Media.flushReceive(); page._rxFlushed = true; rxFlushed.restart() }
             }
         }
         Timer { id: rxFlushed; interval: 1600; onTriggered: page._rxFlushed = false }
+    }
+
+    // Порог авто-сброса. Ползунок, а не число: правильного значения нет — оно
+    // зависит от кодека, машины и того, что человек смотрит. Показ слайдов
+    // терпит и пять секунд, разговор — не терпит и одной.
+    Field {
+        width: parent.width
+        label: "Авто-сброс при отставании · "
+               + (AV.rxAutoResetMs === 0 ? "выключен" : page.fmtSeconds(AV.rxAutoResetMs))
+        hint: AV.rxAutoResetMs === 0
+            ? "Очередь копится без предела: отставание видно в клетках выше и уходит только кнопкой. Так стоит жить, если рывки хуже опоздания — например, на показе слайдов без разговора."
+            : "Кадр пролежал в очереди дольше порога — вся очередь выбрасывается, картинка перескакивает на живой край и ждёт опорный кадр. Ниже полусекунды сбрасывать будет и один тяжёлый опорный кадр демонстрации; выше двух секунд отставание уже мешает разговору."
+        StepSlider {
+            width: parent.width
+            model: page.resetSteps
+            value: AV.rxAutoResetMs
+            offLast: true
+            onPicked: function (v) { AV.rxAutoResetMs = v }
+        }
     }
 
     Field {
@@ -440,6 +493,10 @@ Column {
         lines.push("Разбор камер участников: " + (Stats.rxCamDecoder === "" ? "нет"
                    : Stats.rxCamDecoder + " · " + Stats.rxCamDecodeMs.toFixed(1) + " мс"))
         lines.push("Подстройка под звук: " + Stats.syncHoldMs + " мс")
+        lines.push("Очередь приёма: " + Stats.rxQueue + " кадров · отставание камеры "
+                   + Stats.rxLagCamMs + " мс, экран " + Stats.rxLagScrMs + " мс"
+                   + " · сбросов " + Stats.rxResets + " · авто-сброс "
+                   + (AV.rxAutoResetMs === 0 ? "выкл" : page.fmtSeconds(AV.rxAutoResetMs)))
         lines.push("Настройки: камера " + AV.camQuality
                    + ", экран " + (AV.screenRes === "src" ? "источник" : AV.screenRes + "p")
                    + "/" + AV.screenFps + "к/с"

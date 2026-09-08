@@ -138,9 +138,10 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
     // демонстрацию с AV1 обратно на HEVC, а зритель ещё полминуты досматривает
     // AV1 — очередь-то никуда не делась.
     //
-    // Поэтому решение «брать или не брать» принимается ЗДЕСЬ, на потоке
-    // транспорта, до постановки в очередь (VideoRecvWorker::offer). Разобрать
-    // очередь задним числом нельзя — в неё можно только не класть.
+    // Разобрать очередь задним числом нельзя, но можно знать, сколько в ней
+    // лежит, и объявить лежащее мусором: offer() считает кадры и выдаёт номер
+    // поколения, а сброс — ручной или авто по отставанию — меняет номер, и
+    // всё, что стояло в очереди, отсеивается недекодированным.
     //
     // Заодно расходятся полосы: раньше оба воркера получали все кадры и
     // отбрасывали чужие сами, то есть каждый кадр демонстрации будил ещё и
@@ -149,9 +150,11 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
         const quint8 type = d.isEmpty() ? 0 : quint8(d[0]);
         const bool screen = (type == Proto::SCREEN_CODED || type == Proto::SCREEN_JPEG);
         VideoRecvWorker* w = screen ? m_scrRecv : m_recv;
-        quint32 gen = 0;
-        if (!w->offer(&gen)) return;                 // кадр выброшен, не доехав
-        QMetaObject::invokeMethod(w, [w, d, gen] { w->onFrame(d, gen); },
+        // Метка прихода едет с кадром: по ней воркер узнает, сколько кадр
+        // пролежал в очереди, — это и есть отставание приёма.
+        const quint32 gen = w->offer();
+        const qint64 at = QDateTime::currentMSecsSinceEpoch();
+        QMetaObject::invokeMethod(w, [w, d, gen, at] { w->onFrame(d, gen, at); },
                                   Qt::QueuedConnection);
     }, Qt::DirectConnection);
     connect(m_recv, &VideoRecvWorker::frameReady, this,
@@ -166,6 +169,11 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
     // воркерах: он свой на каждую полосу, но отправляет-то их один транспорт.
     connect(m_recv, &VideoRecvWorker::keyframeNeeded, this, &VideoEngine::requestKeyframe);
     connect(m_scrRecv, &VideoRecvWorker::keyframeNeeded, this, &VideoEngine::requestKeyframe);
+    // Воркер выбросил свою очередь по отставанию — наша часть уборки и тост.
+    connect(m_recv, &VideoRecvWorker::autoReset, this,
+            [this](int lag) { onAutoReset(false, lag); });
+    connect(m_scrRecv, &VideoRecvWorker::autoReset, this,
+            [this](int lag) { onAutoReset(true, lag); });
     // Сколько стоит разбор чужого кадра и чем мы его разбираем — в «Диагностику».
     connect(m_recv, &VideoRecvWorker::frameDecoded, this,
             [this](qint64 us) { m_stats->noteDecodeTime(false, us); });
@@ -307,8 +315,8 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
     applyCodecSteps();
     applyCodecChoice();
 
-    // Буферы конвейера: приём и захват (см. applyBufferSettings).
-    connect(settings, &MediaSettings::rxBufferChanged, this, &VideoEngine::applyBufferSettings);
+    // Буфер захвата и порог авто-сброса приёма (см. applyBufferSettings).
+    connect(settings, &MediaSettings::rxAutoResetMsChanged, this, &VideoEngine::applyBufferSettings);
     connect(settings, &MediaSettings::txBufferChanged, this, &VideoEngine::applyBufferSettings);
     applyBufferSettings();
 
@@ -550,6 +558,7 @@ void VideoEngine::onJoinOk() {
 
 void VideoEngine::onLeft() {
     resetPeers();
+    m_stats->clearRxResets();          // счёт сбросов — на одну конференцию
     m_live = false;                    // фаза осталась "live", но комнаты уже нет
     updateCapture();
     stopScreenCapture();
@@ -607,9 +616,9 @@ void VideoEngine::sweepStale() {
     // весь медиапуть и уводили.
     const int queued = (m_recv ? m_recv->queued() : 0)
                      + (m_scrRecv ? m_scrRecv->queued() : 0);
-    const int dropped = (m_recv ? m_recv->takeDropped() : 0)
-                      + (m_scrRecv ? m_scrRecv->takeDropped() : 0);
-    m_stats->noteRxQueue(queued, dropped);
+    m_stats->noteRxQueue(queued,
+                         m_recv ? m_recv->takeLagPeakMs() : 0,
+                         m_scrRecv ? m_scrRecv->takeLagPeakMs() : 0);
 
     // …и здесь же — жив ли вообще тот, кто эти кадры кодирует.
     sweepEncoders();
@@ -1443,13 +1452,13 @@ int VideoEngine::screenBitrate(int presetBitrate, qint64 nowMs, qint64* queueBud
 
 // ---------- буферы конвейера ----------
 
-// Тумблеры из настроек — тем, кто держит очереди. Приёму нужен вызов на его
-// потоке? Нет: setBuffered — атомик, он для того и сделан, чтобы его можно
-// было трогать откуда угодно, не дожидаясь, пока декодер освободится.
+// Настройки — тем, кто держит очереди. Приёму нужен вызов на его потоке? Нет:
+// порог — атомик, он для того и сделан, чтобы его можно было трогать откуда
+// угодно, не дожидаясь, пока декодер освободится.
 void VideoEngine::applyBufferSettings() {
-    const bool rx = m_settings->rxBuffer();
-    if (m_recv) m_recv->setBuffered(rx);
-    if (m_scrRecv) m_scrRecv->setBuffered(rx);
+    const int ms = m_settings->rxAutoResetMs();
+    if (m_recv) m_recv->setAutoResetMs(ms);
+    if (m_scrRecv) m_scrRecv->setAutoResetMs(ms);
     m_capBuffered.store(m_settings->txBuffer(), std::memory_order_relaxed);
 }
 
@@ -1464,7 +1473,18 @@ void VideoEngine::flushReceive() {
     // мусором, ждать его тем более незачем.
     for (auto it = m_peers.begin(); it != m_peers.end(); ++it) it->holdQ.clear();
     for (auto it = m_screenPeers.begin(); it != m_screenPeers.end(); ++it) it->holdQ.clear();
+    m_stats->noteRxReset();
     qInfo() << "VideoEngine: очередь приёма сброшена вручную";
+}
+
+// Воркер сбросил свою очередь сам: кадры лежали в ней дольше порога. Наша
+// часть — та же, что у ручного сброса, только для одной полосы: придержанное
+// под звук тоже из прошлого, и ждать его после сброса незачем.
+void VideoEngine::onAutoReset(bool screen, int lagMs) {
+    QHash<quint32, Peer>& peers = screen ? m_screenPeers : m_peers;
+    for (auto it = peers.begin(); it != peers.end(); ++it) it->holdQ.clear();
+    m_stats->noteRxReset();
+    emit bufferReset(screen, lagMs);
 }
 
 // То же на своей стороне: кадры, которые захват успел наснимать, пока
