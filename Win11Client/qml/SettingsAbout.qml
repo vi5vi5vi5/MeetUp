@@ -83,7 +83,10 @@ Column {
         // «Версия клиента» отдельной строкой больше не нужна — она в шапке выше.
         InfoRow { key: "Версия сервера"; value: "—"; soon: true }
         InfoRow { key: "Сервер"; value: Sys.host }
-        InfoRow { key: "Кодеки"; value: "openh264 · libvpx · opus" }
+        // Что умеем принимать: отправка уже своя у каждой полосы и видна в
+        // «Диагностике», а старая строка «openh264 · libvpx · opus» устарела в
+        // день, когда демонстрация уехала на HEVC и видеокарту.
+        InfoRow { key: "Кодеки"; value: "H.264 · HEVC · VP8 · VP9 · AV1 · Opus" }
     }
 
     Rectangle { width: parent.width; height: 1; color: Theme.border }

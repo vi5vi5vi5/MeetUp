@@ -304,12 +304,6 @@ Item {
         }
     }
 
-    // Пришли по ссылке с ключом шифрования — сказать об этом один раз, когда
-    // гейт уже позади: под ним уведомление всё равно не видно.
-    onStartedChanged: if (started && Link.pendingKey !== "")
-        notify("Ссылка с ключом E2E: десктоп-клиент пока не умеет шифрование — "
-               + "чужие сообщения и видео будут нечитаемы. "
-               + "Для расшифрованного эфира откройте ссылку в браузере.")
     Component.onDestruction: {
         Hotkeys.setActive(false)     // вне конференции чужие нажатия не слушаем
         Conf.leave()
@@ -664,11 +658,14 @@ Item {
                     tone: Conf.ping < 80 ? "accent" : Conf.ping < 200 ? "muted" : "danger"
                     text: Conf.ping + " мс"
                 }
-                // Заглушка E2E: ключ из ссылки разобран, но шифровать нечем (M5).
+                // Сквозное шифрование включено — фразой или ключом из ссылки.
+                // Бейдж, а не иконка: как «E2E 🔒» в шапке веба, и по той же
+                // причине — человек должен видеть, запечатан ли эфир, не
+                // открывая настроек.
                 Badge {
-                    visible: Link.pendingKey !== ""
-                    tone: "danger"; dot: true
-                    text: "E2E не поддерживается"
+                    visible: Conf.phase === "live" && Crypto.active
+                    tone: "accent"; dot: true
+                    text: "E2E"
                 }
 
                 Item { Layout.fillWidth: true }
@@ -989,16 +986,28 @@ Item {
                     font.pixelSize: Theme.textXs
                 }
 
-                Text {   // заглушка E2E: ключ в ссылке есть, шифровать нечем
+                // Ссылка принесла ключ шифрования. Сам ключ применит Crypto
+                // после join_ok (раньше неизвестно, в ту ли комнату попали) —
+                // здесь только сказать человеку, что вводить фразу не придётся.
+                Row {
                     visible: root.gateOpen && Link.pendingKey !== ""
                     width: parent.width
-                    wrapMode: Text.WordWrap
-                    text: "В ссылке есть ключ шифрования, но десктоп-клиент пока не умеет E2E — "
-                          + "чужие сообщения и видео будут нечитаемы. "
-                          + "Для расшифрованного эфира откройте ссылку в браузере."
-                    color: Theme.danger
-                    font.family: Theme.uiFont
-                    font.pixelSize: Theme.textXs
+                    spacing: 8
+                    AppIcon {
+                        anchors.verticalCenter: parent.verticalCenter
+                        name: "lock"
+                        size: 14
+                        color: Theme.accentInk
+                    }
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: parent.width - 22
+                        wrapMode: Text.WordWrap
+                        text: "В ссылке есть ключ шифрования — эфир откроется расшифрованным."
+                        color: Theme.textMuted
+                        font.family: Theme.uiFont
+                        font.pixelSize: Theme.textXs
+                    }
                 }
 
                 Field {   // имя — только пока его не знаем (у аккаунта оно есть)

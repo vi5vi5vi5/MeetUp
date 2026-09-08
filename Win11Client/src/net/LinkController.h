@@ -22,8 +22,10 @@ class SysBridge;
 class LinkController : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString errorText READ errorText NOTIFY errorTextChanged)
-    // Ключ E2E из ссылки. Шифрования на десктопе пока нет (M5) — ключ храним
-    // и показываем предупреждение, наружу он не уходит.
+    // Ключ E2E из фрагмента ссылки (#k=…), как его дали — base64url. Здесь он
+    // только хранится до входа: применяет его E2eController по join_ok (раньше
+    // неизвестно, в ту ли комнату мы попали), а гейт по нему показывает, что
+    // фразу вводить не придётся. Наружу ключ не уходит; roomLeft() его стирает.
     Q_PROPERTY(QString pendingKey READ pendingKey NOTIFY pendingKeyChanged)
     // Идёт смена сервера: Main.qml на это время отдаёт навигацию нам, иначе
     // сброс профиля увёл бы на экран входа перед анонимным лобби.
