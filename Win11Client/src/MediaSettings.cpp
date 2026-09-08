@@ -79,6 +79,10 @@ MediaSettings::MediaSettings(QObject* parent) : QObject(parent) {
     m_screenVolume = qBound(0, s.value("screenVolume", 100).toInt(), 200);
     m_uiSounds = s.value("uiSounds", true).toBool();
     m_mirrorSelf = s.value("mirrorSelf", true).toBool();
+    m_perPage = s.value("perPage", 9).toInt();
+    if (m_perPage != 6 && m_perPage != 9 && m_perPage != 12) m_perPage = 9;
+    m_showSelf = s.value("showSelf", true).toBool();
+    m_hideNoVideo = s.value("hideNoVideo", false).toBool();
     // Через normalize — в файле может лежать текст QKeySequence от прежней
     // версии ("Ctrl+D", "Num+5"); что переносится, то переносится, остальное
     // молча очищается и назначается заново.
@@ -347,6 +351,30 @@ void MediaSettings::setPushToTalk(bool on) {
     m_pushToTalk = on;
     save("pushToTalk", on);
     emit pushToTalkChanged();
+}
+
+// Только три значения: сетка считает столбцы как корень из числа плиток, и
+// 6 / 9 / 12 дают ровные 3×2, 3×3 и 4×3. Чужое число из файла — обратно к 9.
+void MediaSettings::setPerPage(int n) {
+    if (n != 6 && n != 9 && n != 12) n = 9;
+    if (m_perPage == n) return;
+    m_perPage = n;
+    save("perPage", n);
+    emit perPageChanged();
+}
+
+void MediaSettings::setShowSelf(bool on) {
+    if (m_showSelf == on) return;
+    m_showSelf = on;
+    save("showSelf", on);
+    emit showSelfChanged();
+}
+
+void MediaSettings::setHideNoVideo(bool on) {
+    if (m_hideNoVideo == on) return;
+    m_hideNoVideo = on;
+    save("hideNoVideo", on);
+    emit hideNoVideoChanged();
 }
 
 void MediaSettings::setDevMode(bool on) {

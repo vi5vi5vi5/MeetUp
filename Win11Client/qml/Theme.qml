@@ -1,13 +1,31 @@
 pragma Singleton
 import QtQuick
+import QtCore
 
 // MeetUp design tokens — "Prism Minimal".
 // Values mirror the reference web client (Server/web/assets/theme.css) 1:1.
-// Dark is the default; `dark = false` flips the whole palette live.
+// Dark is the default; `mode` flips the whole palette live.
 QtObject {
     id: theme
 
-    property bool dark: true
+    // Режим темы: "dark" | "light" | "system". Хранится между запусками — до
+    // этого выбор жил только в памяти, и каждый запуск встречал тёмной темой,
+    // что бы человек ни выбрал вчера. Хранилище — QSettings под ключом
+    // ui/theme, рядом с группой av, где лежат остальные настройки.
+    property string mode: "dark"
+    property Settings _store: Settings {
+        category: "ui"
+        property alias theme: theme.mode
+    }
+
+    // Что просит система. Windows сообщает схему через QStyleHints и меняет
+    // её на лету — «как в системе» переключится вместе с настройкой Windows.
+    // Unknown считаем тёмной: это наш родной вид, а не светлый.
+    readonly property bool systemDark: Application.styleHints.colorScheme !== Qt.Light
+
+    // Действующая тема — всё остальное читает только её. Напрямую больше не
+    // пишется: выбор идёт через mode или toggle().
+    readonly property bool dark: mode === "system" ? systemDark : mode !== "light"
 
     // ---- Surfaces ----
     readonly property color bg:           dark ? "#0e0e10" : "#f4f3ee"
@@ -85,5 +103,7 @@ QtObject {
     readonly property string labelFont:   _label.status === FontLoader.Ready ? _label.name : "Segoe UI"
     readonly property string monoFont:    "Consolas"
 
-    function toggle() { dark = !dark }
+    // Переключатель в шапке. Из «как в системе» уводит в явную тему, обратную
+    // текущей: иначе нажатие в этом режиме не меняло бы ничего видимого.
+    function toggle() { mode = dark ? "light" : "dark" }
 }

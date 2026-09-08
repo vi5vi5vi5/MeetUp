@@ -155,24 +155,40 @@ Item {
     // старше — пока она идёт, крупно показываем именно её (как у веба).
     readonly property bool stageMode: screenActive || pinnedId !== null
 
-    // Страницы плиток: в сетку больше девяти не пускаем.
+    // Кого показываем плитками — сетке и плёнке. Два фильтра из настроек
+    // «Интерфейса», как у веба: своя плитка (showSelf) и участники без камеры
+    // (hideNoVideo). Список участников в панели они не трогают — там люди, а
+    // не картинки.
+    //
+    // «Без видео» — по тумблеру камеры, а не по факту кадров, и это не
+    // упрощение: движок декодирует только тех, у кого есть плитка
+    // (VideoRecvWorker::setWanted), так что спрятанный «за отсутствие кадров»
+    // участник плитки не получил бы — и кадров у него не появилось бы никогда.
+    readonly property var tileItems: Conf.participants.filter(function (p) {
+        if (p.isSelf) return AV.showSelf
+        return !AV.hideNoVideo || p.cam
+    })
+
+    // Страницы плиток: сколько на страницу — из настроек (6 / 9 / 12).
     property int page: 0
-    readonly property int perPage: 9
-    readonly property int pageCount: Math.max(1, Math.ceil(Conf.participants.length / perPage))
+    readonly property int perPage: AV.perPage
+    readonly property int pageCount: Math.max(1, Math.ceil(tileItems.length / perPage))
     readonly property int curPage: Math.min(page, pageCount - 1)
 
     // Что рисуем в сетке (в режиме сцены — ничего, там свои плитки).
     readonly property var pageItems: stageMode ? []
-        : Conf.participants.slice(curPage * perPage, curPage * perPage + perPage)
+        : tileItems.slice(curPage * perPage, curPage * perPage + perPage)
     // Закреплённый (0 или 1 элемент). Закрепление СТАРШЕ демонстрации: нажал
     // на лицо — видишь лицо (так же и в вебе), нажал ещё раз — вернулся экран.
+    // Из полного списка, не из отфильтрованного: закреплённый выключил камеру
+    // — сцена не должна опустеть из-за фильтра «без видео».
     readonly property var pinnedItems: pinnedId === null ? []
         : Conf.participants.filter(function (p) { return p.id === root.pinnedId })
     // Плёнка: при закреплении — все, кроме закреплённого, иначе все.
     readonly property var filmItems: !stageMode ? []
         : (pinnedId !== null
-            ? Conf.participants.filter(function (p) { return p.id !== root.pinnedId })
-            : Conf.participants)
+            ? tileItems.filter(function (p) { return p.id !== root.pinnedId })
+            : tileItems)
 
     // Честный бейдж эфира: считаем от момента СВОЕГО входа (начало эфира
     // разовой комнаты серверу неизвестно — вебу, впрочем, тоже).

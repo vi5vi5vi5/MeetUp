@@ -95,6 +95,14 @@ class MediaSettings : public QObject {
     // неотзеркаленное лицо читается как чужое. Настройка чисто своя: в эфир
     // кадр уходит как есть, собеседники ничего не заметят.
     Q_PROPERTY(bool mirrorSelf READ mirrorSelf WRITE setMirrorSelf NOTIFY mirrorSelfChanged)
+    // Сетка участников — как perPage / showSelf / hideNoVideo у веба.
+    // perPage — плиток на странице сетки (6 | 9 | 12); showSelf — своя плитка
+    // в сетке; hideNoVideo — прятать участников с выключенной камерой, чтобы
+    // в большой комнате на экране остались лица. Панель участников эти
+    // фильтры не трогают.
+    Q_PROPERTY(int perPage READ perPage WRITE setPerPage NOTIFY perPageChanged)
+    Q_PROPERTY(bool showSelf READ showSelf WRITE setShowSelf NOTIFY showSelfChanged)
+    Q_PROPERTY(bool hideNoVideo READ hideNoVideo WRITE setHideNoVideo NOTIFY hideNoVideoChanged)
     // Горячие клавиши (M8): текст бинда в собственном формате — "RCtrl",
     // "RCtrl+RShift", "Ctrl+D", "F9" (разбор и правила в src/HotkeySpec.h).
     // Пустая строка — клавиша не назначена. Слушают GlobalHotkeys и настройки.
@@ -154,6 +162,9 @@ public:
     int screenVolume() const { return m_screenVolume; }
     bool uiSounds() const { return m_uiSounds; }
     bool mirrorSelf() const { return m_mirrorSelf; }
+    int perPage() const { return m_perPage; }
+    bool showSelf() const { return m_showSelf; }
+    bool hideNoVideo() const { return m_hideNoVideo; }
     QString keyMic() const { return m_keyMic; }
     QString keySound() const { return m_keySound; }
     QString keyCam() const { return m_keyCam; }
@@ -184,6 +195,9 @@ public:
     void setScreenVolume(int v);
     void setUiSounds(bool on);
     void setMirrorSelf(bool on);
+    void setPerPage(int n);
+    void setShowSelf(bool on);
+    void setHideNoVideo(bool on);
     void setKeyMic(const QString& s);
     void setKeySound(const QString& s);
     void setKeyCam(const QString& s);
@@ -245,6 +259,9 @@ signals:
     void screenVolumeChanged();
     void uiSoundsChanged();
     void mirrorSelfChanged();
+    void perPageChanged();
+    void showSelfChanged();
+    void hideNoVideoChanged();
     void keyMicChanged();
     void keySoundChanged();
     void keyCamChanged();
@@ -280,6 +297,9 @@ private:
     int m_screenVolume = 100;
     bool m_uiSounds = true;
     bool m_mirrorSelf = true;
+    int m_perPage = 9;
+    bool m_showSelf = true;
+    bool m_hideNoVideo = false;
     QString m_keyMic, m_keySound, m_keyCam;
     QString m_keyShare, m_keyFull, m_keyLeave;
     bool m_pushToTalk = false;
