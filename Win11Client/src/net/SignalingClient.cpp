@@ -196,10 +196,20 @@ void SignalingClient::onJson(const QJsonObject& msg) {
         }
         // Демонстрация экрана (§4.3): сервер сообщает, идёт ли она и от кого.
         // Свой слот после обрыва не сохраняется — если мы вещали, просим заново.
-        setScreenId(msg.contains("screen_id")
-            ? static_cast<qint64>(msg.value("screen_id").toDouble()) : 0);
+        // screen_ids — список; screen_id остаётся у серверов, которые про
+        // несколько демонстраций ещё не знают.
+        QVariantList ids;
+        if (msg.contains("screen_ids")) {
+            const QJsonArray arr = msg.value("screen_ids").toArray();
+            for (const QJsonValue& v : arr)
+                ids.append(static_cast<qint64>(v.toDouble()));
+        } else if (msg.contains("screen_id")) {
+            const qint64 id = static_cast<qint64>(msg.value("screen_id").toDouble());
+            if (id != 0) ids.append(id);
+        }
+        setScreenIds(ids);
         emit joinOk();   // каждый вход, включая реконнект: медиа сбрасывает буферы
-        if (m_wantScreen && m_screenId == 0)
+        if (m_wantScreen && !screenSelf())
             sendJson({ {"type","screen"}, {"on", true} });
         sendPing();                  // первый замер сразу, дальше по таймеру
         m_pingTimer->start();
@@ -284,13 +294,15 @@ void SignalingClient::onJson(const QJsonObject& msg) {
     if (type == "screen") {
         const qint64 id = static_cast<qint64>(msg.value("id").toDouble());
         const bool on = msg.value("on").toBool();
+        QVariantList ids = m_screenIds;
         if (on) {
             if (id == m_myId) m_wantScreen = true;
-            setScreenId(id);
-        } else if (m_screenId == id) {
+            if (!ids.contains(QVariant(id))) ids.append(id);
+        } else {
             if (id == m_myId) m_wantScreen = false;
-            setScreenId(0);
+            ids.removeAll(QVariant(id));
         }
+        setScreenIds(ids);
         return;
     }
 
@@ -369,9 +381,9 @@ void SignalingClient::sendPing() {
     sendJson({ {"type","ping"}, {"t", double(QDateTime::currentMSecsSinceEpoch())} });
 }
 
-void SignalingClient::setScreenId(qint64 id) {
-    if (m_screenId == id) return;
-    m_screenId = id;
+void SignalingClient::setScreenIds(const QVariantList& ids) {
+    if (m_screenIds == ids) return;
+    m_screenIds = ids;
     emit screenChanged();
 }
 
@@ -379,7 +391,11 @@ void SignalingClient::setScreenShare(bool on) {
     m_wantScreen = on;
     // Свою сцену гасим сразу, не дожидаясь эха сервера (так же делает веб) —
     // иначе кнопка «залипала» бы на время круга до сервера и обратно.
-    if (!on && m_screenId == m_myId) setScreenId(0);
+    if (!on && screenSelf()) {
+        QVariantList ids = m_screenIds;
+        ids.removeAll(QVariant(m_myId));
+        setScreenIds(ids);
+    }
     sendJson({ {"type","screen"}, {"on", on} });
 }
 
@@ -416,7 +432,7 @@ void SignalingClient::leave() {
     m_speakingUntil.clear();
     rebuildSpeaking();
     m_wantScreen = false;
-    setScreenId(0);
+    setScreenIds({});
     // Выход = чистый следующий вход. Экран конференции в QML пересоздаётся с
     // микрофоном/камерой «выкл», а SignalingClient и движки живут всё
     // приложение — если не сбросить, включённая в прошлый раз камера осталась

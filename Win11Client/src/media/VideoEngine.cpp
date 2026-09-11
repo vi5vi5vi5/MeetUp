@@ -1100,7 +1100,9 @@ void VideoEngine::onCamFrame(const QVideoFrame& frame) {
 // экран мы начинаем только увидев в подтверждении собственный id (§4.3).
 void VideoEngine::onScreenSlotChanged() {
     const qint64 me = m_conf->myId();
-    if (me != 0 && m_conf->screenId() == me) startScreenCapture();
+    // screenSelf(), а не сравнение с screenId(): демонстраций может идти
+    // несколько, и наша — не обязательно первая в списке.
+    if (me != 0 && m_conf->screenSelf()) startScreenCapture();
     else                                     stopScreenCapture();
 }
 

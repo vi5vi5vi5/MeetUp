@@ -108,6 +108,16 @@ const char *kSample = R"conf(# MeetUp — настройки сервера.
 # Ссылок-приглашений на одну комнату.
 #max_aliases_per_room = 5
 
+[media]
+# Сколько демонстраций экрана может идти в комнате одновременно.
+#
+# Поднимать дороже, чем кажется: сервер рассылает все потоки всем участникам —
+# он не знает, кто на что смотрит, — поэтому исходящий трафик растёт кратно.
+# Клиент разбирает только ту демонстрацию, которую видит, но получает все.
+# Ориентир: три демонстрации в режиме «Источник» на 4K — это около 18 Мбит/с
+# входящих каждому участнику.
+#max_screen_shares = 1
+
 [chat]
 # Сообщений в истории комнаты — её получает каждый вошедший.
 #history_size = 500
@@ -325,6 +335,10 @@ ServerConfig ServerConfig::load(const QString &dataDir)
     if (const auto v = ini.take("rooms", "max_aliases_per_room"))
         cfg.maxAliasesPerRoom = parseInt(*v, cfg.maxAliasesPerRoom, 0, 1000,
                                          "rooms.max_aliases_per_room", &cfg.warnings);
+
+    if (const auto v = ini.take("media", "max_screen_shares"))
+        cfg.maxScreenShares = parseInt(*v, cfg.maxScreenShares, 1, 16,
+                                       "media.max_screen_shares", &cfg.warnings);
 
     if (const auto v = ini.take("chat", "history_size"))
         cfg.chatHistorySize = parseInt(*v, cfg.chatHistorySize, 0, 100000,

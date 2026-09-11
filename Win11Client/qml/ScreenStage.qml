@@ -19,6 +19,11 @@ Item {
     property bool locked: false
     property bool expanded: false   // сцена развёрнута на весь экран
 
+    // Какая это демонстрация из скольких. Одна — ни стрелок, ни счётчика:
+    // экран выглядит ровно как раньше.
+    property int page: 0
+    property int pageCount: 1
+
     // Развернуть/свернуть показ. Разворачивает не плитку, а весь экран — этим
     // занимается ConferenceScreen, сцена только просит.
     signal expandRequested()
@@ -26,6 +31,9 @@ Item {
     signal resetRequested()
     // «Ввести ключ» с заслонки: настройки открывает экран, сцена только просит.
     signal keyRequested()
+    // Листание демонстраций. Сцена не знает, кто ведущие, — просит экран.
+    signal prevRequested()
+    signal nextRequested()
 
     // ---- Полноэкранный показ: интерфейс уходит вместе с курсором ----
     // В развёрнутом показе смотрят чужой экран, а не наши кнопки: единственный
@@ -310,6 +318,55 @@ Item {
             }
         }
 
+        // Стрелки листания. Живут по краям самой сцены и прячутся вместе с
+        // остальным интерфейсом в полноэкранном показе — они такая же «обвязка»,
+        // как кнопка развернуть.
+        component StageArrow: Rectangle {
+            property bool flip: false
+            property bool disabled: false
+            signal tapped()
+
+            width: 40
+            height: 40
+            radius: 20
+            color: arrowHover.hovered && !disabled ? Theme.surface3 : Theme.scrimChip
+            border.width: 1
+            border.color: Theme.borderStrong
+            opacity: root.chromeShown ? (disabled ? 0.3 : 1) : 0
+            visible: opacity > 0.01
+            Behavior on opacity { NumberAnimation { duration: Theme.durMed } }
+
+            AppIcon {
+                anchors.centerIn: parent
+                name: "arrow-right"
+                size: 18
+                color: Theme.dark ? "#ffffff" : Theme.text
+                // Левую стрелку зеркалим: своей в наборе нет, а рисовать
+                // почти такую же ради разворота незачем.
+                transform: Scale { origin.x: 9; xScale: parent.parent.flip ? -1 : 1 }
+            }
+            HoverHandler { id: arrowHover; cursorShape: Qt.PointingHandCursor }
+            TapHandler { onTapped: if (!parent.disabled) parent.tapped() }
+        }
+
+        StageArrow {
+            anchors.left: parent.left
+            anchors.leftMargin: 10
+            anchors.verticalCenter: parent.verticalCenter
+            visible: root.pageCount > 1 && opacity > 0.01
+            flip: true
+            disabled: root.page <= 0
+            onTapped: root.prevRequested()
+        }
+        StageArrow {
+            anchors.right: parent.right
+            anchors.rightMargin: 10
+            anchors.verticalCenter: parent.verticalCenter
+            visible: root.pageCount > 1 && opacity > 0.01
+            disabled: root.page >= root.pageCount - 1
+            onTapped: root.nextRequested()
+        }
+
         // Плашка «кто показывает» — как stage-chip у веба.
         Rectangle {
             anchors.left: parent.left
@@ -341,6 +398,14 @@ Item {
                     font.family: Theme.uiFont
                     font.pixelSize: Theme.textXs
                     font.weight: Font.Medium
+                }
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: root.pageCount > 1
+                    text: "· " + (root.page + 1) + " из " + root.pageCount
+                    color: Theme.textMuted
+                    font.family: Theme.uiFont
+                    font.pixelSize: Theme.textXs
                 }
             }
         }

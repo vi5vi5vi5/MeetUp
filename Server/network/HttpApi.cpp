@@ -164,6 +164,7 @@ ApiResponse HttpApi::handleConfig() const
         {"code_min_len", m_config.codeMinLen},
         {"max_aliases_per_room", m_config.maxAliasesPerRoom},
         {"max_personal_rooms", m_config.maxPersonalPerUser},
+        {"max_screen_shares", m_config.maxScreenShares},
         {"chat_image_max_kb", m_config.chatImageMaxKb},
     };
     if (!m_config.publicUrl.isEmpty())

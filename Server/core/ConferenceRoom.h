@@ -58,12 +58,19 @@ public:
     void addParticipant(ClientSession *session);
     void removeParticipant(ClientSession *session);
 
-    // Демонстрация экрана: в комнате может идти только одна. Сервер закрепляет
-    // её за участником и отклоняет остальных (error screen_busy); кадры
-    // экрана от других участников не ретранслируются. Выход ведущего из
-    // комнаты снимает закрепление (removeParticipant).
-    ClientSession *screenSharer() const { return m_screenSharer; }
-    void setScreenSharer(ClientSession *session) { m_screenSharer = session; }
+    // Демонстрации экрана. Сколько их может идти одновременно, решает владелец
+    // сервера (media.max_screen_shares); сверх лимита сервер отвечает
+    // screen_busy. Кадры экрана от участника, за которым слот не закреплён, не
+    // ретранслируются — иначе любой мог бы подмешать свою картинку в чужую
+    // полосу. Выход ведущего освобождает слот (removeParticipant).
+    const QList<ClientSession *> &screenSharers() const { return m_screenSharers; }
+    bool isScreenSharer(ClientSession *session) const
+    {
+        return m_screenSharers.contains(session);
+    }
+    // true — слот есть (или уже был за этим участником).
+    bool addScreenSharer(ClientSession *session, int limit);
+    void removeScreenSharer(ClientSession *session) { m_screenSharers.removeAll(session); }
 
     // Рассылка всем участникам; except (если задан) пропускается.
     void broadcastJson(const QJsonObject &obj, ClientSession *except = nullptr) const;
@@ -76,16 +83,22 @@ public:
     // [{ "id": ..., "name": ..., "mic": ..., "cam": ... }, ...] по участникам.
     QJsonArray participantsJson() const;
 
+    // Кто сейчас показывает экран — для join_ok.
+    QJsonArray screenIdsJson() const;
+
     // История чата: хранится последние kMaxHistory сообщений, отдаётся
     // новому участнику в join_ok, чтобы он видел разговор до своего входа.
     void appendChat(const ChatEntry &entry);
     QJsonArray historyJson() const;
 
+    // Порог backpressure для этой комнаты: растёт вместе с числом полос.
+    qint64 slowClientBytes() const;
+
 private:
     QString m_code;
     int m_ownerId = -1;
-    QList<ClientSession *> m_sessions;   // не владеет сессиями
-    ClientSession *m_screenSharer = nullptr;   // кто ведёт демонстрацию; не владеет
+    QList<ClientSession *> m_sessions;        // не владеет сессиями
+    QList<ClientSession *> m_screenSharers;   // кто ведёт демонстрации; не владеет
     QList<ChatEntry> m_history;
     qint64 m_emptySinceMs = 0;
     qint64 m_liveSinceMs = 0;
@@ -101,5 +114,11 @@ private:
     // всплеска (даже опорный кадр 4K вчетверо меньше) и заведомо меньше того,
     // что имеет смысл досылать: видео полуторасекундной давности не нужно
     // никому. См. broadcastBinary.
-    static constexpr qint64 kSlowClientBytes = 1500000;
+    //
+    // Считается НА ПОЛОСУ, а не на сокет: очередь у получателя общая, и когда
+    // в комнате идут три демонстрации, она наполняется втрое быстрее. С
+    // неизменным порогом «полторы секунды» превратились бы в полсекунды, и
+    // сервер начал бы резать видео там, где канал в порядке. Поэтому порог
+    // умножается на число живых полос видео — см. slowClientBytes().
+    static constexpr qint64 kSlowClientBytesPerLane = 1500000;
 };

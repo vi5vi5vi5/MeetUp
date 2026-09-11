@@ -11,6 +11,7 @@
 #include <QWebSocketServer>
 #include <QWebSocket>
 #include <QHostAddress>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QDateTime>
@@ -255,8 +256,14 @@ void ConferenceServer::handleJoin(ClientSession *session, const QJsonObject &msg
     };
     if (!roomTitle.isEmpty())
         joinOk.insert(QStringLiteral("room_title"), roomTitle);
-    if (room->screenSharer())
-        joinOk.insert(QStringLiteral("screen_id"), qint64(room->screenSharer()->id()));
+    // Кто сейчас показывает экран. screen_ids — список; screen_id оставлен
+    // рядом и несёт первого из них: клиент, выпущенный до нескольких
+    // демонстраций, читает его и показывает одну, как раньше.
+    const QJsonArray screenIds = room->screenIdsJson();
+    if (!screenIds.isEmpty()) {
+        joinOk.insert(QStringLiteral("screen_ids"), screenIds);
+        joinOk.insert(QStringLiteral("screen_id"), screenIds.first());
+    }
     session->sendJson(joinOk);
 
     // Теперь добавляем в комнату и уведомляем остальных.
@@ -298,7 +305,7 @@ bool ConferenceServer::dropDuplicate(ConferenceRoom *room, quint32 id)
     // Старое соединение вытесняется новым: session_replaced говорит клиенту
     // не переподключаться (иначе две вкладки выбивали бы друг друга вечно).
     sendError(dup, QStringLiteral("session_replaced"));
-    const bool wasSharer = room->screenSharer() == dup;
+    const bool wasSharer = room->isScreenSharer(dup);
     room->removeParticipant(dup);
     dup->setRoom(nullptr);
     dup->close();
@@ -388,17 +395,17 @@ void ConferenceServer::handleScreen(ClientSession *session, const QJsonObject &m
 
     const bool on = msg.value(QStringLiteral("on")).toBool();
     if (on) {
-        // Одна демонстрация на комнату — так клиентам не нужно делить
-        // сцену между несколькими экранами.
-        if (room->screenSharer() && room->screenSharer() != session) {
+        // Свободных слотов нет. Код ошибки прежний: старый клиент знает
+        // screen_busy и говорит «демонстрацию уже ведёт другой участник» —
+        // при лимите 1 это ровно то, что произошло.
+        if (!room->addScreenSharer(session, m_config.maxScreenShares)) {
             sendError(session, QStringLiteral("screen_busy"));
             return;
         }
-        room->setScreenSharer(session);
     } else {
-        if (room->screenSharer() != session)
+        if (!room->isScreenSharer(session))
             return;
-        room->setScreenSharer(nullptr);
+        room->removeScreenSharer(session);
     }
 
     room->broadcastJson(QJsonObject{
@@ -425,7 +432,7 @@ void ConferenceServer::onBinary(ClientSession *session, const QByteArray &data)
     // не услышать отказ и продолжать слать — их кадры молча отбрасываются.
     const quint8 type = quint8(data.at(0));
     if ((type == kMsgScreenCoded || type == kMsgScreenJpeg || type == kMsgScreenAudio)
-        && room->screenSharer() != session)
+        && !room->isScreenSharer(session))
         return;
 
     // Сервер вставляет sender_id (uint32 LE) сразу после message_type и
@@ -452,7 +459,7 @@ void ConferenceServer::onDisconnected(ClientSession *session)
 {
     ConferenceRoom *room = session->room();
     if (room) {
-        const bool wasSharer = room->screenSharer() == session;
+        const bool wasSharer = room->isScreenSharer(session);
         room->removeParticipant(session);
         room->broadcastJson(QJsonObject{
             {"type", "participant_left"},

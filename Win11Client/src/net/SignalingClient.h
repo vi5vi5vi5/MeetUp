@@ -38,7 +38,14 @@ class SignalingClient : public QObject {
         // Свой sender_id — QML сравнивает с screenId, чтобы понять, чья демонстрация.
         Q_PROPERTY(qint64       myId         READ myId         NOTIFY myIdChanged)
         // Кто ведёт демонстрацию экрана; 0 — никто. Слот в комнате один (§4.3).
+        // Кто сейчас показывает экран. Демонстраций может быть несколько —
+        // сколько разрешено, решает сервер (media.max_screen_shares).
+        Q_PROPERTY(QVariantList screenIds   READ screenIds    NOTIFY screenChanged)
+        // Первый из списка. Оставлен ради QML, которому нужна «какая-нибудь»
+        // демонстрация, и ради совместимости со старыми серверами.
         Q_PROPERTY(qint64       screenId     READ screenId     NOTIFY screenChanged)
+        // Показываем ли экран мы сами.
+        Q_PROPERTY(bool         screenSelf   READ screenSelf   NOTIFY screenChanged)
         // Время до сервера и обратно, мс. -1 — ещё не мерили (или связи нет).
         Q_PROPERTY(int          ping         READ ping         NOTIFY pingChanged)
 public:
@@ -60,7 +67,9 @@ public:
     QAbstractListModel* messages();
     QVariantList speakingIds() const { return m_speakingIds; }
     qint64 myId() const { return m_myId; }
-    qint64 screenId() const { return m_screenId; }
+    QVariantList screenIds() const { return m_screenIds; }
+    qint64 screenId() const { return m_screenIds.isEmpty() ? 0 : m_screenIds.first().toLongLong(); }
+    bool screenSelf() const { return m_screenIds.contains(QVariant(m_myId)); }
     int ping() const { return m_ping; }
 
     // Подсветить говорящего на ~450 мс (как веб). Зовёт AudioEngine по RMS,
@@ -149,7 +158,7 @@ private:
     void handleError(const QString& reason);
 
     void rebuildParticipants(const QJsonArray& serverList);
-    void setScreenId(qint64 id);
+    void setScreenIds(const QVariantList& ids);
     void setPing(int ms);
     void sendPing();                    // {"type":"ping"} — сервер вернёт t как есть
     void sendJson(const QJsonObject& msg);
@@ -181,7 +190,7 @@ private:
     bool    m_manualClose = false, m_fatal = false;
     bool    m_joinedOnce = false;            // защита от записи истории на каждом реконнекте
     int     m_ping = -1;                     // RTT, мс; -1 — не измерен
-    qint64  m_screenId = 0;                  // ведущий демонстрации (0 — никто)
+    QVariantList m_screenIds;                // ведущие демонстраций (пусто — никто)
     bool    m_wantScreen = false;            // мы хотим слот: повторяем заявку после реконнекта
 
     QString m_phase = "connecting";

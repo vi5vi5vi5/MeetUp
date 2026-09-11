@@ -22,10 +22,21 @@ void ConferenceRoom::addParticipant(ClientSession *session)
     m_emptySinceMs = 0;
 }
 
+bool ConferenceRoom::addScreenSharer(ClientSession *session, int limit)
+{
+    // Повторная просьба того же участника — не повод отказать: клиент мог не
+    // услышать подтверждение и спросить ещё раз.
+    if (m_screenSharers.contains(session))
+        return true;
+    if (limit > 0 && m_screenSharers.size() >= limit)
+        return false;
+    m_screenSharers.append(session);
+    return true;
+}
+
 void ConferenceRoom::removeParticipant(ClientSession *session)
 {
-    if (session == m_screenSharer)
-        m_screenSharer = nullptr;
+    m_screenSharers.removeAll(session);
     m_sessions.removeAll(session);
     if (m_sessions.isEmpty()) {
         m_emptySinceMs = QDateTime::currentMSecsSinceEpoch();
@@ -55,13 +66,30 @@ void ConferenceRoom::broadcastJson(const QJsonObject &obj, ClientSession *except
 void ConferenceRoom::broadcastBinary(const QByteArray &data, ClientSession *except,
                                      bool dropIfBusy) const
 {
+    const qint64 slow = slowClientBytes();
     for (ClientSession *s : m_sessions) {
         if (s == except)
             continue;
-        if (dropIfBusy && s->pendingBytes() > kSlowClientBytes)
+        if (dropIfBusy && s->pendingBytes() > slow)
             continue;
         s->sendBinary(data);
     }
+}
+
+// Порог «не поспевает» — на полосу. Полос всегда хотя бы одна (камеры), плюс
+// по одной на каждую идущую демонстрацию. Считать точное число говорящих камер
+// незачем: важно не ужать порог, когда потоков объективно больше.
+qint64 ConferenceRoom::slowClientBytes() const
+{
+    return kSlowClientBytesPerLane * (1 + m_screenSharers.size());
+}
+
+QJsonArray ConferenceRoom::screenIdsJson() const
+{
+    QJsonArray arr;
+    for (ClientSession *s : m_screenSharers)
+        arr.append(qint64(s->id()));
+    return arr;
 }
 
 QJsonArray ConferenceRoom::participantsJson() const

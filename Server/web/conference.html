@@ -98,6 +98,30 @@
     position: absolute; inset: 0; display: grid; place-items: center;
     color: var(--text-muted); font-size: var(--text-sm); font-weight: var(--weight-semibold);
   }
+  /* Листание демонстраций. Стрелки — по краям самой сцены, точки — под ней:
+     ровно там же, где живут страницы плиток, чтобы жест был один и тот же. */
+  .stage-nav {
+    position: absolute; top: 50%; transform: translateY(-50%); z-index: 4;
+    width: 40px; height: 40px; border-radius: 50%;
+    display: grid; place-items: center; cursor: pointer;
+    background: var(--scrim-chip); backdrop-filter: blur(6px);
+    border: 1px solid var(--border-strong); color: var(--text);
+  }
+  .stage-nav:hover:not(:disabled) { background: var(--surface-3); }
+  .stage-nav:disabled { opacity: .3; cursor: default; }
+  .stage-nav.l { left: 10px; }
+  .stage-nav.r { right: 10px; }
+  .stage-pages {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 8px 0 2px;
+  }
+  .stage-pages .dot {
+    height: 6px; width: 6px; border-radius: 999px; border: 0; padding: 0;
+    background: var(--border-strong); cursor: pointer;
+    transition: width .18s ease, background .18s ease;
+  }
+  .stage-pages .dot.on { width: 20px; background: var(--accent); }
+
   .stage-chip {
     position: absolute; left: 12px; bottom: 12px; display: flex; align-items: center; gap: 6px;
     background: var(--scrim-chip); backdrop-filter: var(--blur-chip); -webkit-backdrop-filter: var(--blur-chip);
@@ -740,7 +764,10 @@
     const [theater, setTheater] = useState(false);
     // Кто ведёт демонстрацию экрана (id участника, может быть свой) — одна
     // на комнату, закрепляется сервером.
-    const [screenId, setScreenId] = useState(null);
+    // Демонстраций может идти несколько; на сцене всегда одна — та, что на
+    // текущей странице. Листается стрелками, как страницы плиток.
+    const [screenIds, setScreenIds] = useState([]);
+    const [stagePage, setStagePage] = useState(0);
     const [screenFrames, setScreenFrames] = useState(() => new Set());
     // Закреплённый участник: его камера — во весь стейдж (клик по плитке),
     // важнее демонстрации. Локальная настройка, на других не влияет.
@@ -1000,7 +1027,11 @@
             self: h.sender_id === msg.sender_id,
             ...(await renderChatBody(h.text, h.image, h.image_dropped)),
           }))).then(setMessages);
-          setScreenId(msg.screen_id != null ? msg.screen_id : null);
+          // screen_ids — список ведущих; screen_id остаётся у старых серверов,
+          // которые про список ещё не знают.
+          setScreenIds(msg.screen_ids
+            || (msg.screen_id != null ? [msg.screen_id] : []));
+          setStagePage(0);
           setScreenFrames(new Set());
           engine.clearPeers();
           engine.requestKeyframe();   // просим у вещающих опорные кадры
@@ -1039,7 +1070,7 @@
           // Сервер закрепил/освободил демонстрацию. Своё подтверждение —
           // сигнал начать слать кадры экрана.
           if (msg.on) {
-            setScreenId(msg.id);
+            setScreenIds(cur => cur.includes(msg.id) ? cur : [...cur, msg.id]);
             setPinnedId(null);   // новая демонстрация выходит на сцену
             if (msg.id === M.myId && M.displayStream) {
               engine.startScreen(M.displayStream);
@@ -1049,7 +1080,7 @@
               setSharing(true);
             }
           } else {
-            setScreenId(cur => (cur === msg.id ? null : cur));
+            setScreenIds(cur => cur.filter(id => id !== msg.id));
             dropFromSet(setScreenFrames, msg.id);
             if (msg.id === M.myId && stateRef.current.sharing) stopSharing(false);
           }
@@ -1307,16 +1338,13 @@
     }
 
     // Демонстрация экрана идёт отдельным потоком, камеру не трогает.
-    // В комнате может быть только одна: сначала захватываем экран, потом
-    // просим сервер закрепить его за нами — кадры пойдут после подтверждения
-    // (сообщение "screen" в onJson), при отказе придёт error screen_busy.
+    // Сколько демонстраций может идти разом, знает сервер: сначала
+    // захватываем экран, потом просим слот — кадры пойдут после подтверждения
+    // (сообщение "screen" в onJson), свободных слотов нет — придёт screen_busy.
+    // Проверять лимит здесь самим нельзя: он у каждого сервера свой.
     async function toggleShare() {
       const s = stateRef.current;
       if (s.sharing) { stopSharing(true); return; }
-      if (s.screenId != null) {
-        showNotice("Демонстрацию экрана уже ведёт другой участник.");
-        return;
-      }
       if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) return;
       let stream;
       try {
@@ -1920,7 +1948,14 @@
           if (s.screenId != null && s.screenId !== s.myId) { e.preventDefault(); M.keys.toggleTheater(); }
           return;
         }
-        if (s.stageMode) return;   // в режиме сцены страниц нет
+        // В режиме сцены стрелки листают демонстрации, а не страницы плиток.
+        if (s.stageMode) {
+          if (s.screenCount > 1) {
+            if (e.key === "ArrowLeft") setStagePage(p => Math.max(0, p - 1));
+            if (e.key === "ArrowRight") setStagePage(p => Math.min(s.screenCount - 1, p + 1));
+          }
+          return;
+        }
         if (e.key === "ArrowLeft") setPage(p => Math.max(0, p - 1));
         if (e.key === "ArrowRight") setPage(p => Math.min(stateRef.current.pages - 1, p + 1));
       };
@@ -1992,7 +2027,7 @@
     // ведущего демонстрацию не прячем никогда — иначе сцена осталась бы без
     // хозяина, а человек не понял бы, куда делся тот, на кого он смотрит.
     const tiles = allTiles.filter(t => {
-      if (t.id != null && (t.id === pinnedId || t.id === screenId)) return true;
+      if (t.id != null && (t.id === pinnedId || screenIds.includes(t.id))) return true;
       if (t.self) return showSelf;
       if (hideNoVideo && !(t.cam && t.hasFrame)) return false;
       return true;
@@ -2000,6 +2035,10 @@
 
     // Режим сцены: демонстрация экрана или закреплённый участник —
     // сцена + плёнка камер вместо сетки. Закрепление важнее демонстрации.
+    // Страница сцены не должна висеть за краем, когда ведущий ушёл.
+    const screenCount = screenIds.length;
+    const stageIdx = screenCount > 0 ? Math.min(stagePage, screenCount - 1) : 0;
+    const screenId = screenCount > 0 ? screenIds[stageIdx] : null;
     const screenActive = screenId != null;
     const screenSelf = screenActive && myId != null && screenId === myId;
     const sharerName = screenSelf
@@ -2049,7 +2088,8 @@
     // Актуальный снимок состояния для обработчиков вне рендера
     // (WS-сообщения, таймеры, аудио-callback).
     useEffect(() => {
-      stateRef.current = { phase, mic, cam, sharing, screenId, myId, stageMode, tab, panelOpen,
+      stateRef.current = { phase, mic, cam, sharing, screenId, screenCount, stageIdx,
+                          myId, stageMode, tab, panelOpen,
                            isMobile, pages, settingsOpen, theater };
       // Слушатель клавиш навешан один раз и держал бы первые версии этих
       // функций со старым состоянием — берём их через ref.
@@ -2841,9 +2881,27 @@
                   <div className="stage-chip">
                     <Icon name="screen" size={14} />
                     {screenSelf ? "Вы демонстрируете экран" : "Демонстрация — " + (sharerName || "участник")}
+                    {screenCount > 1 &&
+                      <span style={{ color: "var(--text-muted)" }}>
+                        · {stageIdx + 1} из {screenCount}
+                      </span>}
                     {(screenSelf ? shareAudio : screenAudioIn) &&
                       <span style={{ color: "var(--accent-ink)" }}>· со звуком</span>}
                   </div>
+                  {/* Несколько демонстраций — листаем. Одна: ни стрелок, ни
+                      точек, экран выглядит ровно как раньше. */}
+                  {screenCount > 1 && <>
+                    <button className="stage-nav l" disabled={stageIdx === 0}
+                            aria-label="Предыдущая демонстрация"
+                            onClick={(e) => { e.stopPropagation(); setStagePage(p => Math.max(0, p - 1)); }}>
+                      <Icon name="arrow-right" size={20} style={{ transform: "scaleX(-1)" }} />
+                    </button>
+                    <button className="stage-nav r" disabled={stageIdx >= screenCount - 1}
+                            aria-label="Следующая демонстрация"
+                            onClick={(e) => { e.stopPropagation(); setStagePage(p => Math.min(screenCount - 1, p + 1)); }}>
+                      <Icon name="arrow-right" size={20} />
+                    </button>
+                  </>}
                   <div className="stage-tools" onClick={(e) => e.stopPropagation()}>
                     {/* Ручка громкости — только у ЧУЖОЙ демонстрации и только
                         пока звук реально идёт: свою фонограмму себе не крутят,
@@ -2851,12 +2909,16 @@
                     {!screenSelf && screenAudioIn &&
                       <div className={"scrvol" + (isMobile ? " open" : "")}>
                         <button onClick={toggleScreenMute}
-                                aria-label={screenVol === 0 ? "Вернуть звук демонстрации" : "Приглушить демонстрацию"}
-                                title={screenVol === 0 ? "Вернуть звук демонстрации" : "Приглушить демонстрацию"}>
+                                aria-label={screenVol === 0 ? "Вернуть звук демонстраций" : "Приглушить демонстрации"}
+                                title={screenCount > 1
+                                  ? (screenVol === 0 ? "Вернуть звук всех демонстраций" : "Приглушить все демонстрации")
+                                  : (screenVol === 0 ? "Вернуть звук демонстрации" : "Приглушить демонстрацию")}>
                           <Icon name={screenVol === 0 ? "volume-off" : "volume"} size={18} />
                         </button>
                         <input type="range" className="set-range" min="0" max="200" step="5"
-                               value={screenVol} aria-label="Громкость демонстрации"
+                               value={screenVol}
+                               aria-label={screenCount > 1 ? "Громкость демонстраций" : "Громкость демонстрации"}
+                               title={screenCount > 1 ? "Одна на все демонстрации" : ""}
                                onChange={(e) => changeScreenVol(+e.target.value)}
                                style={{ background: rangeFill(screenVol, 200) }} />
                         <span className="pct">{screenVol}%</span>
@@ -2874,6 +2936,13 @@
                   </div>
                 </>}
               </div>
+              {screenCount > 1 && !pinActive &&
+                <div className="stage-pages">
+                  {screenIds.map((id, i) =>
+                    <button key={"sd" + id} className={"dot" + (i === stageIdx ? " on" : "")}
+                            aria-label={"Демонстрация " + (i + 1)}
+                            onClick={() => setStagePage(i)} />)}
+                </div>}
             </> : (
               <div className="grid" style={gridStyle}>
                 {visible.map((t, i) => renderTile(t, i, false))}

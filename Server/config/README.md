@@ -108,6 +108,7 @@ main.cpp  ──читает──►  config/  ──передаёт──► 
 | `rooms.max_personal_per_user` | `1` | Личных комнат на человека |
 | `rooms.code_min_len` | `3` | Нижняя граница кода личной комнаты |
 | `rooms.max_aliases_per_room` | `5` | Ссылок-приглашений на комнату |
+| `media.max_screen_shares` | `1` | Демонстраций в комнате одновременно |
 | `chat.history_size` | `500` | Сообщений в истории комнаты |
 | `chat.history_images` | `24` | Картинок в истории |
 | `chat.image_max_kb` | `440` | Потолок картинки в чате |

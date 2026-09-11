@@ -199,7 +199,9 @@ void AudioEngine::updatePlayback() {
 // не наш, снимать чужой звук незачем.
 void AudioEngine::updateScreenAudio() {
     const qint64 me = m_conf->myId();
-    const bool sharing = me != 0 && m_conf->screenId() == me;
+    // screenSelf(): в комнате может идти несколько демонстраций, наша —
+    // не обязательно первая.
+    const bool sharing = me != 0 && m_conf->screenSelf();
     const bool want = m_live && sharing && m_settings->screenAudio();
     // Чей звук снимать, решает вид источника. Показываем окно — берём звук
     // только его процесса: делиться музыкой из плеера, показывая документ,

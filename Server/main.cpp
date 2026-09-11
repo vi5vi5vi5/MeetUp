@@ -160,6 +160,8 @@ int main(int argc, char *argv[])
         closed << QStringLiteral("потолок разовых комнат: %1").arg(cfg.maxTotalRooms);
     if (cfg.maxPersonalPerUser != 1)
         closed << QStringLiteral("личных комнат на человека: %1").arg(cfg.maxPersonalPerUser);
+    if (cfg.maxScreenShares != 1)
+        closed << QStringLiteral("демонстраций в комнате: %1").arg(cfg.maxScreenShares);
     if (!closed.isEmpty())
         qCInfo(lcApp).noquote() << QStringLiteral("Ограничения: %1").arg(closed.join(
             QStringLiteral("; ")));

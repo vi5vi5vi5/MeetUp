@@ -89,20 +89,35 @@ Item {
         }
         Audio.outputMuted = deafen
     }
+    // Сколько демонстраций разрешено, знает сервер: просто просим слот, а
+    // отказ (screen_busy) придёт ответом и превратится в уведомление. Проверять
+    // лимит здесь самим нельзя — он у каждого сервера свой.
     function toggleShare()  {
         if (sharing) Conf.setScreenShare(false)
-        else if (screenActive)
-            notify("Демонстрацию уже ведёт " + (sharerName || "другой участник") + ".")
         else picker.open = true
     }
 
-    // Демонстрация экрана: единственный источник правды — слот на сервере
-    // (§4.3). Кнопка в доке отражает его, а не локальное «я нажал».
-    readonly property bool screenActive: Conf.screenId !== 0
-    readonly property bool sharing: screenActive && Conf.screenId === Conf.myId
+    // Демонстрации экрана: единственный источник правды — слоты на сервере
+    // (§4.3). Кнопка в доке отражает их, а не локальное «я нажал».
+    //
+    // Демонстраций может идти несколько (сколько — решает сервер), но на сцене
+    // всегда одна: та, что на текущей странице. Листается стрелками — ровно
+    // так же, как страницы плиток, чтобы жест был один и тот же.
+    readonly property var screenIds: Conf.screenIds
+    readonly property int screenCount: screenIds.length
+    readonly property bool screenActive: screenCount > 0
+    readonly property bool sharing: Conf.screenSelf
+
+    property int stagePage: 0
+    // Ведущий ушёл — номер страницы не должен висеть за краем списка.
+    readonly property int stageIdx: screenCount > 0
+        ? Math.min(stagePage, screenCount - 1) : 0
+    readonly property var stageSid: screenCount > 0 ? screenIds[stageIdx] : 0
+    readonly property bool stageSelf: stageSid === Conf.myId
+
     readonly property string sharerName: {
-        if (sharing) return "вы"
-        var p = Conf.participants.filter(function (x) { return x.id === Conf.screenId })
+        if (root.stageSelf) return "вы"
+        var p = Conf.participants.filter(function (x) { return x.id === root.stageSid })
         return p.length > 0 ? p[0].name : ""
     }
 
@@ -235,15 +250,22 @@ Item {
         // (закрепить обратно всегда можно кликом по плёнке). Конец
         // демонстрации закрывает и полноэкранный показ.
         function onScreenChanged() {
-            if (Conf.screenId !== 0) root.pinnedId = null
-            else if (root.theater) root.toggleTheater()
+            if (root.screenCount > 0) {
+                root.pinnedId = null
+                // Новую демонстрацию показываем сразу: человек включил показ
+                // или кто-то начал показывать — смотреть он хочет на это, а не
+                // на страницу, где остался стоять.
+                root.stagePage = root.screenCount - 1
+            } else if (root.theater) {
+                root.toggleTheater()
+            }
             // Демонстрация — самое крупное изменение сцены, и слышать его стоит
             // независимо от того, своя она или чужая.
             if (root._sfxArmed)
-                Sfx.play(Conf.screenId !== 0 ? "share-on" : "share-off")
+                Sfx.play(root.screenCount > 0 ? "share-on" : "share-off")
         }
         function onScreenBusy() {
-            root.notify("Демонстрацию экрана уже ведёт другой участник.")
+            root.notify("Свободных мест для демонстрации сейчас нет.")
         }
     }
     Timer { id: linkCopyReset; interval: 1400; onTriggered: root.linkCopied = false }
@@ -885,8 +907,13 @@ Item {
                 visible: root.screenActive && root.pinnedId === null
                 active: root.screenActive && root.pinnedId === null
                 sourceComponent: ScreenStage {
-                    sid: Conf.screenId
-                    isSelf: root.sharing
+                    sid: root.stageSid
+                    isSelf: root.stageSelf
+                    page: root.stageIdx
+                    pageCount: root.screenCount
+                    onPrevRequested: root.stagePage = Math.max(0, root.stageIdx - 1)
+                    onNextRequested: root.stagePage = Math.min(root.screenCount - 1,
+                                                              root.stageIdx + 1)
                     sharerName: root.sharerName
                     expanded: root.theater
                     onExpandRequested: root.toggleTheater()

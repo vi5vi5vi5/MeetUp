@@ -41,7 +41,8 @@
 
 - Комнаты: вход/выход, список участников, состояние микрофона и камеры
 - Текстовый чат с временными метками и картинками (история отдаётся вошедшему)
-- Демонстрация экрана (одна на комнату)
+- Демонстрация экрана; сколько их может идти в комнате разом — настройка
+  (`media.max_screen_shares`, по умолчанию одна)
 - Бинарный релей медиа; формат кадра серверу непрозрачен (клиенты шлют видео до
   720p — H.264/VP8/VP9 через WebCodecs, звук Opus, фолбэк JPEG/PCM)
 - Сквозное шифрование по желанию участников: AES-256-GCM целиком на клиенте —
@@ -212,6 +213,7 @@ level = errors              # off | errors (умолчание) | normal
 | `[web]` | `enabled` |
 | `[auth]` | `registration`, `allow_anonymous_join`, `session_ttl_days`, `min_password_len`, `pbkdf2_iters` |
 | `[rooms]` | `anonymous_create`, `max_total`, `idle_ttl_s`, `max_personal_per_user`, `code_min_len`, `max_aliases_per_room` |
+| `[media]` | `max_screen_shares` |
 | `[chat]` | `history_size`, `history_images`, `image_max_kb` |
 | `[log]` | `level` |
 

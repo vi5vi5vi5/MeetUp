@@ -1105,6 +1105,17 @@
     }
 
     async function decodeVideo(peer, sub, sinks, isScreen, sender, flags, codecId, ts, body) {
+      // Некуда рисовать — незачем и разбирать. Плитки нет, когда участник на
+      // другой странице сетки, спрятан фильтром «без видео» или его
+      // демонстрация сейчас не на сцене.
+      //
+      // Пропуск кадров безопасен ровно потому, что поток чинится опорным
+      // кадром: как только холст появится, wantSink() попросит KEYFRAME_REQ.
+      // Поэтому здесь же помечаем поток прерванным.
+      if (!sinks.has(sender)) {
+        sub.awaitKey = true;
+        return;
+      }
       if (!sub.dec || sub.codec !== codecId) {
         // Кодек нам незнаком, или браузер его не открывает (нет аппаратного
         // декодера). Для отправителя это одно и то же: пусть шлёт H.264.
@@ -1238,6 +1249,9 @@
     }
 
     function paintJpeg(sinks, isScreen, sender, body) {
+      // Та же причина, что и в decodeVideo: нет холста — нет работы. JPEG
+      // самодостаточен, опорного кадра ждать не нужно.
+      if (!sinks.has(sender)) return;
       const blob = new Blob([body], { type: "image/jpeg" });
       createImageBitmap(blob).then((bmp) => {
         const canvas = sinks.get(sender);
@@ -1358,8 +1372,17 @@
       let cb = refs.get(id);
       if (!cb) {
         cb = (el) => {
-          if (el) sinks.set(id, el);
-          else sinks.delete(id);
+          if (el) {
+            const appeared = !sinks.has(id);
+            sinks.set(id, el);
+            // Холст родился — поток этого отправителя мы до сих пор не
+            // разбирали (см. гейт в decodeVideo), значит начинать нужно с
+            // опорного кадра. Без этой просьбы плитка оставалась бы пустой
+            // до ближайшей каденции — до трёх секунд.
+            if (appeared) requestKeyframe();
+          } else {
+            sinks.delete(id);
+          }
         };
         refs.set(id, cb);
       }
