@@ -458,16 +458,13 @@ The media pipeline (see `docs/ROADMAP.md`).
   a focused window.
 
 - **M8 Settings** also owns the voice-processing switches in `SettingsAudio.qml`.
-  Noise suppression and auto-gain are wired; **echo cancellation is still
-  `soon: true`**, and that is not laziness about a "better denoiser". An echo
-  canceller is a different problem: it needs a second, reference signal (what
-  went to the speakers), an estimate of the round-trip delay, and non-linear
-  post-processing of the residual. Realistically that means WebRTC's AEC3.
-  The architecture is already in its favour — `mixOneFrame()` is the reference,
-  `sinkQueuedMs()` is the delay, and both live on the same thread as capture,
-  which is where naive AEC integrations usually come apart. Note that AEC must
-  run **before** the denoiser: suppression is non-linear and an adaptive filter
-  placed after it stops converging.
+  All three are wired now: noise suppression, auto-gain and — since 1.11 — echo
+  cancellation (`EchoCanceller` on SpeexDSP; the capture-path section above has
+  the details). The chain order is echo → noise → gain, and it is not
+  arbitrary: suppression is non-linear, so an adaptive filter placed after it
+  stops converging. WebRTC's AEC3 was the expected answer here. SpeexDSP turned
+  out to be enough once alignment and clock drift were handled ourselves — and
+  it is one small vcpkg port instead of dragging in WebRTC.
 
 External deps introduced here: FFmpeg (avcodec/swscale with `openh264` + `vpx`
 features) and libopus, both MSVC via vcpkg.
