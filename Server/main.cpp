@@ -72,10 +72,6 @@ int main(int argc, char *argv[])
     if (webRoot.isEmpty())
         webRoot = QDir(app.applicationDirPath()).filePath(QStringLiteral("web"));
 
-    // Общий реестр комнат: HTTP API создаёт комнаты, WebSocket-relay
-    // подключает в них участников.
-    RoomRegistry registry;
-
     // Папка данных создаётся сама и добавлена в .gitignore — git pull её
     // не трогает. База — один файл mount/meetup.db.
     QString dataDir = parser.value(dataDirOption);
@@ -106,9 +102,18 @@ int main(int argc, char *argv[])
     for (const QString &warning : cfg.warnings)
         qWarning().noquote() << warning;
 
+    // Общий реестр комнат: HTTP API создаёт комнаты, WebSocket-relay
+    // подключает в них участников. Объявлен ДО серверов: они держат сырой
+    // указатель на него, и умереть он должен последним.
+    RoomRegistry registry(ChatLimits{cfg.chatHistorySize, cfg.chatHistoryImages},
+                          cfg.maxTotalRooms);
+
     // Хранилища и сервисы (как в MedFlow: репозитории → сервисы → серверы).
     // Репозитории на SQLite; InMemory-реализации остаются для тестов и как
     // образец — интерфейсы у них общие.
+    //
+    // Сервисы получают не конфиг, а готовые числа: правила не должны знать,
+    // из какого файла они взялись. Перевод «настройка -> предел» — здесь.
     auto db = std::make_shared<SqliteDb>(QDir(dataDir).filePath(QStringLiteral("meetup.db")));
     if (!db->isOpen())
         return 1;
@@ -116,11 +121,16 @@ int main(int argc, char *argv[])
     auto sessions = std::make_shared<SqliteSessions>(db);
     auto personalRooms = std::make_shared<SqlitePersonalRooms>(db);
     auto roomAliases = std::make_shared<SqliteRoomAliases>(db);
-    auto auth = std::make_shared<AuthService>(users, sessions);
-    auto rooms = std::make_shared<PersonalRoomService>(personalRooms, roomAliases);
+    auto auth = std::make_shared<AuthService>(
+        users, sessions,
+        AuthLimits{qint64(cfg.sessionTtlDays) * 24 * 3600 * 1000,
+                   cfg.minPasswordLen, cfg.pbkdf2Iters});
+    auto rooms = std::make_shared<PersonalRoomService>(
+        personalRooms, roomAliases,
+        RoomLimits{cfg.codeMinLen, cfg.maxAliasesPerRoom});
 
     HttpApi api(auth, rooms, &registry, dataDir, cfg);
-    ConferenceServer conference(wsPort, &registry, auth, rooms);
+    ConferenceServer conference(wsPort, &registry, auth, rooms, cfg);
     HttpFileServer http(httpPort, webRoot, &api, cfg.webEnabled);
 
     if (!conference.isListening() || !http.isListening())
@@ -132,6 +142,21 @@ int main(int argc, char *argv[])
     QObject::connect(&purgeSessionsTimer, &QTimer::timeout,
                      [&auth] { auth->purgeExpiredSessions(); });
     purgeSessionsTimer.start(60 * 60 * 1000);
+
+    QStringList closed;
+    if (!cfg.registrationOpen)
+        closed << QStringLiteral("регистрация закрыта");
+    if (!cfg.allowAnonymousJoin)
+        closed << QStringLiteral("вход без аккаунта запрещён");
+    if (cfg.anonymousCreate == ServerConfig::RoomCreate::Account)
+        closed << QStringLiteral("разовые комнаты — только вошедшим");
+    else if (cfg.anonymousCreate == ServerConfig::RoomCreate::Off)
+        closed << QStringLiteral("разовые комнаты выключены");
+    if (cfg.maxTotalRooms > 0)
+        closed << QStringLiteral("потолок разовых комнат: %1").arg(cfg.maxTotalRooms);
+    if (!closed.isEmpty())
+        qCInfo(lcApp).noquote() << QStringLiteral("Ограничения: %1").arg(closed.join(
+            QStringLiteral("; ")));
 
     if (cfg.webEnabled)
         qCInfo(lcApp).noquote()

@@ -45,6 +45,11 @@ public:
 	// Сбросить текст ошибки (при переходах между экранами/модалками).
 	Q_INVOKABLE void clearError() { setError(""); }
 
+	// Минимальная длина пароля приходит от сервера (GET /api/config): проверка
+	// на клиенте должна совпадать с серверной, иначе форма отвергает то, что
+	// сервер принял бы. Умолчание — прежние 8 символов.
+	void setMinPasswordLen(int n) { m_minPasswordLen = n > 0 ? n : 8; }
+
 signals:
 	void busyChanged();
 	void errorTextChanged();
@@ -64,7 +69,8 @@ private:
 	void setBusy(bool v);
 	void setError(const QString& text);
 
-	ApiClient* m_api;         // не владеем (передан снаружи)
+	ApiClient* m_api;
+	int m_minPasswordLen = 8;         // не владеем (передан снаружи)
 	bool m_busy = false;
 	QString m_errorText;
 	QString m_displayName;

@@ -11,6 +11,10 @@ AuthScaffold {
 
     heroTitle: "С возвращением<br/>в <font color='" + Theme.accentInk + "'>эфир</font>"
     heroSub: "Войдите в аккаунт, чтобы продолжить встречи, историю комнат и контакты."
+    // Имя сервера вместо общей подписи: человек должен видеть, КУДА он
+    // подключается, — особенно когда серверов у него несколько.
+    heroMeta: Server.name !== "MeetUp" ? "Сервер «" + Server.name + "»"
+                                       : "Открытая видеосвязь без установки"
 
     Field {
         width: parent.width
@@ -41,18 +45,26 @@ AuthScaffold {
         enabled: !Auth.busy
         onClicked: Auth.login(loginInput.text, passInput.text)
     }
+    // Кнопок, которые сервер всё равно отвергнет, быть не должно: отказ после
+    // заполненной формы раздражает сильнее, чем отсутствие кнопки.
     AppButton {
         width: parent.width
+        visible: Server.registration
         text: "Создать аккаунт"
         variant: "ghost"
         icon: "plus"
         onClicked: root.registerRequested()
     }
 
-    Divider { width: parent.width; label: "или" }
+    Divider {
+        width: parent.width
+        label: "или"
+        visible: Server.anonymousJoin
+    }
 
     AppButton {
         width: parent.width
+        visible: Server.anonymousJoin
         text: "Войти без аккаунта"
         variant: "secondary"
         icon: "arrow-right"
@@ -64,7 +76,9 @@ AuthScaffold {
         horizontalAlignment: Text.AlignHCenter
         wrapMode: Text.WordWrap
         text: Auth.errorText !== "" ? Auth.errorText
-                                : "Аккаунт хранит ваше имя между встречами."
+              : !Server.registration
+                ? "Регистрация на этом сервере закрыта — войдите выданным логином."
+                : "Аккаунт хранит ваше имя между встречами."
         color: Auth.errorText !== "" ? Theme.danger : Theme.textFaint   // <— красный при ошибке
         font.family: Theme.uiFont
         font.pixelSize: Theme.textXs
@@ -97,6 +111,7 @@ AuthScaffold {
                     Sys.setServer(text)
                     text = Sys.serverAddress
                     Auth.checkSession()   // вдруг на этом сервере жива сессия — сразу впустит
+                    Server.refresh()      // у другого сервера и правила другие
                 }
             }
         }

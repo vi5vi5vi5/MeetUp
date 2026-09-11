@@ -61,7 +61,7 @@ private:
     ApiResponse handleMyAvatar(const HttpRequest &req);
     ApiResponse handleUserAvatar(const QString &idStr);
     QString avatarPath(int userId) const;
-    ApiResponse handleCreateRoom();
+    ApiResponse handleCreateRoom(const HttpRequest &req);
     ApiResponse handleCheckRoom(const QString &code);
 
     // Публичный портрет сервера: имя, версия сборки, что на нём разрешено.

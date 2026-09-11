@@ -806,6 +806,11 @@
     const [code, setCode] = useState("");
     const [err, setErr] = useState("");
     const [busy, setBusy] = useState(false);
+    // Разовые комнаты могут быть выключены на сервере целиком. Режим "account"
+    // нас не касается: на этой странице человек уже вошёл.
+    const [cfg, setCfg] = useState(() => MeetUp.serverConfigNow());
+    useEffect(() => { MeetUp.serverConfig().then(setCfg); }, []);
+    const canCreate = (cfg.anonymous_rooms || "open") !== "off";
     async function join() {
       const c = code.trim();
       if (!c) { setErr("Введите код комнаты."); return; }
@@ -826,7 +831,13 @@
         return;
       }
       setBusy(false);
-      setErr("Не удалось создать комнату. Попробуйте позже.");
+      const code2 = resp.body && resp.body.error;
+      if (code2 === "server_full")
+        setErr("Сервер сейчас занят: комнат слишком много. Попробуйте через несколько минут.");
+      else if (code2 === "rooms_closed")
+        setErr("Владелец сервера отключил разовые конференции — пользуйтесь личной комнатой.");
+      else
+        setErr("Не удалось создать комнату. Попробуйте позже.");
     }
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -836,10 +847,14 @@
                  onKeyDown={(e) => e.key === "Enter" && join()} />
         </Field>
         <Button variant="primary" block iconRight="arrow-right" disabled={busy} onClick={join}>Подключиться</Button>
-        <div className="hu-divider"><span>или</span></div>
-        <Button variant="ghost" block icon="plus" disabled={busy} onClick={createConf}>Создать конференцию</Button>
+        {canCreate && <>
+          <div className="hu-divider"><span>или</span></div>
+          <Button variant="ghost" block icon="plus" disabled={busy} onClick={createConf}>Создать конференцию</Button>
+        </>}
         <div style={{ textAlign: "center", fontSize: 12, color: err ? "var(--danger)" : "var(--text-faint)" }}>
-          {err || "Код новой конференции сгенерирует сервер."}
+          {err || (canCreate
+            ? "Код новой конференции сгенерирует сервер."
+            : "Разовые конференции на этом сервере выключены — встречайтесь в личной комнате.")}
         </div>
       </div>
     );

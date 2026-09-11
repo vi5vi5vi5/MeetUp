@@ -493,9 +493,16 @@ Item {
                         enabled: !Rooms.busy
                         onClicked: Rooms.joinByCode(otherCode.text, Auth.displayName)
                     }
-                    Divider { width: parent.width; label: "или" }
+                    // Разовые конференции могут быть выключены на сервере целиком;
+                    // режим "account" нас не касается — здесь человек уже вошёл.
+                    Divider {
+                        width: parent.width
+                        label: "или"
+                        visible: Server.anonymousRooms !== "off"
+                    }
                     AppButton {
                         width: parent.width
+                        visible: Server.anonymousRooms !== "off"
                         text: "Создать конференцию"
                         variant: "ghost"
                         icon: "plus"
@@ -506,7 +513,9 @@ Item {
                         width: parent.width
                         horizontalAlignment: Text.AlignHCenter
                         text: Rooms.errorText !== "" ? Rooms.errorText
-                             : "Код новой конференции сгенерирует сервер."
+                             : Server.anonymousRooms === "off"
+                               ? "Разовые конференции на этом сервере выключены — встречайтесь в личной комнате."
+                               : "Код новой конференции сгенерирует сервер."
                         color: Rooms.errorText !== "" ? Theme.danger : Theme.textFaint
                         font.family: Theme.uiFont
                         font.pixelSize: Theme.textXs

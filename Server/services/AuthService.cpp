@@ -15,11 +15,13 @@ namespace {
 // вход не раздражает, а перебор утёкших хешей всё ещё дорог. Число хранится
 // в User::passIters — его можно поднять в любой момент: старые хеши
 // проверяются со своей стоимостью и тихо перевариваются при входе (rehash).
-constexpr int kPassIters = 64000;
+// Значение задаётся владельцем сервера (AuthLimits::pbkdf2Iters).
 constexpr int kSaltLen = 16;
 constexpr int kHashLen = 64;
 
-constexpr int kMinPasswordLen = 8;
+// Верхняя граница пароля не настраивается: она защищает не пароль, а нас
+// самих — PBKDF2 от мегабайтной строки считается ровно столько, сколько эта
+// строка длинная.
 constexpr int kMaxPasswordLen = 128;
 
 QByteArray randomBytes(int n)
@@ -48,8 +50,9 @@ bool constantTimeEquals(const QByteArray &a, const QByteArray &b)
 
 } // namespace
 
-AuthService::AuthService(std::shared_ptr<IUsers> users, std::shared_ptr<ISessions> sessions)
-    : m_users(std::move(users)), m_sessions(std::move(sessions))
+AuthService::AuthService(std::shared_ptr<IUsers> users, std::shared_ptr<ISessions> sessions,
+                         AuthLimits limits)
+    : m_users(std::move(users)), m_sessions(std::move(sessions)), m_limits(limits)
 {
 }
 
@@ -87,7 +90,7 @@ Session AuthService::createSession(int userId)
                                                            | QByteArray::OmitTrailingEquals));
     s.userId = userId;
     s.createdAtMs = QDateTime::currentMSecsSinceEpoch();
-    s.expiresAtMs = s.createdAtMs + kSessionTtlMs;
+    s.expiresAtMs = s.createdAtMs + m_limits.sessionTtlMs;
     m_sessions->save(s);
     return s;
 }
@@ -121,7 +124,7 @@ void AuthService::registerUserAsync(const QString &rawLogin, const QString &pass
         return;
     }
 
-    if (password.size() < kMinPasswordLen || password.size() > kMaxPasswordLen) {
+    if (password.size() < m_limits.minPasswordLen || password.size() > kMaxPasswordLen) {
         done(AuthResult::fail("weak_password"));
         return;
     }
@@ -133,7 +136,7 @@ void AuthService::registerUserAsync(const QString &rawLogin, const QString &pass
 
     const QByteArray salt = randomBytes(kSaltLen);
     hashInPool(
-        [this, password, salt] { return hashPassword(password, salt, kPassIters); },
+        [this, password, salt] { return hashPassword(password, salt, m_limits.pbkdf2Iters); },
         [this, login, displayName, salt, done](const QByteArray &hash) {
             // Пока хеш считался, логин могли занять параллельным запросом.
             if (m_users->findByLogin(login).has_value()) {
@@ -144,7 +147,7 @@ void AuthService::registerUserAsync(const QString &rawLogin, const QString &pass
             User u;
             u.login = login;
             u.displayName = displayName;
-            u.passIters = kPassIters;
+            u.passIters = m_limits.pbkdf2Iters;
             u.passSalt = salt;
             u.passHash = hash;
             u.createdAtMs = QDateTime::currentMSecsSinceEpoch();
@@ -167,7 +170,7 @@ void AuthService::loginAsync(const QString &rawLogin, const QString &password, A
         // Хеш считаем и для неизвестного логина: иначе по мгновенному отказу
         // можно перечислять занятые логины (timing-оракул).
         static const QByteArray dummySalt(kSaltLen, '\0');
-        hashInPool([this, password] { return hashPassword(password, dummySalt, kPassIters); },
+        hashInPool([this, password] { return hashPassword(password, dummySalt, m_limits.pbkdf2Iters); },
                    [done](const QByteArray &) { done(AuthResult::fail("wrong_credentials")); });
         return;
     }
@@ -181,9 +184,9 @@ void AuthService::loginAsync(const QString &rawLogin, const QString &password, A
                 return;
             }
 
-            // Стоимость хеша устарела (kPassIters подняли) — переварим пароль
+            // Стоимость хеша устарела (pbkdf2_iters подняли) — переварим пароль
             // с актуальной, пока он в руках. Пользователя это не задерживает.
-            if (u.passIters != kPassIters)
+            if (u.passIters != m_limits.pbkdf2Iters)
                 rehash(u.id, password);
 
             AuthResult r;
@@ -198,14 +201,14 @@ void AuthService::rehash(int userId, const QString &password)
 {
     const QByteArray salt = randomBytes(kSaltLen);
     hashInPool(
-        [this, password, salt] { return hashPassword(password, salt, kPassIters); },
+        [this, password, salt] { return hashPassword(password, salt, m_limits.pbkdf2Iters); },
         [this, userId, salt](const QByteArray &hash) {
             std::optional<User> u = m_users->findById(userId);
             if (!u.has_value())
                 return;   // пользователя успели удалить
             u->passSalt = salt;
             u->passHash = hash;
-            u->passIters = kPassIters;
+            u->passIters = m_limits.pbkdf2Iters;
             m_users->save(*u);
         });
 }
@@ -239,9 +242,9 @@ std::optional<User> AuthService::userByToken(const QString &token)
 
     // Скользящее продление: активный пользователь не разлогинится никогда,
     // а покинувший проект — через месяц.
-    if (session->expiresAtMs - now < kSessionTtlMs / 2) {
+    if (session->expiresAtMs - now < m_limits.sessionTtlMs / 2) {
         Session renewed = *session;
-        renewed.expiresAtMs = now + kSessionTtlMs;
+        renewed.expiresAtMs = now + m_limits.sessionTtlMs;
         m_sessions->save(renewed);
     }
     return user;

@@ -160,6 +160,13 @@
       });
     }, []);
 
+    // Что разрешено на этом сервере. Первая отрисовка идёт по кэшу, потом
+    // приходит свежий ответ — кнопки, которых сервер не даёт, не мелькают.
+    const [cfg, setCfg] = useState(() => MeetUp.serverConfigNow());
+    useEffect(() => { MeetUp.serverConfig().then(setCfg); }, []);
+    const canRegister = cfg.registration !== false;
+    const canAnon = cfg.anonymous_join !== false;
+
     // Отображаемое имя аккаунта подставляется в лобби и конференцию.
     function enterHome(user) {
       MeetUp.saveName(user.display_name);
@@ -205,7 +212,9 @@
               </p>
               <div className="hero-meta">
                 <span className="hero-dot" />
-                Открытая видеосвязь без установки
+                {cfg.name && cfg.name !== "MeetUp"
+                  ? "Сервер «" + cfg.name + "»"
+                  : "Открытая видеосвязь без установки"}
               </div>
             </div>
 
@@ -228,19 +237,23 @@
                         style={{ marginTop: 20 }} onClick={submit}>
                   Войти
                 </Button>
-                <Button variant="ghost" block icon="plus" style={{ marginTop: 10 }} disabled={busy}
-                        onClick={() => { location.href = "register.html"; }}>
-                  Создать аккаунт
-                </Button>
+                {canRegister &&
+                  <Button variant="ghost" block icon="plus" style={{ marginTop: 10 }} disabled={busy}
+                          onClick={() => { location.href = "register.html"; }}>
+                    Создать аккаунт
+                  </Button>}
 
-                <div className="divider"><span>или</span></div>
-
-                <Button variant="secondary" block icon="arrow-right" onClick={anonymous}>
-                  Войти без аккаунта
-                </Button>
+                {canAnon && <>
+                  <div className="divider"><span>или</span></div>
+                  <Button variant="secondary" block icon="arrow-right" onClick={anonymous}>
+                    Войти без аккаунта
+                  </Button>
+                </>}
 
                 <div className="msg" style={{ color: err ? "var(--danger)" : "var(--text-faint)" }}>
-                  {err || "Аккаунт хранит ваше имя между встречами."}
+                  {err || (!canRegister
+                    ? "Регистрация на этом сервере закрыта — войдите выданным логином."
+                    : "Аккаунт хранит ваше имя между встречами.")}
                 </div>
               </Card>
             </div>

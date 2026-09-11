@@ -478,6 +478,11 @@ void SignalingClient::handleError(const QString& reason) {
         m_manualClose = true;
         fatal("Владелец завершил конференцию.");
     }
+    else if (reason == "anonymous_forbidden") {
+        // Сервер «только для своих»: без аккаунта внутрь не пускают.
+        m_manualClose = true;
+        fatal("Этот сервер пускает в комнаты только из аккаунта. Войдите и откройте ссылку заново.");
+    }
     else if (reason == "alias_forbidden") {
         m_manualClose = true;
         fatal("Эта ссылка-приглашение доступна только определённым участникам.");

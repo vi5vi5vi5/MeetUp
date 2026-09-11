@@ -17,7 +17,6 @@
 
 namespace {
 const QByteArray kSessionCookieName = QByteArrayLiteral("meetup_session");
-constexpr qint64 kCookieMaxAgeS = AuthService::kSessionTtlMs / 1000;
 } // namespace
 
 HttpApi::HttpApi(std::shared_ptr<AuthService> auth,
@@ -96,7 +95,7 @@ bool HttpApi::route(const HttpRequest &req, const Respond &respond)
     }
 
     if (p == QLatin1String("/api/rooms")) {
-        respond(m == "POST" ? handleCreateRoom() : err(405, QStringLiteral("method_not_allowed")));
+        respond(m == "POST" ? handleCreateRoom(req) : err(405, QStringLiteral("method_not_allowed")));
         return true;
     }
     if (p.startsWith(QLatin1String("/api/rooms/"))) {
@@ -137,6 +136,17 @@ ApiResponse HttpApi::handleConfig() const
         // Честный ответ на вопрос «а вы записываете, кто к вам ходит».
         // Клиент показывает это человеку на гейте.
         {"logs_names", Log::keepsNames()},
+        // Что разрешено. Клиент по этим полям решает, какие кнопки рисовать:
+        // кнопка, которая всегда отвечает отказом, хуже её отсутствия.
+        {"registration", m_config.registrationOpen},
+        {"anonymous_join", m_config.allowAnonymousJoin},
+        {"anonymous_rooms", m_config.anonymousCreateName()},
+        // Правила, которые клиенту нужно знать ДО отправки формы, чтобы
+        // сказать о них человеку, а не показывать ошибку задним числом.
+        {"min_password_len", m_config.minPasswordLen},
+        {"code_min_len", m_config.codeMinLen},
+        {"max_aliases_per_room", m_config.maxAliasesPerRoom},
+        {"chat_image_max_kb", m_config.chatImageMaxKb},
     };
     if (!m_config.publicUrl.isEmpty())
         j.insert(QStringLiteral("public_url"), m_config.publicUrl);
@@ -156,6 +166,13 @@ static ApiResponse sessionResponse(const AuthResult &res, const QByteArray &cook
 
 void HttpApi::handleRegister(const HttpRequest &req, const Respond &respond)
 {
+    // Закрытая регистрация. Клиент об этом уже знает из GET /api/config и
+    // кнопки не рисует — но ручка обязана отвечать отказом и без клиента.
+    if (!m_config.registrationOpen) {
+        respond(err(403, QStringLiteral("registration_closed")));
+        return;
+    }
+
     bool okJson = false;
     const QJsonObject body = req.jsonBody(&okJson);
     if (!okJson) {
@@ -163,18 +180,21 @@ void HttpApi::handleRegister(const HttpRequest &req, const Respond &respond)
         return;
     }
 
+    // Кука живёт ровно столько же, сколько сессия на сервере: два разных
+    // срока означали бы «вы разлогинены» при живой сессии или наоборот.
+    const qint64 cookieMaxAgeS = m_auth->sessionTtlMs() / 1000;
     m_auth->registerUserAsync(
         body.value(QLatin1String("login")).toString(),
         body.value(QLatin1String("password")).toString(),
         body.value(QLatin1String("display_name")).toString(),
-        [respond](const AuthResult &res) {
+        [respond, cookieMaxAgeS](const AuthResult &res) {
             if (!res.ok) {
                 respond(err(statusForError(res.error), res.error));
                 return;
             }
             qInfo().noquote() << QStringLiteral("auth: registered '%1' (id=%2)")
                                      .arg(res.user.login).arg(res.user.id);
-            respond(sessionResponse(res, sessionCookie(res.session.token, kCookieMaxAgeS)));
+            respond(sessionResponse(res, sessionCookie(res.session.token, cookieMaxAgeS)));
         });
 }
 
@@ -187,15 +207,16 @@ void HttpApi::handleLogin(const HttpRequest &req, const Respond &respond)
         return;
     }
 
+    const qint64 cookieMaxAgeS = m_auth->sessionTtlMs() / 1000;
     m_auth->loginAsync(
         body.value(QLatin1String("login")).toString(),
         body.value(QLatin1String("password")).toString(),
-        [respond](const AuthResult &res) {
+        [respond, cookieMaxAgeS](const AuthResult &res) {
             if (!res.ok) {
                 respond(err(statusForError(res.error), res.error));
                 return;
             }
-            respond(sessionResponse(res, sessionCookie(res.session.token, kCookieMaxAgeS)));
+            respond(sessionResponse(res, sessionCookie(res.session.token, cookieMaxAgeS)));
         });
 }
 
@@ -310,9 +331,30 @@ ApiResponse HttpApi::handleUserAvatar(const QString &idStr)
 
 // ---------- Комнаты ----------
 
-ApiResponse HttpApi::handleCreateRoom()
+ApiResponse HttpApi::handleCreateRoom(const HttpRequest &req)
 {
+    // Кто вправе завести разовую комнату. Ручка ничего не требовала, и на
+    // открытом сервере с неё снимались тысячи комнат в минуту — это и есть
+    // тот мусор, ради которого затевался конфиг.
+    switch (m_config.anonymousCreate) {
+    case ServerConfig::RoomCreate::Off:
+        return err(403, QStringLiteral("rooms_closed"));
+    case ServerConfig::RoomCreate::Account:
+        if (!m_auth->userByToken(sessionToken(req)).has_value())
+            return err(401, QStringLiteral("account_required"));
+        break;
+    case ServerConfig::RoomCreate::Open:
+        break;
+    }
+
     ConferenceRoom *room = m_rooms->createRoom();
+    if (!room) {
+        // Упёрлись в потолок. 503, а не 4xx: с запросом всё в порядке, это
+        // серверу сейчас некуда, и через десять минут места снова будет.
+        qWarning().noquote() << QStringLiteral("API: room limit reached (%1)")
+                                    .arg(m_rooms->roomCount());
+        return err(503, QStringLiteral("server_full"));
+    }
     qInfo().noquote() << QStringLiteral("API: room created '%1' (total %2)")
                              .arg(room->code()).arg(m_rooms->roomCount());
     return ApiResponse{200, QJsonObject{{"room", room->code()}}, {}};

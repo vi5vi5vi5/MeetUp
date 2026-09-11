@@ -113,6 +113,7 @@ qt_add_executable(Win11Client
     src/net/PersonalRoomController.cpp
     src/net/LinkController.cpp
     src/net/UpdateChecker.cpp
+    src/net/ServerInfoController.cpp
     src/Cli.cpp
     src/media/AudioEngine.cpp
     src/media/AudioWorker.cpp

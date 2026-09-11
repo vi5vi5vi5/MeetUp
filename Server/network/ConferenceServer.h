@@ -12,6 +12,7 @@ class ClientSession;
 class ConferenceRoom;
 class PersonalRoomService;
 class RoomRegistry;
+struct ServerConfig;
 
 // Ядро сервера. Принимает WebSocket-соединения, заворачивает каждое в
 // ClientSession, разбирает входящие сообщения и маршрутизирует их по комнатам:
@@ -31,7 +32,7 @@ public:
     ConferenceServer(quint16 port, RoomRegistry *registry,
                      std::shared_ptr<AuthService> auth,
                      std::shared_ptr<PersonalRoomService> personalRooms,
-                     QObject *parent = nullptr);
+                     const ServerConfig &config, QObject *parent = nullptr);
     ~ConferenceServer() override;
 
     bool isListening() const;
@@ -60,6 +61,7 @@ private:
     RoomRegistry *m_registry;           // не владеет (общий с HTTP API)
     std::shared_ptr<AuthService> m_auth;
     std::shared_ptr<PersonalRoomService> m_personalRooms;
+    const ServerConfig &m_config;       // не владеет: живёт в main дольше нас
     QSet<ClientSession *> m_sessions;   // все живые сессии (сервер — владелец)
     quint16 m_port;
     quint32 m_nextId = 1;               // раздаётся анонимам при join
@@ -83,12 +85,9 @@ private:
     static constexpr quint8 kMsgVideoJpeg = 1;
     static constexpr quint8 kMsgVideoCoded = 3;
 
-    // Потолок картинки в чате (base64): клиент ужимает до ~480 тыс. символов,
-    // лимит с запасом на накладные расходы E2E-шифрования.
-    static constexpr int kMaxChatImageB64 = 600000;
-
-    // Пустые комнаты живут ещё 10 минут: обрыв связи последнего участника
-    // или пауза между созданием комнаты и первым join не убивают её.
-    static constexpr qint64 kRoomIdleTtlMs = 10 * 60 * 1000;
+    // Потолок картинки в чате и то, сколько пустая комната ждёт сборщика,
+    // задаёт владелец сервера (chat.image_max_kb, rooms.idle_ttl_s).
+    // Пауза перед сборкой нужна, чтобы обрыв связи последнего участника или
+    // пауза между созданием комнаты и первым join не убивали комнату.
     static constexpr int kPurgeIntervalMs = 60 * 1000;
 };

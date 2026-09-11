@@ -27,6 +27,19 @@ struct AuthResult
     }
 };
 
+// Пределы, которые задаёт владелец сервера (см. config/ServerConfig).
+// Умолчания повторяют то, как сервер вёл себя всегда, поэтому конструктор без
+// них остаётся рабочим — этим пользуются тесты на InMemory-репозиториях.
+//
+// Сервис принимает готовые числа, а не сам конфиг: правила не должны зависеть
+// от того, откуда взялись настройки. Перевод «файл -> числа» делает main.
+struct AuthLimits
+{
+    qint64 sessionTtlMs = 30ll * 24 * 3600 * 1000;   // 30 дней
+    int minPasswordLen = 8;
+    int pbkdf2Iters = 64000;
+};
+
 // Регистрация, вход и сессии. Пароли аккаунтов хранятся только как
 // PBKDF2-HMAC-SHA512 (соль на пользователя, сравнение за константное время);
 // сам пароль восстановить нельзя. Про HTTP этот класс не знает.
@@ -39,7 +52,8 @@ class AuthService
 public:
     using AuthCallback = std::function<void(const AuthResult &)>;
 
-    AuthService(std::shared_ptr<IUsers> users, std::shared_ptr<ISessions> sessions);
+    AuthService(std::shared_ptr<IUsers> users, std::shared_ptr<ISessions> sessions,
+                AuthLimits limits = {});
 
     void registerUserAsync(const QString &rawLogin, const QString &password,
                            const QString &rawDisplayName, AuthCallback done);
@@ -62,8 +76,13 @@ public:
     static bool validLogin(const QString &login);
     static bool validDisplayName(const QString &name);
 
-    // 30 дней жизни сессии; продлевается, когда осталось меньше половины.
-    static constexpr qint64 kSessionTtlMs = 30ll * 24 * 3600 * 1000;
+    // Срок жизни сессии: нужен HTTP-слою, чтобы выставить Max-Age куки
+    // ровно на столько же. Продлевается, когда осталось меньше половины.
+    qint64 sessionTtlMs() const { return m_limits.sessionTtlMs; }
+
+    // Нижняя граница длины пароля: клиент показывает её в форме регистрации
+    // (GET /api/config), чтобы человек узнал правило до отправки, а не после.
+    int minPasswordLen() const { return m_limits.minPasswordLen; }
 
 private:
     QByteArray hashPassword(const QString &password, const QByteArray &salt, int iters) const;
@@ -78,4 +97,5 @@ private:
 
     std::shared_ptr<IUsers> m_users;
     std::shared_ptr<ISessions> m_sessions;
+    AuthLimits m_limits;
 };

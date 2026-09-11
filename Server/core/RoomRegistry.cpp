@@ -4,6 +4,11 @@
 #include <QDateTime>
 #include <QRandomGenerator>
 
+RoomRegistry::RoomRegistry(ChatLimits chat, int maxOneOff)
+    : m_chat(chat), m_maxOneOff(maxOneOff)
+{
+}
+
 RoomRegistry::~RoomRegistry()
 {
     qDeleteAll(m_rooms);
@@ -29,12 +34,16 @@ QString RoomRegistry::generateCode()
 
 ConferenceRoom *RoomRegistry::createRoom()
 {
+    if (m_maxOneOff > 0 && m_oneOffCount >= m_maxOneOff)
+        return nullptr;
+
     QString code = generateCode();
     while (m_rooms.contains(code))   // коллизия практически невозможна
         code = generateCode();
 
-    auto *room = new ConferenceRoom(code);
+    auto *room = new ConferenceRoom(code, -1, m_chat);
     m_rooms.insert(code, room);
+    ++m_oneOffCount;
     return room;
 }
 
@@ -43,7 +52,7 @@ ConferenceRoom *RoomRegistry::createPersonal(const QString &code, int ownerId)
     if (m_rooms.contains(code))
         return nullptr;
 
-    auto *room = new ConferenceRoom(code, ownerId);
+    auto *room = new ConferenceRoom(code, ownerId, m_chat);
     m_rooms.insert(code, room);
     return room;
 }
@@ -60,6 +69,8 @@ int RoomRegistry::purgeIdle(qint64 ttlMs)
     for (auto it = m_rooms.begin(); it != m_rooms.end(); ) {
         ConferenceRoom *room = it.value();
         if (room->isEmpty() && now - room->emptySinceMs() > ttlMs) {
+            if (room->ownerId() < 0)
+                --m_oneOffCount;
             delete room;
             it = m_rooms.erase(it);
             ++removed;

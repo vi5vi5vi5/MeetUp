@@ -14,6 +14,7 @@
 #include "net/PersonalRoomController.h"
 #include "net/LinkController.h"
 #include "net/UpdateChecker.h"
+#include "net/ServerInfoController.h"
 #include "SysBridge.h"
 #include "Cli.h"
 #include "HistoryStore.h"
@@ -99,6 +100,13 @@ int main(int argc, char *argv[])
     // уведомления молчат, когда снят звук конференции.
     UiSounds sfx(&av, &audio);
     UpdateChecker updates;                 // GitHub Releases; см. UpdateChecker.h
+    // Что разрешено на этом сервере: экраны спрашивают у него, какие кнопки
+    // рисовать. Спрашивает сам при создании и после смены адреса сервера.
+    ServerInfoController server(&api);
+    // Клиентская проверка пароля обязана совпадать с серверной, иначе форма
+    // отвергнет пароль, который сервер принял бы (и наоборот).
+    QObject::connect(&server, &ServerInfoController::changed, &auth,
+                     [&auth, &server] { auth.setMinPasswordLen(server.minPasswordLen()); });
 
     // Движок QML объявлен ПОСЛЕ screens: провайдер миниатюр принадлежит
     // движку и держит указатель на screens, а разрушается движок первым.
@@ -130,6 +138,8 @@ int main(int argc, char *argv[])
     // Обновление клиента — Updates; аргументы командной строки — Cli.
     engine.rootContext()->setContextProperty("Updates", &updates);
     engine.rootContext()->setContextProperty("Cli", &cli);
+    // Портрет сервера (имя, что разрешено, версия сборки) — Server.
+    engine.rootContext()->setContextProperty("Server", &server);
 
     
 

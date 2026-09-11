@@ -3,7 +3,7 @@
 #include <QHash>
 #include <QString>
 
-class ConferenceRoom;
+#include "core/ConferenceRoom.h"
 
 // Реестр комнат: код -> комната. Владеет комнатами (создаёт и удаляет).
 // Коды комнат генерирует только сервер (см. createRoom) — join возможен лишь
@@ -11,17 +11,25 @@ class ConferenceRoom;
 class RoomRegistry
 {
 public:
-    RoomRegistry() = default;
+    // chat — потолки истории для новых комнат; maxOneOff — сколько разовых
+    // комнат может жить одновременно (0 — без потолка).
+    explicit RoomRegistry(ChatLimits chat = {}, int maxOneOff = 0);
     ~RoomRegistry();
 
     RoomRegistry(const RoomRegistry &) = delete;
     RoomRegistry &operator=(const RoomRegistry &) = delete;
 
     // Создать комнату со случайным уникальным кодом.
+    // nullptr — упёрлись в потолок разовых комнат (HTTP-слой ответит 503).
     ConferenceRoom *createRoom();
 
     // Открыть личную комнату: код задан владельцем, комната помнит его id.
     // Если код занят живой комнатой — nullptr (join разберётся с существующей).
+    //
+    // Потолок разовых комнат сюда НЕ применяется намеренно: личных комнат не
+    // может стать больше, чем аккаунтов, а запереть владельца снаружи из-за
+    // того, что кто-то со стороны наплодил разовых, — худшее из возможных
+    // поведений.
     ConferenceRoom *createPersonal(const QString &code, int ownerId);
 
     ConferenceRoom *find(const QString &code) const;
@@ -38,4 +46,11 @@ private:
     static QString generateCode();
 
     QHash<QString, ConferenceRoom *> m_rooms;
+    ChatLimits m_chat;
+    int m_maxOneOff = 0;
+
+    // Разовых комнат сейчас живо. Считаем счётчиком, а не проходом по хешу:
+    // проверка делается на каждое создание, а создание — это ровно та ручка,
+    // по которой и приходит поток мусора.
+    int m_oneOffCount = 0;
 };

@@ -158,6 +158,13 @@
       location.href = "conference.html?room=" + encodeURIComponent(code);
     }
 
+    // Что разрешено на этом сервере. Разовые комнаты могут быть закрыты для
+    // анонимов (или вовсе) — тогда кнопки «Создать» здесь быть не должно.
+    const [cfg, setCfg] = useState(() => MeetUp.serverConfigNow());
+    useEffect(() => { MeetUp.serverConfig().then(setCfg); }, []);
+    const canCreate = (cfg.anonymous_rooms || "open") === "open";
+    const anonAllowed = cfg.anonymous_join !== false;
+
     // Вход по коду: проверяем через API, что комната существует, — иначе
     // опечатка молча увела бы в пустую «комнату-призрак».
     async function join() {
@@ -180,7 +187,15 @@
       const resp = await MeetUp.api("POST", "/api/rooms");
       if (resp.ok && resp.body && resp.body.room) { goToConference(resp.body.room); return; }
       setBusy(false);
-      setErr("Не удалось создать комнату. Попробуйте позже.");
+      const code = resp.body && resp.body.error;
+      if (code === "account_required")
+        setErr("На этом сервере новые комнаты создают только из аккаунта.");
+      else if (code === "rooms_closed")
+        setErr("Владелец сервера отключил создание новых комнат.");
+      else if (code === "server_full")
+        setErr("Сервер сейчас занят: комнат слишком много. Попробуйте через несколько минут.");
+      else
+        setErr("Не удалось создать комнату. Попробуйте позже.");
     }
 
     return (
@@ -231,14 +246,19 @@
                   Войти в конференцию
                 </Button>
 
-                <div className="divider"><span>или</span></div>
-
-                <Button variant="ghost" block icon="plus" disabled={busy} onClick={create}>
-                  Создать трансляцию
-                </Button>
+                {canCreate && <>
+                  <div className="divider"><span>или</span></div>
+                  <Button variant="ghost" block icon="plus" disabled={busy} onClick={create}>
+                    Создать трансляцию
+                  </Button>
+                </>}
 
                 <div className="msg" style={{ color: err ? "var(--danger)" : "var(--text-faint)" }}>
-                  {err || "Код новой комнаты сгенерирует сервер."}
+                  {err || (!anonAllowed
+                    ? "Этот сервер пускает только из аккаунта — войдите, чтобы продолжить."
+                    : canCreate
+                      ? "Код новой комнаты сгенерирует сервер."
+                      : "Новые комнаты на этом сервере создают из аккаунта.")}
                 </div>
               </Card>
             </div>

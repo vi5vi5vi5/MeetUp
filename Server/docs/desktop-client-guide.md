@@ -131,6 +131,13 @@ nginx и проксирует на порт 9000); по `http` — напрям�
                "built_at": "2026-09-11T16:06:52Z" },
   "web": true,
   "logs_names": false,
+  "registration": false,
+  "anonymous_join": true,
+  "anonymous_rooms": "account",
+  "min_password_len": 8,
+  "code_min_len": 3,
+  "max_aliases_per_room": 5,
+  "chat_image_max_kb": 440,
   "public_url": "https://meetup.example.com"
 }
 ```
@@ -143,6 +150,13 @@ nginx и проксирует на порт 9000); по `http` — напрям�
 | `version.built_at` | Время сборки, ISO-8601 UTC (может отсутствовать) |
 | `web` | Раздаёт ли сервер веб-клиент. `false` — по HTTP отвечает только `/api` |
 | `logs_names` | Пишет ли сервер в журнал имена, коды комнат и логины |
+| `registration` | Открыта ли регистрация. `false` — не рисуйте кнопку: ручка ответит `403 registration_closed` |
+| `anonymous_join` | Пускают ли в комнаты без аккаунта. `false` — WS-`join` анонима вернёт `anonymous_forbidden` |
+| `anonymous_rooms` | Кто заводит разовые комнаты: `open` / `account` / `off` |
+| `min_password_len` | Нижняя граница пароля — покажите её в форме до отправки |
+| `code_min_len` | Нижняя граница кода личной комнаты |
+| `max_aliases_per_room` | Сколько ссылок-приглашений можно завести |
+| `chat_image_max_kb` | Потолок картинки в чате: ужимайте под него, а не под своё число |
 | `public_url` | Внешний адрес для ссылок-приглашений; нет поля — стройте от своего |
 
 Ключей со временем прибавится (лимиты комнат, закрытая регистрация и
@@ -168,7 +182,7 @@ nginx и проксирует на порт 9000); по `http` — напрям�
 | Метод и путь | Тело запроса | Успех | Ошибки (`error`) |
 |---|---|---|---|
 | `GET /api/config` | — | `200` + портрет сервера (см. 3.0) | — |
-| `POST /api/auth/register` | `{"login", "password", "display_name"}` | `200` + `{"user": {...}}` + кука | `invalid_login`, `invalid_display_name`, `weak_password`, `login_taken` (409), `invalid_json` |
+| `POST /api/auth/register` | `{"login", "password", "display_name"}` | `200` + `{"user": {...}}` + кука | `registration_closed` (403), `invalid_login`, `invalid_display_name`, `weak_password`, `login_taken` (409), `invalid_json` |
 | `POST /api/auth/login` | `{"login", "password"}` | `200` + `{"user": {...}}` + кука | `wrong_credentials` (401), `invalid_json` |
 | `POST /api/auth/logout` | — | `200`, кука стирается (`Max-Age=0`) | — |
 | `GET /api/me` | — | `200` + `{"user": {...}}` | `no_session` (401) |
@@ -219,7 +233,7 @@ nginx и проксирует на порт 9000); по `http` — напрям�
 
 | Метод и путь | Успех | Ошибки |
 |---|---|---|
-| `POST /api/rooms` | `{"room": "<код>"}` | — |
+| `POST /api/rooms` | `{"room": "<код>"}` | `account_required` (401), `rooms_closed` (403), `server_full` (503) |
 | `GET /api/rooms/<код>` | см. ниже | `room_not_found` (404) |
 
 `GET /api/rooms/<код>` для разовой конференции отвечает

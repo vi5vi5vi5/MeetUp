@@ -5,8 +5,10 @@
 #include <QRegularExpression>
 
 PersonalRoomService::PersonalRoomService(std::shared_ptr<IPersonalRooms> rooms,
-                                         std::shared_ptr<IRoomAliases> aliases)
-    : m_rooms(std::move(rooms)), m_aliases(std::move(aliases))
+                                         std::shared_ptr<IRoomAliases> aliases,
+                                         RoomLimits limits)
+    : m_rooms(std::move(rooms)), m_aliases(std::move(aliases)), m_limits(limits),
+      m_codeRe(QStringLiteral("^[a-z0-9_-]{%1,32}$").arg(limits.codeMinLen))
 {
 }
 
@@ -15,12 +17,13 @@ QString PersonalRoomService::normalizeCode(const QString &raw)
     return raw.trimmed().toLower();
 }
 
-bool PersonalRoomService::validCode(const QString &code)
+bool PersonalRoomService::validCode(const QString &code) const
 {
     // Код живёт в ссылке (?room=vi5): короткий, без экранирования, без
     // пробелов. Регистр не различается — normalizeCode приводит к нижнему.
-    static const QRegularExpression re(QStringLiteral("^[a-z0-9_-]{3,32}$"));
-    return re.match(code).hasMatch();
+    // Нижнюю границу длины задаёт владелец сервера: на людном сервере
+    // трёхбуквенные коды разбирают в первый же день.
+    return m_codeRe.match(code).hasMatch();
 }
 
 bool PersonalRoomService::validTitle(const QString &title)
@@ -175,7 +178,7 @@ AliasResult PersonalRoomService::createAlias(int ownerId, const QString &passwor
     const std::optional<PersonalRoom> room = m_rooms->findByOwner(ownerId);
     if (!room.has_value())
         return AliasResult::fail("no_room");
-    if (m_aliases->listByRoom(room->id).size() >= kMaxAliases)
+    if (m_aliases->listByRoom(room->id).size() >= m_limits.maxAliases)
         return AliasResult::fail("alias_limit");
 
     if (!validPassword(password))

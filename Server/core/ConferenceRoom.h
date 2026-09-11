@@ -20,12 +20,21 @@ struct ChatEntry
     bool    imageDropped = false; // картинка была, но вытеснена из истории (см. appendChat)
 };
 
+// Потолки истории чата. Это не удобство, а память: замер показал около 20 МБ
+// на одну комнату, набитую картинками до предела, и держатся они ещё десять
+// минут после ухода последнего участника. Значения задаёт владелец сервера.
+struct ChatLimits
+{
+    int historySize = 500;     // сообщений в истории
+    int historyImages = 24;    // из них с картинками
+};
+
 // Одна конференция (комната). Держит список участников и историю чата, умеет
 // рассылать им сообщения. Медиа не декодирует — только пересылает байты как есть.
 class ConferenceRoom
 {
 public:
-    explicit ConferenceRoom(const QString &code, int ownerId = -1);
+    explicit ConferenceRoom(const QString &code, int ownerId = -1, ChatLimits chat = {});
 
     QString code() const { return m_code; }
 
@@ -81,12 +90,10 @@ private:
     qint64 m_emptySinceMs = 0;
     qint64 m_liveSinceMs = 0;
 
-    static constexpr int kMaxHistory = 500;
-
-    // Картинки тяжелее текста на порядки: без потолка история из kMaxHistory
-    // сообщений могла бы держать сотни мегабайт на комнату. Старые картинки
-    // вытесняются (imageDropped), текст сообщений остаётся.
-    static constexpr int kMaxHistoryImages = 24;
+    // Картинки тяжелее текста на порядки: без потолка история могла бы
+    // держать сотни мегабайт на комнату. Старые картинки вытесняются
+    // (imageDropped), текст сообщений остаётся.
+    ChatLimits m_chat;
 
     // Сколько неотправленного у получателя означает «он не поспевает». Порог
     // не берётся из воздуха: полтора мегабайта — это около полутора секунд

@@ -115,8 +115,9 @@ void AuthController::registerAccount(const QString& login, const QString& displa
         setError("Логин: 3–32 символа — латиница, цифры, точка, дефис, подчёркивание.");
         return;
     }
-    if (password.size() < 8) {
-        setError("Пароль слишком короткий — минимум 8 символов.");
+    if (password.size() < m_minPasswordLen) {
+        setError("Пароль слишком короткий — минимум "
+                 + QString::number(m_minPasswordLen) + " символов.");
         return;
     }
     if (password != password2) {
@@ -153,7 +154,10 @@ void AuthController::registerAccount(const QString& login, const QString& displa
         else if (code == "invalid_display_name")
             setError("Отображаемое имя: от 1 до 40 символов.");
         else if (code == "weak_password")
-            setError("Пароль слишком короткий — минимум 8 символов.");
+            setError("Пароль слишком короткий — минимум "
+                     + QString::number(m_minPasswordLen) + " символов.");
+        else if (code == "registration_closed")
+            setError("Регистрация на этом сервере закрыта.");
         else if (status == 0)
             setError("Сервер недоступен. Попробуйте позже.");
         else

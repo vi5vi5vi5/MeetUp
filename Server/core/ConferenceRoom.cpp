@@ -5,9 +5,10 @@
 #include <QJsonObject>
 #include <QJsonArray>
 
-ConferenceRoom::ConferenceRoom(const QString &code, int ownerId)
+ConferenceRoom::ConferenceRoom(const QString &code, int ownerId, ChatLimits chat)
     : m_code(code),
       m_ownerId(ownerId),
+      m_chat(chat),
       m_emptySinceMs(QDateTime::currentMSecsSinceEpoch())
 {
 }
@@ -86,20 +87,20 @@ QJsonArray ConferenceRoom::participantsJson() const
 void ConferenceRoom::appendChat(const ChatEntry &entry)
 {
     m_history.append(entry);
-    if (m_history.size() > kMaxHistory)
+    if (m_history.size() > m_chat.historySize)
         m_history.removeFirst();
 
     if (entry.image.isEmpty())
         return;
 
-    // Держим только kMaxHistoryImages свежих картинок: у более старых
+    // Держим только историю на chat.history_images картинок: у более старых
     // освобождаем данные, оставляя пометку — клиент покажет заглушку.
     int images = 0;
     for (int i = m_history.size() - 1; i >= 0; --i) {
         ChatEntry &e = m_history[i];
         if (e.image.isEmpty())
             continue;
-        if (++images > kMaxHistoryImages) {
+        if (++images > m_chat.historyImages) {
             e.image.clear();
             e.imageDropped = true;
         }

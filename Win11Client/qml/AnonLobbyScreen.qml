@@ -39,10 +39,16 @@ AuthScaffold {
         onClicked: Rooms.joinByCode(roomInput.text, nameInput.text)
     }
 
-    Divider { width: parent.width; label: "или" }
+    // Разовые комнаты могут быть закрыты для анонимов (или вовсе).
+    Divider {
+        width: parent.width
+        label: "или"
+        visible: Server.anonymousRooms === "open"
+    }
 
     AppButton {
         width: parent.width
+        visible: Server.anonymousRooms === "open"
         text: "Создать трансляцию"
         variant: "ghost"
         icon: "plus"
@@ -55,7 +61,11 @@ AuthScaffold {
         horizontalAlignment: Text.AlignHCenter
         wrapMode: Text.WordWrap
         text: Rooms.errorText !== "" ? Rooms.errorText
-                                     : "Код новой комнаты сгенерирует сервер."
+              : !Server.anonymousJoin
+                ? "Этот сервер пускает только из аккаунта — войдите, чтобы продолжить."
+                : Server.anonymousRooms === "open"
+                  ? "Код новой комнаты сгенерирует сервер."
+                  : "Новые комнаты на этом сервере создают из аккаунта."
         color: Rooms.errorText !== "" ? Theme.danger : Theme.textFaint
         font.family: Theme.uiFont
         font.pixelSize: Theme.textXs

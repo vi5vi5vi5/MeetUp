@@ -3,6 +3,7 @@
 #include <memory>
 #include <optional>
 
+#include <QRegularExpression>
 #include <QString>
 #include <QStringList>
 
@@ -42,18 +43,27 @@ struct AliasResult
     }
 };
 
+// Пределы от владельца сервера. Как и AuthLimits: умолчания повторяют
+// прежнее поведение, перевод «файл -> числа» делает main.
+struct RoomLimits
+{
+    int codeMinLen = 3;    // короче — код не занять
+    int maxAliases = 5;    // ссылок-приглашений на комнату
+};
+
 // Личные комнаты: создание, настройка и удаление. Правила: комната одна на
 // пользователя, код уникален среди личных комнат, пароль хранится открытым
 // текстом (владелец должен уметь его посмотреть). Про HTTP и WebSocket этот
 // класс не знает; кто владелец — решает вызывающий по сессии.
 //
-// Здесь же живут alias-ссылки комнаты: до kMaxAliases на комнату, со своим
+// Здесь же живут alias-ссылки комнаты: до RoomLimits::maxAliases на комнату, со своим
 // паролем, лимитом использований и списком допущенных логинов.
 class PersonalRoomService
 {
 public:
     PersonalRoomService(std::shared_ptr<IPersonalRooms> rooms,
-                        std::shared_ptr<IRoomAliases> aliases);
+                        std::shared_ptr<IRoomAliases> aliases,
+                        RoomLimits limits = {});
 
     RoomResult create(int ownerId, const QString &rawCode,
                       const QString &rawTitle, const QString &password);
@@ -91,11 +101,12 @@ public:
     void consumeAlias(const RoomAlias &alias);
 
     static QString normalizeCode(const QString &raw);
-    static bool validCode(const QString &code);
+    // Не статический: нижняя граница длины — настройка сервера, и выражение
+    // для проверки собирается один раз в конструкторе.
+    bool validCode(const QString &code) const;
     static bool validTitle(const QString &title);
     static bool validPassword(const QString &password);
 
-    static constexpr int kMaxAliases = 5;
 
 private:
     QString generateAliasCode() const;
@@ -103,4 +114,6 @@ private:
 
     std::shared_ptr<IPersonalRooms> m_rooms;
     std::shared_ptr<IRoomAliases> m_aliases;
+    RoomLimits m_limits;
+    QRegularExpression m_codeRe;   // собрано по m_limits.codeMinLen
 };

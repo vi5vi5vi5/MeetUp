@@ -887,6 +887,10 @@
     const engine = M.engine;
 
     useEffect(() => { document.documentElement.setAttribute("data-theme", theme); }, [theme]);
+    // Правила сервера (потолок картинки в чате, прежде всего). Сюда часто
+    // заходят прямо по ссылке, минуя вход и главную, — значит спросить
+    // должен и этот экран, иначе ужимать будем под чужое число.
+    useEffect(() => { MeetUp.serverConfig(); }, []);
     const toggleTheme = () => setTheme(t => (t === "dark" ? "light" : "dark"));
 
     useEffect(() => { if (roomTitle) document.title = roomTitle + " — MeetUp"; }, [roomTitle]);
@@ -1099,6 +1103,11 @@
             M.roomPass = "";
             setGatePass("");
             setPhase("gate");
+          } else if (msg.reason === "anonymous_forbidden") {
+            // Сервер «только для своих»: без аккаунта внутрь не пускают.
+            M.manualClose = true;
+            stopEverything();
+            fatal("Этот сервер пускает в комнаты только из аккаунта. Войдите и откройте ссылку заново.");
           } else if (msg.reason === "alias_forbidden") {
             // Ссылка-приглашение с фиксированным списком логинов: этот
             // аккаунт (или аноним) в него не входит.
@@ -1629,6 +1638,15 @@
       }
     }
 
+    // Потолок картинки берём у сервера (chat_image_max_kb): он может быть
+    // строже прежних 440 КБ, и ужимать «как раньше» значило бы гарантированно
+    // получить отказ уже после того, как человек выбрал файл. Запас в 2%
+    // покрывает разницу между нашим счётом base64 и серверным.
+    function imageLimitB64() {
+      const kb = MeetUp.serverConfigNow().chat_image_max_kb || 440;
+      return Math.floor(kb * 1024 * 4 / 3 * 0.98);
+    }
+
     async function fileToJpegB64(file) {
       const bmp = await loadBitmap(file);
       const srcW = bmp.width || bmp.naturalWidth, srcH = bmp.height || bmp.naturalHeight;
@@ -1647,7 +1665,7 @@
           for (const q of [0.85, 0.7, 0.55]) {
             const dataUrl = c.toDataURL("image/jpeg", q);
             const b64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
-            if (b64.length <= 480000) return b64;
+            if (b64.length <= imageLimitB64()) return b64;
           }
         }
       } finally {

@@ -1,5 +1,6 @@
 #include "network/ConferenceServer.h"
 #include "config/Log.h"
+#include "config/ServerConfig.h"
 #include "core/ClientSession.h"
 #include "core/ConferenceRoom.h"
 #include "core/RoomRegistry.h"
@@ -24,9 +25,9 @@ const QByteArray kSessionCookieName = QByteArrayLiteral("meetup_session");
 ConferenceServer::ConferenceServer(quint16 port, RoomRegistry *registry,
                                    std::shared_ptr<AuthService> auth,
                                    std::shared_ptr<PersonalRoomService> personalRooms,
-                                   QObject *parent)
+                                   const ServerConfig &config, QObject *parent)
     : QObject(parent), m_registry(registry), m_auth(std::move(auth)),
-      m_personalRooms(std::move(personalRooms)), m_port(port)
+      m_personalRooms(std::move(personalRooms)), m_config(config), m_port(port)
 {
     m_server = new QWebSocketServer(QStringLiteral("MeetUp"),
                                     QWebSocketServer::NonSecureMode, this);
@@ -125,6 +126,14 @@ void ConferenceServer::handleJoin(ClientSession *session, const QJsonObject &msg
 
     if (roomCode.isEmpty() || name.isEmpty()) {
         sendError(session, QStringLiteral("invalid_join"));
+        return;
+    }
+
+    // Сервер «только для своих»: без аккаунта внутрь нельзя. Проверяем до
+    // всего остального — человеку незачем узнавать, существует ли комната,
+    // если войти в неё он всё равно не может.
+    if (!account && !m_config.allowAnonymousJoin) {
+        sendError(session, QStringLiteral("anonymous_forbidden"));
         return;
     }
     if (session->room()) {
@@ -319,7 +328,7 @@ void ConferenceServer::handleChat(ClientSession *session, const QJsonObject &msg
 
     const QString text = msg.value(QStringLiteral("text")).toString().left(2000);
     const QString image = msg.value(QStringLiteral("image")).toString();
-    if (image.size() > kMaxChatImageB64) {
+    if (image.size() > m_config.chatImageMaxB64()) {
         sendError(session, QStringLiteral("image_too_large"));
         return;
     }
@@ -467,7 +476,7 @@ void ConferenceServer::onDisconnected(ClientSession *session)
 
 void ConferenceServer::purgeIdleRooms()
 {
-    const int removed = m_registry->purgeIdle(kRoomIdleTtlMs);
+    const int removed = m_registry->purgeIdle(qint64(m_config.roomIdleTtlS) * 1000);
     if (removed > 0)
         qInfo() << "Purged idle rooms:" << removed << "left:" << m_registry->roomCount();
 }

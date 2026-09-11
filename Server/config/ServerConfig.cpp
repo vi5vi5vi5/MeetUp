@@ -55,6 +55,67 @@ const char *kSample = R"conf(# MeetUp — настройки сервера.
 # Десктопные клиенты при этом работают полностью.
 #enabled = true
 
+[auth]
+# Пускать ли новых людей регистрироваться: open | closed. Закрыли — кнопки
+# регистрации не будет и в клиентах: они спрашивают у сервера, что разрешено.
+#
+# Значением считается ВСЁ после знака равенства, включая решётки и пробелы в
+# середине: дописывать комментарий в ту же строку нельзя.
+#registration = open
+
+# Пускать ли в комнаты без аккаунта. false вместе с registration = closed даёт
+# полностью частный сервер: войти может только тот, кого завели руками.
+#allow_anonymous_join = true
+
+# Сколько дней живёт сессия входа (продлевается на половине срока).
+#session_ttl_days = 30
+
+# Нижняя граница длины пароля аккаунта.
+#min_password_len = 8
+
+# Стоимость PBKDF2. Поднимать безопасно: старые хеши проверяются со своей
+# стоимостью и тихо перевариваются при следующем входе. Опускать — ослабление,
+# а не ускорение; имеет смысл только на совсем слабом железе.
+#pbkdf2_iters = 64000
+
+[rooms]
+# Кто может завести разовую комнату:
+#   open    — кто угодно (как было всегда)
+#   account — только вошедшие
+#   off     — никто; работают только личные комнаты
+#
+# Это главный вентиль против замусоривания. Ручка создания комнат не требует
+# ничего: на открытом сервере с неё снимается несколько тысяч комнат в минуту.
+#anonymous_create = open
+
+# Потолок живых разовых комнат; 0 — без потолка. Личных комнат не касается: их
+# число ограничено числом аккаунтов, и запирать владельца снаружи из-за чужого
+# мусора неправильно.
+#max_total = 0
+
+# Сколько секунд пустая комната ждёт сборщика мусора. Пауза нужна, чтобы обрыв
+# связи последнего участника не убивал комнату вместе с историей чата.
+#idle_ttl_s = 600
+
+# Нижняя граница длины кода личной комнаты. На публичном сервере короткие коды
+# разбирают первыми.
+#code_min_len = 3
+
+# Ссылок-приглашений на одну комнату.
+#max_aliases_per_room = 5
+
+[chat]
+# Сообщений в истории комнаты — её получает каждый вошедший.
+#history_size = 500
+
+# Картинок в истории; у более старых данные освобождаются, текст остаётся.
+# Это потолок памяти, а не удобство: комната, набитая картинками до предела,
+# держит около 20 МБ — и ещё десять минут после ухода последнего участника.
+#history_images = 24
+
+# Потолок картинки в чате, КБ.
+#image_max_kb = 440
+
 [log]
 # Что писать в журнал (docker logs):
 #   off     — молчание, включая ошибки
@@ -157,6 +218,29 @@ bool parseBool(const QString &raw, bool fallback, const char *where, QStringList
     return fallback;
 }
 
+// Целое с границами. Выход за границы — это не «поправим молча», а повод
+// сказать вслух: человек, написавший 0 там, где 0 ломает сервер, должен об
+// этом узнать, а не гадать, почему ничего не изменилось.
+int parseInt(const QString &raw, int fallback, int min, int max,
+             const char *where, QStringList *warnings)
+{
+    bool ok = false;
+    const int v = raw.trimmed().toInt(&ok);
+    if (!ok) {
+        warnings->append(QStringLiteral("%1: «%2» — не число, оставляю %3")
+                             .arg(QLatin1String(where), raw, QString::number(fallback)));
+        return fallback;
+    }
+    if (v < min || v > max) {
+        warnings->append(QStringLiteral("%1: %2 вне разумных границ (%3…%4), оставляю %5")
+                             .arg(QLatin1String(where), QString::number(v),
+                                  QString::number(min), QString::number(max),
+                                  QString::number(fallback)));
+        return fallback;
+    }
+    return v;
+}
+
 } // namespace
 
 ServerConfig ServerConfig::load(const QString &dataDir)
@@ -186,6 +270,64 @@ ServerConfig ServerConfig::load(const QString &dataDir)
 
     if (const auto v = ini.take("web", "enabled"))
         cfg.webEnabled = parseBool(*v, cfg.webEnabled, "web.enabled", &cfg.warnings);
+
+    if (const auto v = ini.take("auth", "registration")) {
+        const QString mode = v->trimmed().toLower();
+        if (mode == QLatin1String("open"))
+            cfg.registrationOpen = true;
+        else if (mode == QLatin1String("closed"))
+            cfg.registrationOpen = false;
+        else
+            cfg.warnings.append(QStringLiteral("auth.registration: «%1» — не open и не "
+                                               "closed, оставляю open").arg(*v));
+    }
+    if (const auto v = ini.take("auth", "allow_anonymous_join"))
+        cfg.allowAnonymousJoin = parseBool(*v, cfg.allowAnonymousJoin,
+                                           "auth.allow_anonymous_join", &cfg.warnings);
+    if (const auto v = ini.take("auth", "session_ttl_days"))
+        cfg.sessionTtlDays = parseInt(*v, cfg.sessionTtlDays, 1, 3650,
+                                      "auth.session_ttl_days", &cfg.warnings);
+    if (const auto v = ini.take("auth", "min_password_len"))
+        cfg.minPasswordLen = parseInt(*v, cfg.minPasswordLen, 1, 128,
+                                      "auth.min_password_len", &cfg.warnings);
+    if (const auto v = ini.take("auth", "pbkdf2_iters"))
+        cfg.pbkdf2Iters = parseInt(*v, cfg.pbkdf2Iters, 1000, 10000000,
+                                   "auth.pbkdf2_iters", &cfg.warnings);
+
+    if (const auto v = ini.take("rooms", "anonymous_create")) {
+        const QString mode = v->trimmed().toLower();
+        if (mode == QLatin1String("open"))
+            cfg.anonymousCreate = RoomCreate::Open;
+        else if (mode == QLatin1String("account"))
+            cfg.anonymousCreate = RoomCreate::Account;
+        else if (mode == QLatin1String("off"))
+            cfg.anonymousCreate = RoomCreate::Off;
+        else
+            cfg.warnings.append(QStringLiteral("rooms.anonymous_create: «%1» — не "
+                                               "open/account/off, оставляю open").arg(*v));
+    }
+    if (const auto v = ini.take("rooms", "max_total"))
+        cfg.maxTotalRooms = parseInt(*v, cfg.maxTotalRooms, 0, 10000000,
+                                     "rooms.max_total", &cfg.warnings);
+    if (const auto v = ini.take("rooms", "idle_ttl_s"))
+        cfg.roomIdleTtlS = parseInt(*v, cfg.roomIdleTtlS, 10, 86400,
+                                    "rooms.idle_ttl_s", &cfg.warnings);
+    if (const auto v = ini.take("rooms", "code_min_len"))
+        cfg.codeMinLen = parseInt(*v, cfg.codeMinLen, 1, 32,
+                                  "rooms.code_min_len", &cfg.warnings);
+    if (const auto v = ini.take("rooms", "max_aliases_per_room"))
+        cfg.maxAliasesPerRoom = parseInt(*v, cfg.maxAliasesPerRoom, 0, 1000,
+                                         "rooms.max_aliases_per_room", &cfg.warnings);
+
+    if (const auto v = ini.take("chat", "history_size"))
+        cfg.chatHistorySize = parseInt(*v, cfg.chatHistorySize, 0, 100000,
+                                       "chat.history_size", &cfg.warnings);
+    if (const auto v = ini.take("chat", "history_images"))
+        cfg.chatHistoryImages = parseInt(*v, cfg.chatHistoryImages, 0, 10000,
+                                         "chat.history_images", &cfg.warnings);
+    if (const auto v = ini.take("chat", "image_max_kb"))
+        cfg.chatImageMaxKb = parseInt(*v, cfg.chatImageMaxKb, 1, 100000,
+                                      "chat.image_max_kb", &cfg.warnings);
 
     if (const auto v = ini.take("log", "level")) {
         bool ok = false;
@@ -217,4 +359,21 @@ bool ServerConfig::buildModified()
 QString ServerConfig::buildTime()
 {
     return QString::fromLatin1(MEETUP_BUILD_TIME);
+}
+
+QString ServerConfig::anonymousCreateName() const
+{
+    switch (anonymousCreate) {
+    case RoomCreate::Account: return QStringLiteral("account");
+    case RoomCreate::Off:     return QStringLiteral("off");
+    case RoomCreate::Open:    break;
+    }
+    return QStringLiteral("open");
+}
+
+int ServerConfig::chatImageMaxB64() const
+{
+    // КБ -> байты -> символы base64 (4 символа на 3 байта). Округляем вверх:
+    // потолок должен быть не меньше обещанного человеку, а не на байт меньше.
+    return int((qint64(chatImageMaxKb) * 1024 + 2) / 3 * 4);
 }

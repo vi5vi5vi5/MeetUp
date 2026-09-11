@@ -106,8 +106,9 @@
   const ERRORS = {
     invalid_login: "Логин: 3–32 символа — латиница, цифры, точка, дефис, подчёркивание.",
     invalid_display_name: "Отображаемое имя: от 1 до 40 символов.",
-    weak_password: "Пароль слишком короткий — минимум 8 символов.",
+    weak_password: "Пароль слишком короткий.",
     login_taken: "Такой логин уже занят. Попробуйте другой.",
+    registration_closed: "Регистрация на этом сервере закрыта.",
   };
 
   function RegisterScreen() {
@@ -118,6 +119,13 @@
     const [pass2, setPass2] = useState("");
     const [err, setErr] = useState("");
     const [busy, setBusy] = useState(false);
+    // Правила сервера: открыта ли регистрация и какой пароль он считает
+    // достаточным. Спрашиваем ДО формы, чтобы не показывать отказ задним
+    // числом — человек не должен придумывать пароль впустую.
+    const [cfg, setCfg] = useState(() => MeetUp.serverConfigNow());
+    useEffect(() => { MeetUp.serverConfig().then(setCfg); }, []);
+    const minPass = cfg.min_password_len || 8;
+    const closed = cfg.registration === false;
 
     useEffect(() => {
       document.documentElement.setAttribute("data-theme", theme);
@@ -140,7 +148,10 @@
       const loginNorm = login.trim().toLowerCase();
       if (!loginNorm || !name.trim() || !pass) { setErr("Заполните все поля."); return; }
       if (!/^[a-z0-9_.-]{3,32}$/.test(loginNorm)) { setErr(ERRORS.invalid_login); return; }
-      if (pass.length < 8) { setErr(ERRORS.weak_password); return; }
+      if (pass.length < minPass) {
+        setErr("Пароль слишком короткий — минимум " + minPass + " символов.");
+        return;
+      }
       if (pass !== pass2) { setErr("Пароли не совпадают."); return; }
 
       setErr("");
@@ -184,6 +195,22 @@
             </div>
 
             <div className="cardwrap">
+              {closed ? (
+                <Card elevated width="100%">
+                  <h2 style={{ margin: 0, fontFamily: "var(--font-display)", fontSize: 20 }}>
+                    Регистрация закрыта
+                  </h2>
+                  <p style={{ marginTop: 12, color: "var(--text-muted)", fontSize: 14 }}>
+                    Владелец этого сервера не принимает новых участников. Если вам
+                    выдали логин и пароль — войдите с ними.
+                  </p>
+                  <Button variant="primary" block iconRight="arrow-right"
+                          style={{ marginTop: 20 }}
+                          onClick={() => { location.href = "login.html"; }}>
+                    Ко входу
+                  </Button>
+                </Card>
+              ) : (
               <Card elevated width="100%">
                 <Field label="Логин" htmlFor="login">
                   <Input id="login" value={login} autoComplete="username" maxLength={32}
@@ -198,7 +225,7 @@
                 </Field>
 
                 <Field label="Пароль" htmlFor="pass" style={{ marginTop: 18 }}
-                       hint="Минимум 8 символов">
+                       hint={"Минимум " + minPass + " символов"}>
                   <Input id="pass" type="password" value={pass} autoComplete="new-password"
                          placeholder="••••••••" maxLength={128}
                          onChange={(e) => { setPass(e.target.value); setErr(""); }} />
@@ -224,6 +251,7 @@
                   {err || "Пароль хранится только в виде хеша."}
                 </div>
               </Card>
+              )}
             </div>
           </div>
         </div>

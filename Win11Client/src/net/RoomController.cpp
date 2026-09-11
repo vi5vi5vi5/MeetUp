@@ -81,7 +81,16 @@ void RoomController::createRoom(const QString& name) {
 			emit roomReady(code, name.trimmed());
 			return;
 		}
-		if (status == 0) setError("Сервер недоступен. Попробуйте позже.");
+		// Отказы конфига разделяем: «попробуйте позже» на закрытую ручку —
+		// это совет ждать того, что не наступит.
+		const QString err = obj.value("error").toString();
+		if (err == "account_required")
+			setError("На этом сервере новые комнаты создают только из аккаунта.");
+		else if (err == "rooms_closed")
+			setError("Владелец сервера отключил разовые конференции.");
+		else if (err == "server_full")
+			setError("Сервер занят: комнат слишком много. Попробуйте через несколько минут.");
+		else if (status == 0) setError("Сервер недоступен. Попробуйте позже.");
 		else setError("Не удалось создать комнату. Попробуйте позже.");
 		});
 }

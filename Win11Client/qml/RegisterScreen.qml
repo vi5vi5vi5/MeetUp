@@ -12,8 +12,43 @@ AuthScaffold {
     heroTitle: "Свой аккаунт —<br/>своя <font color='" + Theme.accentInk + "'>комната</font>"
     heroSub: "Логин и пароль — для входа. Отображаемое имя увидят собеседники, его можно поменять в любой момент."
 
+    // Регистрация закрыта: форму не показываем вовсе. Вместо неё — объяснение
+    // и дорога обратно; заполнять поля, которые сервер отвергнет, незачем.
+    Column {
+        width: parent.width
+        spacing: 16
+        visible: !Server.registration
+
+        Text {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: "Регистрация закрыта"
+            color: Theme.text
+            font.family: Theme.displayFont
+            font.pixelSize: Theme.textXl
+            font.weight: Font.DemiBold
+        }
+        Text {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: "Владелец этого сервера не принимает новых участников. "
+                  + "Если вам выдали логин и пароль — войдите с ними."
+            color: Theme.textMuted
+            font.family: Theme.uiFont
+            font.pixelSize: Theme.textSm
+        }
+        AppButton {
+            width: parent.width
+            text: "Ко входу"
+            variant: "primary"
+            iconRight: "arrow-right"
+            onClicked: root.signInRequested()
+        }
+    }
+
     Field {
         width: parent.width
+        visible: Server.registration
         label: "Логин"
         AppInput {
             id: loginInput
@@ -25,6 +60,7 @@ AuthScaffold {
     }
     Field {
         width: parent.width
+        visible: Server.registration
         label: "Отображаемое имя"
         AppInput {
             id: nameInput
@@ -36,8 +72,10 @@ AuthScaffold {
     }
     Field {
         width: parent.width
+        visible: Server.registration
         label: "Пароль"
-        hint: "Минимум 8 символов"
+        // Правило длины — серверное: показываем то, что он и потребует.
+        hint: "Минимум " + Server.minPasswordLen + " символов"
         AppInput {
             id: passInput
             width: parent.width
@@ -49,6 +87,7 @@ AuthScaffold {
     }
     Field {
         width: parent.width
+        visible: Server.registration
         label: "Повторите пароль"
         AppInput {
             id: pass2Input
@@ -64,6 +103,7 @@ AuthScaffold {
 
     AppButton {
         width: parent.width
+        visible: Server.registration
         text: "Создать аккаунт"
         variant: "primary"
         iconRight: "arrow-right"
@@ -74,6 +114,7 @@ AuthScaffold {
 
     Row {
         anchors.horizontalCenter: parent.horizontalCenter
+        visible: Server.registration
         spacing: 5
         Text {
             text: "Уже есть аккаунт?"

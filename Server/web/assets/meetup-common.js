@@ -29,6 +29,36 @@
       .catch(function () { return { ok: false, status: 0, body: null }; });
   }
 
+  // --- Портрет сервера -------------------------------------------------------
+  // Что на этом сервере разрешено (GET /api/config). Страницы здесь отдельные,
+  // поэтому ответ кладём в sessionStorage: без кэша переход со входа на
+  // регистрацию моргал бы кнопками, которых сервер не даёт.
+  //
+  // Правило на неизвестное: отсутствующее поле — РАЗРЕШАЮЩЕЕ. Так новая
+  // страница продолжает работать со старым сервером, который про эти поля
+  // ещё не знает.
+  var CONFIG_KEY = "meetup.config";
+  var configPromise = null;
+
+  // Синхронно: то, что известно прямо сейчас (кэш прошлой страницы или пусто).
+  // Годится для первой отрисовки — обновит serverConfig().
+  function serverConfigNow() {
+    try { return JSON.parse(sessionStorage.getItem(CONFIG_KEY)) || {}; }
+    catch (e) { return {}; }
+  }
+
+  function serverConfig() {
+    if (!configPromise) {
+      configPromise = api("GET", "/api/config").then(function (resp) {
+        // Сервер не ответил (старая версия, сеть) — работаем на том, что есть.
+        if (!resp.ok || !resp.body) return serverConfigNow();
+        try { sessionStorage.setItem(CONFIG_KEY, JSON.stringify(resp.body)); } catch (e) {}
+        return resp.body;
+      });
+    }
+    return configPromise;
+  }
+
   // Имя пользователя между страницами (лобби -> конференция).
   var NAME_KEY = "meetup.name";
   function savedName() {
@@ -80,6 +110,8 @@
   window.MeetUp = {
     wsUrl: wsUrl,
     api: api,
+    serverConfig: serverConfig,
+    serverConfigNow: serverConfigNow,
     savedName: savedName,
     saveName: saveName,
     authLogin: authLogin,
