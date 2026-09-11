@@ -496,7 +496,6 @@ Item {
                                 anchors.verticalCenter: parent.verticalCenter
                                 size: "sm"
                                 icon: "settings"
-                                label: "Настройки комнаты"
                                 // Сначала переключаем текущую: модалка и ссылки
                                 // работают именно с ней.
                                 onClicked: { MyRoom.select(modelData.id); roomModal.open = true }
