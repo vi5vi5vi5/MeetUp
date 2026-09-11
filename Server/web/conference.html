@@ -337,6 +337,34 @@
   .set-kv:last-child { border-bottom: none; }
   .set-kv b { flex: none; width: 46%; font-weight: 600; color: var(--text-muted); }
   .set-kv span { min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+  /* Сервер в «О программе»: не строчка в таблице, а тот, к кому вы
+     подключены, — с адресом-ссылкой и живым временем ответа. */
+  .srv-card {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 14px; margin-bottom: 12px;
+    border: 1px solid var(--border); border-radius: var(--radius-md);
+    background: var(--surface-2);
+  }
+  .srv-ico {
+    width: 38px; height: 38px; border-radius: var(--radius-sm); flex: none;
+    display: grid; place-items: center;
+    background: var(--surface); border: 1px solid var(--border);
+    color: var(--accent-ink);
+  }
+  .srv-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+  .srv-name { font-weight: 700; font-size: 14px; }
+  .srv-host {
+    font-family: var(--font-mono); font-size: 12px; color: var(--text-muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .srv-host:hover { color: var(--accent-ink); }
+  .srv-ping { display: flex; align-items: center; gap: 7px; flex: none; }
+  .srv-ping i {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--live); display: block;
+  }
+  .srv-ping b { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .srv-ping span { font-size: 12px; color: var(--text-faint); }
+
   .set-note { font-size: var(--text-xs); color: var(--text-faint); }
   /* Предпросмотр камеры. Ширина ограничена: 16:9 во всю колонку съедало бы
      треть раздела и отталкивало вниз всё остальное. */
@@ -759,7 +787,10 @@
     // участника (карточка по правой кнопке / долгому тапу) и показ
     // демонстрации во весь экран.
     const [deafened, setDeafened] = useState(false);
-    const [screenVol, setScreenVol] = useState(100);
+    // Громкость демонстраций: у каждого ведущего своя. Ручка на сцене стоит
+    // рядом с его именем и читается как «громкость вот этого показа» — так она
+    // и работает. Между комнатами не запоминается: у каждой встречи свой звук.
+    const [screenVols, setScreenVols] = useState({});
     const [peerVol, setPeerVol] = useState(null);   // { id, name, vol }
     const [theater, setTheater] = useState(false);
     // Кто ведёт демонстрацию экрана (id участника, может быть свой) — одна
@@ -919,6 +950,9 @@
     // вход и главную, — значит спросить должен и этот экран.
     const [srvCfg, setSrvCfg] = useState(() => MeetUp.serverConfigNow());
     useEffect(() => { MeetUp.serverConfig().then(setSrvCfg); }, []);
+    // Отклик меряем, когда человек открыл «О программе», и каждый раз заново:
+    // число из прошлого захода — это уже не про сейчас.
+    const [srvPing, setSrvPing] = useState(-1);
     const toggleTheme = () => setTheme(t => (t === "dark" ? "light" : "dark"));
 
     useEffect(() => { if (roomTitle) document.title = roomTitle + " — MeetUp"; }, [roomTitle]);
@@ -1509,16 +1543,17 @@
     // Ручка у слушателя, а не у ведущего: иначе один человек решал бы за всю
     // комнату, насколько громко играет его фонограмма. Между комнатами не
     // запоминается — у каждой демонстрации свой звук.
-    function applyScreenVol(v) {
-      setScreenVol(v);
-      engine.setScreenVolume(v / 100);
+    function applyScreenVol(id, v) {
+      if (id == null) return;
+      setScreenVols(cur => ({ ...cur, [id]: v }));
+      engine.setScreenPeerVolume(id, v / 100);
     }
-    function changeScreenVol(v) {
+    function changeScreenVol(id, v) {
       if (v > 0) M.screenVolBack = v;   // куда возвращаться из «тихо»
-      applyScreenVol(v);
+      applyScreenVol(id, v);
     }
-    function toggleScreenMute() {
-      applyScreenVol(screenVol > 0 ? 0 : (M.screenVolBack || 100));
+    function toggleScreenMute(id, cur) {
+      applyScreenVol(id, cur > 0 ? 0 : (M.screenVolBack || 100));
     }
 
     // ---- Личная громкость участника ----
@@ -2045,6 +2080,9 @@
       ? "Вы"
       : ((peers.find(p => p.id === screenId) || {}).name || "");
     const stageReady = screenSelf || screenFrames.has(screenId);
+    // Громкость той демонстрации, что сейчас на сцене (по умолчанию 100).
+    const curScreenVol = screenId != null && screenVols[screenId] != null
+      ? screenVols[screenId] : 100;
     const pinnedTile = pinnedId != null ? allTiles.find(t => t.id === pinnedId) : null;
     const pinActive = !!pinnedTile;
     const stageMode = screenActive || pinActive;
@@ -2192,6 +2230,15 @@
         if (temp) temp.getTracks().forEach(t => t.stop());
       };
     }, [settingsOpen, section, devMode, camId, quality.cam]);
+
+    // Отклик сервера — при каждом заходе в «О программе»: он меняется, и
+    // число из прошлого захода рассказывало бы про прошлый раз.
+    useEffect(() => {
+      if (!settingsOpen || section !== "about") return;
+      let alive = true;
+      MeetUp.pingServer().then(ms => { if (alive) setSrvPing(ms); });
+      return () => { alive = false; };
+    }, [settingsOpen, section]);
 
     // Проба декодеров — один раз за сессию, при первом заходе в «О программе».
     useEffect(() => {
@@ -2760,29 +2807,43 @@
       case "about": return <>
         <Field label="MeetUp">
           <div>
-            <KV k="Сервер" v={location.host} />
+            {/* Адрес сервера не дублируем: он в карточке ниже, вместе с откликом. */}
             <KV k="Комната" v={roomTitle ? roomTitle + " · #" + roomCode : "#" + roomCode} />
             <KV k="Протокол" v="Бинарный v2 поверх WebSocket" />
           </div>
         </Field>
 
         <Field label="Этот сервер"
-               hint="Со слов самого сервера: проверить это снаружи нечем, потому что отвечает он сам за себя. Годится, чтобы понять, с кем имеете дело и почему часть кнопок не нарисована.">
+               hint="Всё, кроме времени ответа, — со слов самого сервера: проверить это снаружи нечем. Содержимое разговора от этого и не зависит, за него отвечает сквозное шифрование.">
+          <div className="srv-card">
+            <div className="srv-ico"><Icon name="info" size={18} /></div>
+            <div className="srv-main">
+              <span className="srv-name">{srvCfg.name || "MeetUp"}</span>
+              <a className="srv-host" href={location.origin} target="_blank" rel="noopener noreferrer"
+                 title="Открыть сервер в новой вкладке">{location.host}</a>
+            </div>
+            <div className="srv-ping">
+              {srvPing >= 0 && <i />}
+              <b>{srvPing < 0 ? "—" : srvPing + " мс"}</b>
+              <span>ответ</span>
+            </div>
+          </div>
           <div>
-            <KV k="Название" v={srvCfg.name || "MeetUp"} />
-            <KV k="Сборка" v={srvCfg.version && srvCfg.version.commit
-                              ? srvCfg.version.commit
-                                + (srvCfg.version.modified ? " · с правками" : "")
-                              : "не сообщает"} />
+            <KV k="Регистрация" v={srvCfg.registration === false ? "закрыта" : "открыта"} />
+            <KV k="Вход без аккаунта" v={srvCfg.anonymous_join === false ? "запрещён" : "разрешён"} />
+            <KV k="Разовые конференции"
+                v={srvCfg.anonymous_rooms === "off" ? "выключены"
+                   : srvCfg.anonymous_rooms === "account" ? "только из аккаунта"
+                   : "создаёт кто угодно"} />
+            <KV k="Демонстраций в комнате" v={String(srvCfg.max_screen_shares || 1)} />
             <KV k="Журнал подключений"
                 v={srvCfg.logs_names === undefined ? "не сообщает"
                    : srvCfg.logs_names ? "ведётся — имена и коды комнат попадают в лог"
                                        : "не ведётся"} />
-            <KV k="Регистрация" v={srvCfg.registration === false ? "закрыта" : "открыта"} />
-            <KV k="Разовые комнаты"
-                v={srvCfg.anonymous_rooms === "off" ? "выключены"
-                   : srvCfg.anonymous_rooms === "account" ? "только из аккаунта"
-                   : "создаёт кто угодно"} />
+            <KV k="Сборка сервера" v={srvCfg.version && srvCfg.version.commit
+                              ? srvCfg.version.commit
+                                + (srvCfg.version.modified ? " · с правками" : "")
+                              : "не сообщает"} />
           </div>
         </Field>
 
@@ -2908,20 +2969,19 @@
                         а пустой ползунок сбивает с толку. */}
                     {!screenSelf && screenAudioIn &&
                       <div className={"scrvol" + (isMobile ? " open" : "")}>
-                        <button onClick={toggleScreenMute}
-                                aria-label={screenVol === 0 ? "Вернуть звук демонстраций" : "Приглушить демонстрации"}
-                                title={screenCount > 1
-                                  ? (screenVol === 0 ? "Вернуть звук всех демонстраций" : "Приглушить все демонстрации")
-                                  : (screenVol === 0 ? "Вернуть звук демонстрации" : "Приглушить демонстрацию")}>
-                          <Icon name={screenVol === 0 ? "volume-off" : "volume"} size={18} />
+                        <button onClick={() => toggleScreenMute(screenId, curScreenVol)}
+                                aria-label={curScreenVol === 0 ? "Вернуть звук этой демонстрации" : "Приглушить эту демонстрацию"}
+                                title={curScreenVol === 0
+                                  ? "Вернуть звук — " + (sharerName || "демонстрация")
+                                  : "Приглушить — " + (sharerName || "демонстрация")}>
+                          <Icon name={curScreenVol === 0 ? "volume-off" : "volume"} size={18} />
                         </button>
                         <input type="range" className="set-range" min="0" max="200" step="5"
-                               value={screenVol}
-                               aria-label={screenCount > 1 ? "Громкость демонстраций" : "Громкость демонстрации"}
-                               title={screenCount > 1 ? "Одна на все демонстрации" : ""}
-                               onChange={(e) => changeScreenVol(+e.target.value)}
-                               style={{ background: rangeFill(screenVol, 200) }} />
-                        <span className="pct">{screenVol}%</span>
+                               value={curScreenVol}
+                               aria-label={"Громкость демонстрации — " + (sharerName || "участник")}
+                               onChange={(e) => changeScreenVol(screenId, +e.target.value)}
+                               style={{ background: rangeFill(curScreenVol, 200) }} />
+                        <span className="pct">{curScreenVol}%</span>
                       </div>}
                     {!screenSelf && devMode &&
                       <button className="stage-btn" onClick={resetBuffers}

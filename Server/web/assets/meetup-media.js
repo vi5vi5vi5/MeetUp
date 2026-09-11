@@ -356,6 +356,7 @@
       // звука), и подсветка «говорит» — а человек всего лишь убрал звук.
       deafened: false,
       peerVolume: new Map(),      // id -> множитель громкости участника
+      screenPeerVolume: new Map(),// id -> множитель громкости ЕГО демонстрации
       cipher: null,
       // отправка
       videoChoice: undefined,     // undefined = детект идёт, null = только legacy
@@ -465,6 +466,19 @@
         peer.gain.connect(st.masterGain);
       }
       return peer.gain;
+    }
+
+    // Узел громкости демонстрации конкретного ведущего. Общая ручка полосы
+    // (screenGain) остаётся выше по цепочке, поэтому «приглушить все» и личная
+    // громкость одного не мешают друг другу.
+    function screenOut(peer, id) {
+      if (!peer.scrGain) {
+        peer.scrGain = st.ctx.createGain();
+        const v = st.screenPeerVolume.get(id);
+        peer.scrGain.gain.value = v == null ? 1 : v;
+        peer.scrGain.connect(st.screenGain);
+      }
+      return peer.scrGain;
     }
 
     async function ensureAudio() {
@@ -1330,7 +1344,9 @@
         sub.player = new AudioWorkletNode(st.ctx, "mu-player",
           { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [1] });
         if (isScreen) {
-          sub.player.connect(st.screenGain);   // своя громкость у слушателя
+          // Через узел ЭТОГО ведущего: у каждой демонстрации своя громкость,
+          // а общая ручка полосы стоит следующей по цепочке.
+          sub.player.connect(screenOut(peer, sender));
         } else {
           // Плеер репортит глубину буфера — по ней считается audioPlayhead.
           sub.player.port.onmessage = (e) => { peer.aDepth = e.data; };
@@ -1442,6 +1458,16 @@
       micLevel: () => st.micLevel,
       setVolume: (v) => { st.volume = v; if (st.masterGain) st.masterGain.gain.value = masterLevel(); },
       setScreenVolume: (v) => { st.screenVolume = v; if (st.screenGain) st.screenGain.gain.value = v; },
+      // Личная громкость демонстрации одного ведущего (множитель, 1 = как есть).
+      setScreenPeerVolume: (id, v) => {
+        st.screenPeerVolume.set(id, v);
+        const peer = st.peers.get(id);
+        if (peer && peer.scrGain) peer.scrGain.gain.value = v;
+      },
+      screenPeerVolume: (id) => {
+        const v = st.screenPeerVolume.get(id);
+        return v == null ? 1 : v;
+      },
       // «Не слышу вас». Глушим только выход: очереди по-прежнему вычерпываются,
       // поэтому ни картинка, ни подсветка «говорит» не встают.
       setDeafened: (on) => {

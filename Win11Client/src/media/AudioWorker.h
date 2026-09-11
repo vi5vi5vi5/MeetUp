@@ -83,6 +83,9 @@ public slots:
     // Личная громкость участника (множитель 0..2). Только голос: у звука
     // демонстрации своя ручка на сцене, и она про фонограмму, а не про человека.
     void setPeerGain(qint64 id, qreal gain);
+    // То же для полосы экрана: у одного человека громкость голоса и
+    // громкость его демонстрации — разные величины.
+    void setScreenPeerGain(qint64 id, qreal gain);
     void clearPeerGains();
 
     void onFrame(const QByteArray& frame);   // входящий кадр v2 (полоса звука)
@@ -148,8 +151,9 @@ private:
     QByteArray mixOneFrame();                   // один кадр микса всех участников
     // perPeer — учитывать ли личную громкость отправителя (у голосов да, у
     // полосы демонстрации нет: там своя ручка).
+    // perPeer — карта личных множителей полосы (nullptr, если их нет).
     void mixInto(qint32* acc, QHash<quint32, Peer>& peers, qreal gain, qint64 now,
-                 bool perPeer);
+                 bool perPeer, bool screenLane = false);
     int  sinkQueuedMs() const;                  // сколько звука лежит в QAudioSink
     void publishPlayheads();                    // обновить снимок часов
     void forgetPlayhead(quint32 id);
@@ -211,6 +215,7 @@ private:
     // Личная громкость: ключ — тот же sender. Нет записи = 1.0, поэтому карта
     // пуста, пока никого не трогали.
     QHash<quint32, qreal> m_peerGain;
+    QHash<quint32, qreal> m_scrPeerGain;
 
     QAudioSink* m_sink = nullptr;
     QIODevice* m_out = nullptr;         // куда пишем микс (принадлежит m_sink)

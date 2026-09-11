@@ -87,33 +87,58 @@ AuthScaffold {
     Rectangle { width: parent.width; height: 1; color: Theme.border }
 
     // Адрес сервера: по умолчанию прод, правка сохраняется между запусками.
+    // Рядом — кнопка «что это за сервер»: человек выбирает адрес здесь, и
+    // вопросы про сервер возникают здесь же.
     Field {
         width: parent.width
         label: "Сервер"
         hint: "Пусто — вернуть адрес по умолчанию."
-        AppInput {
-            id: serverInput
+
+        Item {
             width: parent.width
-            placeholderText: "meetup.linkpc.net"
-            // Не биндинг: первый же символ, набранный руками, рвёт его насовсем,
-            // и поле переставало отражать реальный адрес. Подставляем сами —
-            // при рождении и когда адрес сменился (но не из-под курсора).
-            Component.onCompleted: text = Sys.serverAddress
-            Connections {
-                target: Sys
-                function onServerChanged() {
-                    if (!serverInput.activeFocus) serverInput.text = Sys.serverAddress
+            implicitHeight: serverInput.implicitHeight
+
+            AppInput {
+                id: serverInput
+                width: parent.width - 48
+                placeholderText: "meetup.linkpc.net"
+                // Не биндинг: первый же символ, набранный руками, рвёт его
+                // насовсем, и поле переставало отражать реальный адрес.
+                // Подставляем сами — при рождении и когда адрес сменился
+                // (но не из-под курсора).
+                Component.onCompleted: text = Sys.serverAddress
+                Connections {
+                    target: Sys
+                    function onServerChanged() {
+                        if (!serverInput.activeFocus) serverInput.text = Sys.serverAddress
+                    }
+                }
+                // Enter или уход фокуса — применяем и показываем нормализованный вид.
+                onEditingFinished: {
+                    if (text !== Sys.serverAddress) {
+                        Sys.setServer(text)
+                        text = Sys.serverAddress
+                        Auth.checkSession()   // вдруг на этом сервере жива сессия — сразу впустит
+                        Server.refresh()      // у другого сервера и правила другие
+                    }
                 }
             }
-            // Enter или уход фокуса — применяем и показываем нормализованный вид.
-            onEditingFinished: {
-                if (text !== Sys.serverAddress) {
-                    Sys.setServer(text)
-                    text = Sys.serverAddress
-                    Auth.checkSession()   // вдруг на этом сервере жива сессия — сразу впустит
-                    Server.refresh()      // у другого сервера и правила другие
-                }
+
+            IconButton {
+                anchors.right: parent.right
+                anchors.verticalCenter: serverInput.verticalCenter
+                size: "sm"
+                icon: "info"
+                // Зелёная точка — «сервер ответил». Она же отвечает на самый
+                // частый немой вопрос этого экрана: адрес вообще рабочий?
+                variant: Server.reachable ? "active" : "neutral"
+                onClicked: serverModal.open = true
             }
         }
+    }
+
+    ServerInfoModal {
+        id: serverModal
+        onClosed: serverModal.open = false
     }
 }

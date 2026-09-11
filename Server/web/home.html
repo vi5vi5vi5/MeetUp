@@ -80,16 +80,43 @@
                  border: 1px solid var(--border-strong); border-radius: 999px;
                  padding: 3px 9px; white-space: nowrap; }
   .rooms-list { display: flex; flex-direction: column; gap: 10px; }
-  .room-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px;
-              border: 1px solid var(--border); border-radius: var(--radius);
-              background: var(--surface); }
-  .room-row-name { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-  .room-row-name b { font-weight: 600; font-size: 14.5px; }
+
+  /* Свёрнутая комната — маленькая карточка, а не строка таблицы: тот же
+     радиус и та же поверхность, что у раскрытой, только тише и плотнее.
+     Прямоугольные углы здесь были опечаткой в токене (--radius такого нет,
+     в системе он называется --radius-card) и выбивались из всего остального. */
+  .room-row {
+    position: relative;
+    display: flex; align-items: center; gap: 14px;
+    padding: 14px 16px 14px 18px;
+    border: 1px solid var(--border); border-radius: var(--radius-card);
+    background: var(--surface);
+    transition: border-color .15s ease, background .15s ease;
+  }
+  .room-row:hover { border-color: var(--border-strong); background: var(--surface-2); }
+  /* Комната в эфире помечена слева — тем же приёмом, что и раскрытая карточка:
+     взгляд находит «где сейчас люди» раньше, чем читает названия. */
+  .room-row.live::before {
+    content: ""; position: absolute; left: 0; top: 14px; bottom: 14px;
+    width: 3px; border-radius: 0 3px 3px 0; background: var(--live);
+  }
+  .room-row-name { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+  .room-row-name b { font-weight: 600; font-size: 15px; letter-spacing: -.01em; }
   .room-row-name span { font-family: var(--font-mono); font-size: 12px; color: var(--text-faint);
                         overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .room-add { display: flex; align-items: center; gap: 10px; padding: 12px 14px;
-              border: 1px dashed var(--border-strong); border-radius: var(--radius);
-              color: var(--text-faint); font-size: 13.5px; }
+  .room-row-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+  @media (max-width: 700px) {
+    .room-row { flex-wrap: wrap; }
+    .room-row-actions { width: 100%; justify-content: flex-end; }
+  }
+
+  /* «Ещё одна комната» — намеренно пунктиром: это не комната, а место под неё. */
+  .room-add {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 16px;
+    border: 1px dashed var(--border-strong); border-radius: var(--radius-card);
+    color: var(--text-faint); font-size: 13px;
+  }
 
   /* ---- элементы аккаунта и модалок (из дизайна «Главная») ---- */
   .hu-avatar { display: inline-flex; align-items: center; justify-content: center; flex: none;
@@ -1134,9 +1161,16 @@
                         </Button>
                         <Button variant="secondary" icon="settings"
                                 onClick={() => setRoomSetId(lead.id)}>Настройки</Button>
+                        {/* Иконкой, а не плашкой во всю строку: третья кнопка
+                            переносилась на свою строку и ярко-красной полосой
+                            перетягивала на себя весь взгляд — хотя это не то,
+                            что делают чаще всего. В свёрнутых карточках она
+                            выглядит так же. */}
                         {lead.online &&
                           <Button variant="danger" icon="phone-off"
-                                  onClick={() => closeRoom(lead.id)}>Завершить</Button>}
+                                  aria-label="Завершить эфир" title="Завершить эфир"
+                                  style={{ flex: "0 0 auto" }}
+                                  onClick={() => closeRoom(lead.id)} />}
                       </div>
                       {!lead.online &&
                         <div className="room-note">
@@ -1146,7 +1180,7 @@
                     </Card>
 
                     {restRooms.map(r =>
-                      <div className="room-row" key={r.id}>
+                      <div className={"room-row" + (r.online ? " live" : "")} key={r.id}>
                         <div className="room-row-name">
                           <b>{r.title}</b>
                           <span>?room={r.code}</span>
@@ -1154,12 +1188,22 @@
                         {r.online
                           ? <Badge tone="live" dot>в эфире · {r.participants}</Badge>
                           : <Badge tone="muted" dot>не в эфире</Badge>}
-                        <Button variant="secondary" size="sm" iconRight="arrow-right"
-                                onClick={() => { location.href = "conference.html?room=" + encodeURIComponent(r.code); }}>
-                          {r.online ? "Войти" : "Открыть"}
-                        </Button>
-                        <Button variant="ghost" size="sm" icon="settings"
-                                onClick={() => setRoomSetId(r.id)} />
+                        <div className="room-row-actions">
+                          <Button variant="secondary" size="sm" iconRight="arrow-right"
+                                  onClick={() => { location.href = "conference.html?room=" + encodeURIComponent(r.code); }}>
+                            {r.online ? "Войти" : "Открыть"}
+                          </Button>
+                          {/* «Завершить» нужна ровно там же, где у раскрытой
+                              карточки: свернули комнату — не потеряли способ
+                              выгнать всех, не заходя в неё. */}
+                          {r.online &&
+                            <Button variant="danger" size="sm" icon="phone-off"
+                                    aria-label="Завершить эфир"
+                                    onClick={() => closeRoom(r.id)} />}
+                          <Button variant="ghost" size="sm" icon="settings"
+                                  aria-label="Настройки комнаты"
+                                  onClick={() => setRoomSetId(r.id)} />
+                        </div>
                       </div>)}
 
                     {maxRooms > 1 &&

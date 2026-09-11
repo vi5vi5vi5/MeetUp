@@ -249,7 +249,12 @@ void AudioWorker::setPeerGain(qint64 id, qreal gain) {
     else                                 m_peerGain[quint32(id)] = gain;
 }
 
-void AudioWorker::clearPeerGains() { m_peerGain.clear(); }
+void AudioWorker::setScreenPeerGain(qint64 id, qreal gain) {
+    if (qFuzzyCompare(gain, qreal(1.0))) m_scrPeerGain.remove(quint32(id));
+    else                                 m_scrPeerGain[quint32(id)] = gain;
+}
+
+void AudioWorker::clearPeerGains() { m_peerGain.clear(); m_scrPeerGain.clear(); }
 
 // ---------- захват микрофона ----------
 
@@ -727,7 +732,9 @@ QByteArray AudioWorker::mixOneFrame() {
     // второй полосы свои декодеры, свои буферы и своя громкость: фонограмма
     // может заглушать разговор, и убавляет её тот, кому мешает, а не ведущий.
     mixInto(acc, m_peers, 1.0, now, true);
-    mixInto(acc, m_scrPeers, m_scrVolGain, now, false);
+    // Полоса экрана: общая ручка остаётся множителем всей полосы, а
+    // личная громкость ведущего накладывается поверх — как у голосов.
+    mixInto(acc, m_scrPeers, m_scrVolGain, now, true, true);
 
     // Громкость воспроизведения из настроек (0..2) — на итоговый микс.
     // «Общий звук» выключен — выход в ноль, но очереди выше мы уже вычерпали:
@@ -742,14 +749,15 @@ QByteArray AudioWorker::mixOneFrame() {
 }
 
 void AudioWorker::mixInto(qint32* acc, QHash<quint32, Peer>& peers, qreal gain, qint64 now,
-                          bool perPeer) {
+                          bool perPeer, bool screenLane) {
     for (auto it = peers.begin(); it != peers.end(); ++it) {
         Peer& p = it.value();
         // Личная громкость участника — множителем к полосе. Считается ЗДЕСЬ, а
         // не в кодеке: подсветка «говорит» и часы для синхронизации губ берутся
         // до неё, поэтому приглушённый собеседник продолжает подсвечиваться, а
         // его видео не разъезжается со звуком.
-        const qreal g = perPeer ? gain * m_peerGain.value(it.key(), 1.0) : gain;
+        const QHash<quint32, qreal>& gains = screenLane ? m_scrPeerGain : m_peerGain;
+        const qreal g = perPeer ? gain * gains.value(it.key(), 1.0) : gain;
         if (!p.playing) {
             if (p.queue.size() >= p.prebuf) {          // предбуфер набран
                 p.playing = true;

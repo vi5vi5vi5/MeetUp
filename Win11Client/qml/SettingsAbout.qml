@@ -90,57 +90,25 @@ Column {
 
     Rectangle { width: parent.width; height: 1; color: Theme.border }
 
-    // Портрет сервера (GET /api/config). Здесь же, а не на отдельном экране:
-    // спрашивают об этом ровно тогда же, когда о версии клиента, — при разборе
-    // «почему у меня не так, как у него».
+    // Портрет сервера — той же панелью, что и окно «Сервер» на входе: это
+    // одни и те же сведения, и расходиться им незачем. Заголовок у панели
+    // выключен — свой уже стоит ниже.
     Column {
         width: parent.width
-        spacing: 2
+        spacing: 10
 
         Text {
-            width: parent.width
-            bottomPadding: 8
-            text: "Сервер о себе"
-            color: Theme.textMuted
+            text: "Сервер"
+            color: Theme.textFaint
             font.family: Theme.labelFont
             font.pixelSize: Theme.text2xs
             font.letterSpacing: 1.4
             font.capitalization: Font.AllUppercase
         }
 
-        InfoRow { key: "Название"; value: Server.name }
-        InfoRow {
-            key: "Сборка"
-            value: Server.versionCommit === ""
-                   ? "не сообщает"
-                   : Server.versionCommit + (Server.versionModified ? " · с правками" : "")
-        }
-        InfoRow {
-            key: "Журнал подключений"
-            value: !Server.loaded ? "не сообщает"
-                   : Server.logsNames ? "ведётся" : "не ведётся"
-        }
-        InfoRow { key: "Регистрация"; value: Server.registration ? "открыта" : "закрыта" }
-        InfoRow {
-            key: "Разовые комнаты"
-            value: Server.anonymousRooms === "off" ? "выключены"
-                   : Server.anonymousRooms === "account" ? "только из аккаунта"
-                   : "создаёт кто угодно"
-        }
-
-        Text {
+        ServerInfoPanel {
             width: parent.width
-            topPadding: 8
-            wrapMode: Text.WordWrap
-            // Формулировка выбрана осознанно. Проверить эти строки снаружи
-            // нечем: их сообщает тот самый сервер, о котором спрашивают, и
-            // правка одной строки в его коде заставит его сказать что угодно.
-            // Писать «проверено» значило бы обещать то, чего нет.
-            text: "Со слов самого сервера — проверить это снаружи нечем. "
-                  + "Полезно, чтобы понять, с кем имеете дело и почему часть кнопок не нарисована."
-            color: Theme.textFaint
-            font.family: Theme.uiFont
-            font.pixelSize: Theme.textXs
+            showHeader: false
         }
     }
 

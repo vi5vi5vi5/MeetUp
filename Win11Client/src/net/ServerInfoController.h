@@ -27,8 +27,17 @@ class ServerInfoController : public QObject {
     Q_PROPERTY(int     codeMinLen     READ codeMinLen     NOTIFY changed)
     Q_PROPERTY(int     maxAliases     READ maxAliases     NOTIFY changed)
     Q_PROPERTY(int     chatImageMaxKb READ chatImageMaxKb NOTIFY changed)
+    Q_PROPERTY(int     maxPersonalRooms READ maxPersonalRooms NOTIFY changed)
+    Q_PROPERTY(int     maxScreenShares  READ maxScreenShares  NOTIFY changed)
     // Ведёт ли сервер журнал с именами, кодами комнат и логинами.
     Q_PROPERTY(bool    logsNames      READ logsNames      NOTIFY changed)
+    // Сколько миллисекунд шёл ответ на сам этот запрос; -1 — не спрашивали
+    // или не ответили. Это HTTP-круг до сервера и обратно, а не WebSocket-пинг
+    // из конференции: до входа сокета ещё нет, а знать «далеко ли сервер»
+    // человеку нужно именно сейчас, когда он выбирает адрес.
+    Q_PROPERTY(int     pingMs         READ pingMs         NOTIFY changed)
+    // Ответил ли сервер вообще. Отличает «сервер молчит» от «старая версия».
+    Q_PROPERTY(bool    reachable      READ reachable      NOTIFY changed)
     // Сборка сервера: короткий SHA и признак локальных правок. Показывать это
     // можно только со словами «сервер сообщает о себе»: значение приходит от
     // того же сервера, и проверить его снаружи нечем.
@@ -46,7 +55,11 @@ public:
     int codeMinLen() const { return m_codeMinLen; }
     int maxAliases() const { return m_maxAliases; }
     int chatImageMaxKb() const { return m_chatImageMaxKb; }
+    int maxPersonalRooms() const { return m_maxPersonalRooms; }
+    int maxScreenShares() const { return m_maxScreenShares; }
     bool logsNames() const { return m_logsNames; }
+    int pingMs() const { return m_pingMs; }
+    bool reachable() const { return m_reachable; }
     QString versionCommit() const { return m_versionCommit; }
     bool versionModified() const { return m_versionModified; }
 
@@ -70,7 +83,11 @@ private:
     int m_codeMinLen = 3;
     int m_maxAliases = 5;
     int m_chatImageMaxKb = 440;
+    int m_maxPersonalRooms = 1;
+    int m_maxScreenShares = 1;
     bool m_logsNames = false;
+    int m_pingMs = -1;
+    bool m_reachable = false;
     QString m_versionCommit;
     bool m_versionModified = false;
 };

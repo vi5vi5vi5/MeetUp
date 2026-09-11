@@ -53,12 +53,17 @@ public:
     // переподключении, и настройка досталась бы случайному человеку.
     Q_INVOKABLE int peerVolume(qint64 id) const;
     Q_INVOKABLE void setPeerVolume(qint64 id, int percent);
+    // Личная громкость ДЕМОНСТРАЦИИ этого человека. Отдельно от голоса: одному
+    // приглушают фонограмму, но продолжают слушать, что он говорит.
+    Q_INVOKABLE int screenVolume(qint64 id) const;
+    Q_INVOKABLE void setScreenVolume(qint64 id, int percent);
 
 signals:
     void outputMutedChanged();
     void screenAudioLiveChanged();
     // Громкость участника изменилась — плитка обновляет свой значок.
     void peerVolumeChanged(qint64 id, int percent);
+    void screenVolumeChanged(qint64 id, int percent);
     // Захват звука демонстрации не поднялся — QML показывает тост.
     void screenAudioError(const QString& text);
     // Голос участника не открывается нашим ключом (или открылся снова).
@@ -92,4 +97,5 @@ private:
     bool m_outputMuted = false;         // «общий звук» выключен (deafen)
     bool m_scrLive = false;             // звук демонстрации приходит
     QHash<qint64, int> m_peerVolume;    // проценты; нет записи = 100
+    QHash<qint64, int> m_screenVolume;  // то же для полосы демонстрации
 };

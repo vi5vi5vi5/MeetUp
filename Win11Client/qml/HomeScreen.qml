@@ -189,6 +189,10 @@ Item {
                         }
                         Rectangle { width: parent.width; height: 1; color: Theme.border }
                         MenuItem { icon: "settings"; label: "Настройки профиля"; onTriggered: { accountMenu.close(); profileModal.open = true } }
+                        // Настройки конференции — здесь же: проверить микрофон
+                        // и камеру логично ДО того, как войдёшь к людям, а не
+                        // при них.
+                        MenuItem { icon: "mic"; label: "Настройки конференции"; onTriggered: { accountMenu.close(); confSettings.open = true } }
                         MenuItem { icon: Theme.dark ? "sun" : "moon"; label: Theme.dark ? "Светлая тема" : "Тёмная тема"; onTriggered: Theme.toggle() }
                         Rectangle { width: parent.width; height: 1; color: Theme.border }
                         // Настоящий выход: сервер гасит сессию, Main.qml вернёт на логин.
@@ -437,38 +441,65 @@ Item {
                 // Остальные комнаты — компактными строками.
                 Repeater {
                     model: root.otherRooms
+                    // Свёрнутая комната — маленькая карточка, а не строка
+                    // таблицы: тот же радиус и та же поверхность, что у
+                    // раскрытой, только тише и плотнее. Высоту задаёт
+                    // содержимое, ширины считает раскладка — руками
+                    // вычитать 320 пикселей было ошибкой: у кнопок разный
+                    // текст, и на «Завершить» всё разъезжалось.
                     delegate: Rectangle {
+                        id: roomRow
                         required property var modelData
-                        Layout.fillWidth: true
-                        implicitHeight: 56
-                        radius: Theme.radiusCard
-                        color: Theme.surface
-                        border.width: 1
-                        border.color: Theme.border
+                        readonly property bool live: modelData.online === true
 
-                        Row {
+                        Layout.fillWidth: true
+                        implicitHeight: rowLayout.implicitHeight + 24
+                        radius: Theme.radiusCard
+                        color: rowHover.hovered ? Theme.surface2 : Theme.surface
+                        border.width: 1
+                        border.color: rowHover.hovered ? Theme.borderStrong : Theme.border
+                        Behavior on color { ColorAnimation { duration: Theme.durFast } }
+
+                        HoverHandler { id: rowHover }
+
+                        // Комната в эфире помечена слева — тем же приёмом, что и
+                        // раскрытая карточка: взгляд находит «где сейчас люди»
+                        // раньше, чем читает названия.
+                        Rectangle {
+                            visible: roomRow.live
+                            anchors.left: parent.left
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 3
+                            height: parent.height - 28
+                            radius: 2
+                            color: Theme.live
+                        }
+
+                        RowLayout {
+                            id: rowLayout
                             anchors.fill: parent
-                            anchors.leftMargin: 14
-                            anchors.rightMargin: 10
+                            anchors.leftMargin: 18
+                            anchors.rightMargin: 12
+                            anchors.topMargin: 12
+                            anchors.bottomMargin: 12
                             spacing: 12
 
-                            Column {
-                                anchors.verticalCenter: parent.verticalCenter
-                                width: Math.max(0, parent.width - 320)
-                                spacing: 2
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 3
                                 Text {
-                                    width: parent.width
+                                    Layout.fillWidth: true
                                     elide: Text.ElideRight
-                                    text: modelData.title || ""
+                                    text: roomRow.modelData.title || ""
                                     color: Theme.text
                                     font.family: Theme.uiFont
-                                    font.pixelSize: Theme.textSm
+                                    font.pixelSize: Theme.textMd
                                     font.weight: Font.DemiBold
                                 }
                                 Text {
-                                    width: parent.width
+                                    Layout.fillWidth: true
                                     elide: Text.ElideRight
-                                    text: "?room=" + (modelData.code || "")
+                                    text: "?room=" + (roomRow.modelData.code || "")
                                     color: Theme.textFaint
                                     font.family: Theme.monoFont
                                     font.pixelSize: Theme.text2xs
@@ -476,29 +507,40 @@ Item {
                             }
 
                             Badge {
-                                anchors.verticalCenter: parent.verticalCenter
+                                Layout.alignment: Qt.AlignVCenter
                                 dot: true
-                                tone: modelData.online === true ? "live" : "muted"
-                                text: modelData.online === true
-                                      ? "в эфире · " + (modelData.participants || 0)
+                                tone: roomRow.live ? "live" : "muted"
+                                text: roomRow.live
+                                      ? "в эфире · " + (roomRow.modelData.participants || 0)
                                       : "не в эфире"
                             }
 
                             AppButton {
-                                anchors.verticalCenter: parent.verticalCenter
+                                Layout.alignment: Qt.AlignVCenter
                                 size: "sm"
                                 variant: "secondary"
                                 iconRight: "arrow-right"
-                                text: modelData.online === true ? "Войти" : "Открыть"
-                                onClicked: Rooms.enter(modelData.code, Auth.displayName)
+                                text: roomRow.live ? "Войти" : "Открыть"
+                                onClicked: Rooms.enter(roomRow.modelData.code, Auth.displayName)
+                            }
+                            // «Завершить» нужна ровно там же, где у раскрытой
+                            // карточки: свернули комнату — не потеряли способ
+                            // выгнать всех, не заходя в неё.
+                            IconButton {
+                                Layout.alignment: Qt.AlignVCenter
+                                visible: roomRow.live
+                                size: "sm"
+                                icon: "phone-off"
+                                variant: "danger"
+                                onClicked: { MyRoom.select(roomRow.modelData.id); MyRoom.closeRoom() }
                             }
                             IconButton {
-                                anchors.verticalCenter: parent.verticalCenter
+                                Layout.alignment: Qt.AlignVCenter
                                 size: "sm"
                                 icon: "settings"
                                 // Сначала переключаем текущую: модалка и ссылки
                                 // работают именно с ней.
-                                onClicked: { MyRoom.select(modelData.id); roomModal.open = true }
+                                onClicked: { MyRoom.select(roomRow.modelData.id); roomModal.open = true }
                             }
                         }
                     }
@@ -796,6 +838,14 @@ Item {
         title: "Выберите фото"
         nameFilters: ["Изображения (*.png *.jpg *.jpeg *.bmp *.webp)"]
         onAccepted: Auth.uploadAvatar(selectedFile)   // selectedFile: QUrl (file:///...)
+    }
+
+    // Настройки конференции с главной. Тот же экран, что и в звонке (значения
+    // живут в AV и общие), но без разделов, которым нужен сам звонок.
+    SettingsModal {
+        id: confSettings
+        inCall: false
+        onClosed: confSettings.open = false
     }
 
     AppModal {

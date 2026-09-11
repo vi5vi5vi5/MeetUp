@@ -24,6 +24,22 @@ Item {
     property int page: 0
     property int pageCount: 1
 
+    // Громкость ЭТОЙ демонстрации. Ручка на сцене стоит рядом с именем
+    // ведущего и читается как «громкость вот этого показа» — так она теперь и
+    // работает: у каждого ведущего своя, поверх общей ручки полосы из настроек.
+    //
+    // Значение держим зеркалом, а не биндингом: Audio.screenVolume — метод, и
+    // сам по себе он бы не пересчитался ни при смене ведущего, ни при правке
+    // из другого места.
+    property int sharerVolume: 100
+    function _syncSharerVolume() { root.sharerVolume = Audio.screenVolume(root.sid) }
+    Connections {
+        target: Audio
+        function onScreenVolumeChanged(id, percent) {
+            if (id === root.sid) root.sharerVolume = percent
+        }
+    }
+
     // Развернуть/свернуть показ. Разворачивает не плитку, а весь экран — этим
     // занимается ConferenceScreen, сцена только просит.
     signal expandRequested()
@@ -260,19 +276,20 @@ Item {
 
                 AppIcon {
                     anchors.centerIn: parent
-                    name: AV.screenVolume === 0 ? "volume-off" : "volume"
+                    name: root.sharerVolume === 0 ? "volume-off" : "volume"
                     size: 18
-                    color: AV.screenVolume === 0 ? Theme.textMuted : Theme.text
+                    color: root.sharerVolume === 0 ? Theme.textMuted : Theme.text
                 }
                 MouseArea {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
                     onClicked: {
-                        if (AV.screenVolume > 0) {
-                            volPill.lastVolume = AV.screenVolume
-                            AV.screenVolume = 0
+                        if (root.sharerVolume > 0) {
+                            volPill.lastVolume = root.sharerVolume
+                            Audio.setScreenVolume(root.sid, 0)
                         } else {
-                            AV.screenVolume = volPill.lastVolume > 0 ? volPill.lastVolume : 100
+                            Audio.setScreenVolume(root.sid,
+                                volPill.lastVolume > 0 ? volPill.lastVolume : 100)
                         }
                     }
                 }
@@ -286,7 +303,7 @@ Item {
                 // Ширина фиксированная: иначе ползунок дёргался бы вслед за
                 // числом, пока его тянут («9%» и «195%» — разной ширины).
                 width: 34
-                text: AV.screenVolume + "%"
+                text: root.sharerVolume + "%"
                 color: Theme.textMuted
                 font.family: Theme.uiFont
                 font.pixelSize: Theme.text2xs
@@ -303,17 +320,18 @@ Item {
                 anchors.verticalCenter: parent.verticalCenter
                 enabled: volPill.open
                 opacity: volPill.open ? 1 : 0
-                value: AV.screenVolume
-                onMoved: AV.screenVolume = Math.round(value)
+                value: root.sharerVolume
+                onMoved: Audio.setScreenVolume(root.sid, Math.round(value))
                 Behavior on opacity { NumberAnimation { duration: Theme.durFast } }
 
                 // Slider на перетаскивании присваивает value сам и тем рвёт
-                // привязку выше. Дальше настройка менялась бы мимо него —
-                // и «тихо» двигало бы проценты, но не ручку. Поэтому после
-                // первого движения источник правды доносим руками.
+                // привязку выше. Дальше значение менялось бы мимо него — и
+                // «тихо» двигало бы проценты, но не ручку. Поэтому источник
+                // правды доносим руками: и при смене ведущего (листание), и
+                // когда громкость поменяли не отсюда.
                 Connections {
-                    target: AV
-                    function onScreenVolumeChanged() { volSlider.value = AV.screenVolume }
+                    target: root
+                    function onSharerVolumeChanged() { volSlider.value = root.sharerVolume }
                 }
             }
         }
@@ -441,9 +459,9 @@ Item {
         root.locked = false
     }
 
-    onSidChanged: { unbind(); bind() }
+    onSidChanged: { unbind(); bind(); root._syncSharerVolume() }
     onIsSelfChanged: { unbind(); bind() }
-    Component.onCompleted: bind()
+    Component.onCompleted: { bind(); root._syncSharerVolume() }
     Component.onDestruction: unbind()
 
     Connections {

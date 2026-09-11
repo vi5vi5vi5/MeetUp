@@ -1,8 +1,11 @@
 #include "ServerInfoController.h"
 #include "ApiClient.h"
 
+#include <memory>
+
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QElapsedTimer>
 #include <QNetworkReply>
 
 ServerInfoController::ServerInfoController(ApiClient* api, QObject* parent)
@@ -23,21 +26,32 @@ void ServerInfoController::reset() {
     m_codeMinLen = 3;
     m_maxAliases = 5;
     m_chatImageMaxKb = 440;
+    m_maxPersonalRooms = 1;
+    m_maxScreenShares = 1;
     m_logsNames = false;
     m_versionCommit.clear();
     m_versionModified = false;
+    m_pingMs = -1;
+    m_reachable = false;
 }
 
 void ServerInfoController::refresh() {
+    // Часы заводим ДО запроса и читаем в обработчике: получится честный круг
+    // «ушло — вернулось», включая TLS-рукопожатие на первом обращении.
+    auto clock = std::make_shared<QElapsedTimer>();
+    clock->start();
     QNetworkReply* reply = m_api->get("/api/config");
 
-    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, clock]() {
         reply->deleteLater();
+        const int elapsed = int(clock->elapsed());
         const int status =
             reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const QJsonObject o = QJsonDocument::fromJson(reply->readAll()).object();
 
         reset();
+        m_pingMs = elapsed;
+        m_reachable = status != 0;
         if (status != 200) {
             // 404 — сервер старее этой ручки, 0 — не достучались. И то и другое
             // означает «правил не знаем», а не «всё запрещено».
@@ -66,6 +80,8 @@ void ServerInfoController::refresh() {
         m_codeMinLen     = intAt("code_min_len", m_codeMinLen);
         m_maxAliases     = intAt("max_aliases_per_room", m_maxAliases);
         m_chatImageMaxKb = intAt("chat_image_max_kb", m_chatImageMaxKb);
+        m_maxPersonalRooms = intAt("max_personal_rooms", m_maxPersonalRooms);
+        m_maxScreenShares = intAt("max_screen_shares", m_maxScreenShares);
         m_logsNames      = boolAt("logs_names", m_logsNames);
 
         const QJsonObject ver = o.value("version").toObject();

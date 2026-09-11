@@ -125,6 +125,21 @@ qint64 AudioEngine::screenPlayheadMs(quint32 id) const { return m_worker->screen
 
 int AudioEngine::peerVolume(qint64 id) const { return m_peerVolume.value(id, 100); }
 
+int AudioEngine::screenVolume(qint64 id) const {
+    return m_screenVolume.value(id, 100);
+}
+
+void AudioEngine::setScreenVolume(qint64 id, int percent) {
+    const int v = qBound(0, percent, 200);
+    if (screenVolume(id) == v) return;
+    if (v == 100) m_screenVolume.remove(id);
+    else          m_screenVolume[id] = v;
+    const qreal gain = v / 100.0;
+    QMetaObject::invokeMethod(m_worker, [this, id, gain] { m_worker->setScreenPeerGain(id, gain); },
+                              Qt::QueuedConnection);
+    emit screenVolumeChanged(id, v);
+}
+
 void AudioEngine::setPeerVolume(qint64 id, int percent) {
     const int v = qBound(0, percent, 200);
     if (peerVolume(id) == v) return;

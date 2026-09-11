@@ -170,6 +170,8 @@ qt_add_qml_module(Win11Client
         qml/Avatar.qml
         qml/LinkRow.qml
         qml/AppModal.qml
+        qml/ServerInfoModal.qml
+        qml/ServerInfoPanel.qml
         qml/LinkBar.qml
         qml/AuthScaffold.qml
         qml/VideoTile.qml

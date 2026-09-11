@@ -17,6 +17,14 @@ Item {
     property bool open: false
     signal closed()
 
+    // Настройки открываются и с главной — до того, как человек куда-то вошёл:
+    // «проверю микрофон заранее» это ровно тот случай, ради которого они и
+    // нужны. Но часть разделов вне звонка бессмысленна: диагностике нечего
+    // показывать, а ключ шифрования считается с кодом комнаты в соли, и до
+    // входа его просто не из чего сделать. Такие разделы прячем, а не гасим:
+    // серый пункт человек всё равно читает и пытается понять, почему он серый.
+    property bool inCall: true
+
     anchors.fill: parent
     visible: open
     z: 200
@@ -28,14 +36,16 @@ Item {
         { icon: "mic",      title: "Звук",         sub: "Микрофон, динамики и качество передачи голоса", page: "SettingsAudio.qml" },
         { icon: "video",    title: "Видео",        sub: "Камера, предпросмотр и параметры трансляции",   page: "SettingsVideo.qml" },
         { icon: "screen",   title: "Демонстрация", sub: "Что видят собеседники, когда вы показываете экран", page: "SettingsShare.qml" },
-        { icon: "lock",     title: "Шифрование",   sub: "Сквозное шифрование медиа и переписки",         page: "SettingsCrypto.qml" },
+        { icon: "lock",     title: "Шифрование",   sub: "Сквозное шифрование медиа и переписки",         page: "SettingsCrypto.qml", call: true },
         { icon: "keyboard", title: "Управление",   sub: "Глобальные клавиши — работают и вне окна",      page: "SettingsKeys.qml" },
         { icon: "layout",   title: "Интерфейс",    sub: "Тема, сетка участников и уведомления",          page: "SettingsInterface.qml" },
-        { icon: "activity", title: "Диагностика",  sub: "Живые показатели соединения и кодеков",         page: "SettingsStats.qml", dev: true },
+        { icon: "activity", title: "Диагностика",  sub: "Живые показатели соединения и кодеков",         page: "SettingsStats.qml", dev: true, call: true },
         { icon: "info",     title: "О программе",  sub: "Версия, сервер и журналы",                      page: "SettingsAbout.qml" }
     ]
     readonly property var sections: allSections.filter(function (s) {
-        return !s.dev || AV.devMode
+        if (s.dev && !AV.devMode) return false
+        if (s.call && !root.inCall) return false
+        return true
     })
 
     // Текущий раздел храним ИМЕНЕМ файла, а не номером в списке: номера едут,
@@ -50,6 +60,7 @@ Item {
     readonly property var currentInfo: root.sections[root.currentIdx]
 
     // Открытый раздел исчез вместе с режимом разработчика — уходим на первый.
+    onInCallChanged: root.current = root.sections[0].page
     onSectionsChanged: {
         var alive = root.sections.some(function (s) { return s.page === root.current })
         if (!alive) root.current = root.sections[0].page

@@ -47,6 +47,16 @@
     catch (e) { return {}; }
   }
 
+  // Сколько миллисекунд идёт круг до сервера и обратно. Меряем на самой
+  // лёгкой ручке — портрете сервера; кэш браузера обходим сами, иначе второй
+  // замер показал бы ноль и соврал.
+  function pingServer() {
+    const t0 = performance.now();
+    return fetch("/api/config?t=" + t0, { cache: "no-store" })
+      .then(() => Math.round(performance.now() - t0))
+      .catch(() => -1);
+  }
+
   function serverConfig() {
     if (!configPromise) {
       configPromise = api("GET", "/api/config").then(function (resp) {
@@ -126,6 +136,7 @@
     wsUrl: wsUrl,
     api: api,
     serverConfig: serverConfig,
+    pingServer: pingServer,
     serverConfigNow: serverConfigNow,
     savedName: savedName,
     saveName: saveName,
