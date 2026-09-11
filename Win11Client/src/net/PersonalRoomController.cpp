@@ -35,7 +35,7 @@ QString PersonalRoomController::errText(const QString& code) {
 
 // Тексты — словарь aliasErrText() веба.
 QString PersonalRoomController::aliasErrText(const QString& code) {
-    if (code == "alias_limit")      return "Не больше 5 ссылок на комнату. Удалите одну из существующих.";
+    if (code == "alias_limit")      return "Больше ссылок на эту комнату сервер не разрешает — удалите одну.";
     if (code == "no_alias")         return "Ссылка уже удалена.";
     if (code == "invalid_uses")     return "Лимит использований — целое число от 1.";
     if (code == "invalid_logins")   return "Проверьте список логинов: до 50 логинов, каждый до 64 символов.";
@@ -56,29 +56,59 @@ QString PersonalRoomController::slugify(const QString& raw) const {
     return s.left(32);
 }
 
-void PersonalRoomController::applyRoom(const QJsonObject& room) {
-    m_room = room.toVariantMap();   // вложенный participant_names станет QVariantList
-    m_exists = true;
+// Список с сервера целиком. Текущую комнату стараемся сохранить: человек
+// открыл настройки второй комнаты, а фоновый опрос раз в десять секунд не
+// должен перебросить его на первую.
+void PersonalRoomController::applyRooms(const QJsonArray& rooms, int max) {
+    m_rooms.clear();
+    for (const QJsonValue& v : rooms)
+        m_rooms.append(v.toObject().toVariantMap());
+    m_maxRooms = max > 0 ? max : 1;
     m_loaded = true;
+    setCurrent(m_currentId);
     emit roomChanged();
 }
 
+void PersonalRoomController::setCurrent(int roomId) {
+    // Ищем запрошенную; нет такой — берём ту, где сейчас люди, иначе первую.
+    // «Где люди» важнее порядка создания: обычно дело именно в ней.
+    QVariantMap chosen;
+    for (const QVariant& v : m_rooms) {
+        const QVariantMap r = v.toMap();
+        if (roomId >= 0 && r.value("id").toInt() == roomId) { chosen = r; break; }
+    }
+    if (chosen.isEmpty()) {
+        for (const QVariant& v : m_rooms) {
+            const QVariantMap r = v.toMap();
+            if (r.value("online").toBool()) { chosen = r; break; }
+        }
+    }
+    if (chosen.isEmpty() && !m_rooms.isEmpty())
+        chosen = m_rooms.first().toMap();
+
+    m_room = chosen;
+    m_currentId = chosen.isEmpty() ? -1 : chosen.value("id").toInt();
+}
+
+void PersonalRoomController::select(int roomId) {
+    if (roomId == m_currentId) return;
+    setCurrent(roomId);
+    emit roomChanged();
+}
+
+QString PersonalRoomController::roomPath(const QString& tail) const {
+    return "/api/me/rooms/" + QString::number(m_currentId) + tail;
+}
+
 void PersonalRoomController::refresh() {
-    QNetworkReply* reply = m_api->get("/api/me/room");
+    QNetworkReply* reply = m_api->get("/api/me/rooms");
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         reply->deleteLater();
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const QJsonObject obj = QJsonDocument::fromJson(reply->readAll()).object();
 
-        if (status == 200 && obj.contains("room")) {
-            applyRoom(obj["room"].toObject());
-            return;
-        }
-        if (status == 404) {                    // no_room: комнаты просто нет
-            m_loaded = true;
-            m_exists = false;
-            m_room.clear();
-            emit roomChanged();
+        if (status == 200) {
+            applyRooms(obj.value("rooms").toArray(), obj.value("max").toInt());
             return;
         }
         // Сеть/прочее: состояние НЕ трогаем — карточка не должна пропадать
@@ -94,15 +124,19 @@ void PersonalRoomController::create(const QString& code, const QString& title,
     setBusy(true);
 
     const QJsonObject body{ {"code", c}, {"title", title}, {"password", password} };
-    QNetworkReply* reply = m_api->post("/api/me/room", body);
+    QNetworkReply* reply = m_api->post("/api/me/rooms", body);
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         setBusy(false);
         reply->deleteLater();
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const QJsonObject obj = QJsonDocument::fromJson(reply->readAll()).object();
         if (status == 200 && obj.contains("room")) {
-            applyRoom(obj["room"].toObject());
+            // Новая комната становится текущей: человек только что её завёл,
+            // показывать ему вместо неё старую — значит сделать вид, что
+            // ничего не произошло.
+            m_currentId = obj["room"].toObject().value("id").toInt();
             emit created();
+            refresh();
             return;
         }
         if (status == 0) setError("Сервер недоступен. Попробуйте позже.");
@@ -118,15 +152,15 @@ void PersonalRoomController::change(const QVariantMap& patch) {
     setError("");
     setBusy(true);
 
-    QNetworkReply* reply = m_api->patch("/api/me/room", QJsonObject::fromVariantMap(patch));
+    QNetworkReply* reply = m_api->patch(roomPath(), QJsonObject::fromVariantMap(patch));
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         setBusy(false);
         reply->deleteLater();
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const QJsonObject obj = QJsonDocument::fromJson(reply->readAll()).object();
         if (status == 200 && obj.contains("room")) {
-            applyRoom(obj["room"].toObject());
             emit saved();
+            refresh();
             return;
         }
         if (status == 0) setError("Сервер недоступен. Попробуйте позже.");
@@ -137,16 +171,17 @@ void PersonalRoomController::change(const QVariantMap& patch) {
 void PersonalRoomController::remove() {
     setError("");
     setBusy(true);
-    QNetworkReply* reply = m_api->del("/api/me/room");
+    QNetworkReply* reply = m_api->del(roomPath());
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         setBusy(false);
         reply->deleteLater();
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         if (status == 200 || status == 404) {   // 404 — уже удалена, тоже успех
-            m_exists = false;
-            m_room.clear();
-            emit roomChanged();
+            // Текущей станет соседняя (её выберет applyRooms) — или никакой,
+            // если это была последняя.
+            m_currentId = -1;
             emit removed();
+            refresh();
             return;
         }
         setError(status == 0 ? "Сервер недоступен. Попробуйте позже."
@@ -155,7 +190,7 @@ void PersonalRoomController::remove() {
 }
 
 void PersonalRoomController::closeRoom() {
-    QNetworkReply* reply = m_api->post("/api/me/room/close");
+    QNetworkReply* reply = m_api->post(roomPath("/close"));
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         reply->deleteLater();
         // Отключения выгнанных участников доезжают до сервера чуть позже самого
@@ -168,8 +203,9 @@ void PersonalRoomController::closeRoom() {
 // Выход из аккаунта: комната следующего пользователя не должна мигнуть чужой.
 void PersonalRoomController::reset() {
     m_loaded = false;
-    m_exists = false;
     m_room.clear();
+    m_rooms.clear();
+    m_currentId = -1;
     setError("");
     emit roomChanged();
     m_aliases.clear();
@@ -180,7 +216,7 @@ void PersonalRoomController::reset() {
 
 void PersonalRoomController::loadAliases() {
     setAliasError("");
-    QNetworkReply* reply = m_api->get("/api/me/room/aliases");
+    QNetworkReply* reply = m_api->get(roomPath("/aliases"));
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         reply->deleteLater();
         const QJsonObject obj = QJsonDocument::fromJson(reply->readAll()).object();
@@ -212,7 +248,7 @@ void PersonalRoomController::createAlias(const QString& password, const QString&
 
     setAliasError("");
     setBusy(true);
-    QNetworkReply* reply = m_api->post("/api/me/room/aliases", body);
+    QNetworkReply* reply = m_api->post(roomPath("/aliases"), body);
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         setBusy(false);
         reply->deleteLater();
@@ -230,7 +266,7 @@ void PersonalRoomController::createAlias(const QString& password, const QString&
 }
 
 void PersonalRoomController::toggleAlias(int id, bool enabled) {
-    QNetworkReply* reply = m_api->patch("/api/me/room/aliases/" + QString::number(id),
+    QNetworkReply* reply = m_api->patch(roomPath("/aliases/" + QString::number(id)),
                                         QJsonObject{ {"enabled", enabled} });
     connect(reply, &QNetworkReply::finished, this, [this, reply, id]() {
         reply->deleteLater();
@@ -251,7 +287,7 @@ void PersonalRoomController::toggleAlias(int id, bool enabled) {
 }
 
 void PersonalRoomController::deleteAlias(int id) {
-    QNetworkReply* reply = m_api->del("/api/me/room/aliases/" + QString::number(id));
+    QNetworkReply* reply = m_api->del(roomPath("/aliases/" + QString::number(id)));
     connect(reply, &QNetworkReply::finished, this, [this, reply, id]() {
         reply->deleteLater();
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();

@@ -49,12 +49,17 @@ struct RoomLimits
 {
     int codeMinLen = 3;    // короче — код не занять
     int maxAliases = 5;    // ссылок-приглашений на комнату
+    int maxPerUser = 1;    // личных комнат на человека
 };
 
-// Личные комнаты: создание, настройка и удаление. Правила: комната одна на
-// пользователя, код уникален среди личных комнат, пароль хранится открытым
-// текстом (владелец должен уметь его посмотреть). Про HTTP и WebSocket этот
-// класс не знает; кто владелец — решает вызывающий по сессии.
+// Личные комнаты: создание, настройка и удаление. Правила: комнат у человека
+// до RoomLimits::maxPerUser, код уникален среди личных комнат, пароль хранится
+// открытым текстом (владелец должен уметь его посмотреть). Про HTTP и
+// WebSocket этот класс не знает; кто владелец — решает вызывающий по сессии.
+//
+// Все операции над конкретной комнатой берут roomId и сами проверяют, что она
+// принадлежит этому владельцу: чужой id обязан быть неотличим от
+// несуществующего, иначе по ответам можно перебрать чужие комнаты.
 //
 // Здесь же живут alias-ссылки комнаты: до RoomLimits::maxAliases на комнату, со своим
 // паролем, лимитом использований и списком допущенных логинов.
@@ -69,20 +74,29 @@ public:
                       const QString &rawTitle, const QString &password);
 
     // Частичное обновление: nullopt — поле не трогаем. Пустой пароль — убрать.
-    RoomResult update(int ownerId,
+    RoomResult update(int ownerId, int roomId,
                       const std::optional<QString> &rawCode,
                       const std::optional<QString> &rawTitle,
                       const std::optional<QString> &password);
 
-    bool remove(int ownerId);
+    bool remove(int ownerId, int roomId);
 
-    std::optional<PersonalRoom> byOwner(int ownerId) const;
+    // Все комнаты владельца, в порядке создания.
+    QList<PersonalRoom> byOwner(int ownerId) const;
+    // Первая (самая старая) комната. Через неё работают старые клиенты: они
+    // знают ровно про одну комнату и ходят в /api/me/room без номера.
+    std::optional<PersonalRoom> firstByOwner(int ownerId) const;
+    // Конкретная комната этого владельца; чужая — nullopt.
+    std::optional<PersonalRoom> byOwnerAndId(int ownerId, int roomId) const;
     std::optional<PersonalRoom> byCode(const QString &rawCode) const;
     std::optional<PersonalRoom> byId(int id) const;
 
+    // Сколько комнат разрешено — клиенту это нужно, чтобы показать «3 из 3».
+    int maxPerUser() const { return m_limits.maxPerUser; }
+
     // ---- Alias-ссылки (все операции владельца — от его ownerId) ----
 
-    AliasResult createAlias(int ownerId, const QString &password, int usesLeft,
+    AliasResult createAlias(int ownerId, int roomId, const QString &password, int usesLeft,
                             const QStringList &rawLogins, bool enabled);
 
     // Частичное обновление, как у update(): nullopt — поле не трогаем.
@@ -93,7 +107,7 @@ public:
                             const std::optional<bool> &enabled);
 
     bool removeAlias(int ownerId, int aliasId);
-    QList<RoomAlias> aliasesByOwner(int ownerId) const;
+    QList<RoomAlias> aliasesByRoom(int ownerId, int roomId) const;
     std::optional<RoomAlias> aliasByCode(const QString &rawCode) const;
 
     // Успешный вход по ссылке: минус одно использование; на нуле алиас
@@ -109,6 +123,11 @@ public:
 
 
 private:
+    // Комната алиаса, если она принадлежит этому владельцу. Общая проверка
+    // для updateAlias/removeAlias: раньше владение проверялось «единственной»
+    // комнатой, теперь их несколько.
+    std::optional<PersonalRoom> roomOfAlias(int ownerId, const RoomAlias &alias) const;
+
     QString generateAliasCode() const;
     static std::optional<QStringList> normalizeLogins(const QStringList &raw);
 

@@ -77,22 +77,39 @@ bool HttpApi::route(const HttpRequest &req, const Respond &respond)
         return true;
     }
 
-    if (p == QLatin1String("/api/me/room")) {
-        respond(handleMyRoom(req));
+    if (p == QLatin1String("/api/me/rooms")) {
+        respond(handleMyRooms(req));
         return true;
     }
-    if (p == QLatin1String("/api/me/room/close")) {
-        respond(m == "POST" ? handleCloseMyRoom(req) : err(405, QStringLiteral("method_not_allowed")));
+    if (p.startsWith(QLatin1String("/api/me/rooms/"))) {
+        // Дальше идёт /<id>[/close | /aliases[/<aliasId>]].
+        const QStringList rest =
+            p.mid(int(qstrlen("/api/me/rooms/"))).split(QLatin1Char('/'));
+        bool okId = false;
+        const int roomId = rest.value(0).toInt(&okId);
+        if (!okId) {
+            respond(err(404, QStringLiteral("no_room")));
+            return true;
+        }
+        const QString tail = rest.value(1);
+        if (rest.size() == 1) {
+            respond(handleMyRoom(req, roomId));
+        } else if (rest.size() == 2 && tail == QLatin1String("close")) {
+            respond(m == "POST" ? handleCloseMyRoom(req, roomId)
+                                : err(405, QStringLiteral("method_not_allowed")));
+        } else if (rest.size() == 2 && tail == QLatin1String("aliases")) {
+            respond(handleMyAliases(req, roomId));
+        } else if (rest.size() == 3 && tail == QLatin1String("aliases")) {
+            respond(handleMyAlias(req, rest.value(2)));
+        } else {
+            respond(err(404, QStringLiteral("unknown_endpoint")));
+        }
         return true;
     }
-    if (p == QLatin1String("/api/me/room/aliases")) {
-        respond(handleMyAliases(req));
+
+    // Старые клиенты: /api/me/room без номера — та же комната, первая.
+    if (routeLegacyRoom(req, respond))
         return true;
-    }
-    if (p.startsWith(QLatin1String("/api/me/room/aliases/"))) {
-        respond(handleMyAlias(req, p.mid(int(qstrlen("/api/me/room/aliases/")))));
-        return true;
-    }
 
     if (p == QLatin1String("/api/rooms")) {
         respond(m == "POST" ? handleCreateRoom(req) : err(405, QStringLiteral("method_not_allowed")));
@@ -146,6 +163,7 @@ ApiResponse HttpApi::handleConfig() const
         {"min_password_len", m_config.minPasswordLen},
         {"code_min_len", m_config.codeMinLen},
         {"max_aliases_per_room", m_config.maxAliasesPerRoom},
+        {"max_personal_rooms", m_config.maxPersonalPerUser},
         {"chat_image_max_kb", m_config.chatImageMaxKb},
     };
     if (!m_config.publicUrl.isEmpty())
@@ -423,37 +441,81 @@ void HttpApi::addLiveInfo(QJsonObject &j, const PersonalRoom &room, bool ownerVi
     j.insert(QStringLiteral("live_since_ms"), online ? live->liveSinceMs() : 0);
 }
 
-ApiResponse HttpApi::handleMyRoom(const HttpRequest &req)
+// Ответ владельцу: комната целиком (включая пароль — он вправе его
+// посмотреть) плюс живое состояние эфира.
+ApiResponse HttpApi::roomResponse(const PersonalRoom &room) const
+{
+    QJsonObject j = room.ownerJson();
+    addLiveInfo(j, room, /*ownerView=*/true);
+    return ApiResponse{200, QJsonObject{{"room", j}}, {}};
+}
+
+// Список комнат владельца и создание новой.
+ApiResponse HttpApi::handleMyRooms(const HttpRequest &req)
 {
     const std::optional<User> user = m_auth->userByToken(sessionToken(req));
     if (!user.has_value())
         return err(401, QStringLiteral("no_session"));
 
-    // Ответ владельцу: комната целиком (включая пароль — он вправе его
-    // посмотреть) плюс живое состояние эфира.
-    const auto roomResponse = [this](const PersonalRoom &room) {
-        QJsonObject j = room.ownerJson();
-        addLiveInfo(j, room, /*ownerView=*/true);
-        return ApiResponse{200, QJsonObject{{"room", j}}, {}};
-    };
+    if (req.method == "GET") {
+        QJsonArray arr;
+        for (const PersonalRoom &room : m_personalRooms->byOwner(user->id)) {
+            QJsonObject j = room.ownerJson();
+            addLiveInfo(j, room, /*ownerView=*/true);
+            arr.append(j);
+        }
+        // max отдаём рядом со списком: клиенту он нужен ровно здесь — показать
+        // «2 из 3» и погасить кнопку «добавить», не запрашивая конфиг отдельно.
+        return ApiResponse{200, QJsonObject{
+            {"rooms", arr},
+            {"max", m_personalRooms->maxPerUser()},
+        }, {}};
+    }
+
+    if (req.method == "POST") {
+        bool okJson = false;
+        const QJsonObject body = req.jsonBody(&okJson);
+        if (!okJson)
+            return err(400, QStringLiteral("invalid_json"));
+        const RoomResult res = m_personalRooms->create(
+            user->id,
+            body.value(QLatin1String("code")).toString(),
+            body.value(QLatin1String("title")).toString(),
+            body.value(QLatin1String("password")).toString());
+        if (!res.ok)
+            return err(statusForError(res.error), res.error);
+        qInfo().noquote() << QStringLiteral("API: personal room '%1' created (owner id=%2)")
+                                 .arg(res.room.code).arg(user->id);
+        return roomResponse(res.room);
+    }
+
+    return err(405, QStringLiteral("method_not_allowed"));
+}
+
+ApiResponse HttpApi::handleMyRoom(const HttpRequest &req, int roomId)
+{
+    const std::optional<User> user = m_auth->userByToken(sessionToken(req));
+    if (!user.has_value())
+        return err(401, QStringLiteral("no_session"));
 
     const QByteArray &m = req.method;
 
     if (m == "GET") {
-        const std::optional<PersonalRoom> room = m_personalRooms->byOwner(user->id);
+        const std::optional<PersonalRoom> room =
+            m_personalRooms->byOwnerAndId(user->id, roomId);
         if (!room.has_value())
             return err(404, QStringLiteral("no_room"));
         return roomResponse(*room);
     }
 
     if (m == "DELETE") {
-        if (!m_personalRooms->remove(user->id))
+        if (!m_personalRooms->remove(user->id, roomId))
             return err(404, QStringLiteral("no_room"));
         qInfo().noquote() << QStringLiteral("API: personal room removed (owner id=%1)").arg(user->id);
         return ApiResponse{};
     }
 
-    if (m == "POST" || m == "PATCH") {
+    if (m == "PATCH") {
         bool okJson = false;
         const QJsonObject body = req.jsonBody(&okJson);
         if (!okJson)
@@ -466,29 +528,22 @@ ApiResponse HttpApi::handleMyRoom(const HttpRequest &req)
             return body.value(QLatin1String(name)).toString();
         };
 
-        const RoomResult res = (m == "POST")
-            ? m_personalRooms->create(user->id,
-                                      body.value(QLatin1String("code")).toString(),
-                                      body.value(QLatin1String("title")).toString(),
-                                      body.value(QLatin1String("password")).toString())
-            : m_personalRooms->update(user->id, field("code"), field("title"), field("password"));
+        const RoomResult res = m_personalRooms->update(
+            user->id, roomId, field("code"), field("title"), field("password"));
         if (!res.ok)
             return err(statusForError(res.error), res.error);
-        if (m == "POST")
-            qInfo().noquote() << QStringLiteral("API: personal room '%1' created (owner id=%2)")
-                                     .arg(res.room.code).arg(user->id);
         return roomResponse(res.room);
     }
 
     return err(405, QStringLiteral("method_not_allowed"));
 }
 
-ApiResponse HttpApi::handleCloseMyRoom(const HttpRequest &req)
+ApiResponse HttpApi::handleCloseMyRoom(const HttpRequest &req, int roomId)
 {
     const std::optional<User> user = m_auth->userByToken(sessionToken(req));
     if (!user.has_value())
         return err(401, QStringLiteral("no_session"));
-    const std::optional<PersonalRoom> room = m_personalRooms->byOwner(user->id);
+    const std::optional<PersonalRoom> room = m_personalRooms->byOwnerAndId(user->id, roomId);
     if (!room.has_value())
         return err(404, QStringLiteral("no_room"));
 
@@ -536,15 +591,17 @@ static std::optional<QStringList> aliasLoginsField(const QJsonObject &body)
     return out;
 }
 
-ApiResponse HttpApi::handleMyAliases(const HttpRequest &req)
+ApiResponse HttpApi::handleMyAliases(const HttpRequest &req, int roomId)
 {
     const std::optional<User> user = m_auth->userByToken(sessionToken(req));
     if (!user.has_value())
         return err(401, QStringLiteral("no_session"));
+    if (!m_personalRooms->byOwnerAndId(user->id, roomId).has_value())
+        return err(404, QStringLiteral("no_room"));
 
     if (req.method == "GET") {
         QJsonArray arr;
-        for (const RoomAlias &a : m_personalRooms->aliasesByOwner(user->id))
+        for (const RoomAlias &a : m_personalRooms->aliasesByRoom(user->id, roomId))
             arr.append(a.ownerJson());
         return ApiResponse{200, QJsonObject{{"aliases", arr}}, {}};
     }
@@ -559,7 +616,7 @@ ApiResponse HttpApi::handleMyAliases(const HttpRequest &req)
         if (badUses)
             return err(400, QStringLiteral("invalid_uses"));
         const AliasResult res = m_personalRooms->createAlias(
-            user->id,
+            user->id, roomId,
             body.value(QLatin1String("password")).toString(),
             uses.value_or(-1),
             aliasLoginsField(body).value_or(QStringList{}),
@@ -615,6 +672,66 @@ ApiResponse HttpApi::handleMyAlias(const HttpRequest &req, const QString &idStr)
     return err(405, QStringLiteral("method_not_allowed"));
 }
 
+// ---------- Совместимость со старыми клиентами ----------
+
+// Скачанный .exe знает ровно одну личную комнату. Ему отвечаем про первую —
+// самую старую: она не меняется от запроса к запросу (ORDER BY id в
+// хранилище), и человек видит у старого клиента всегда одно и то же.
+int HttpApi::firstRoomId(const HttpRequest &req) const
+{
+    const std::optional<User> user = m_auth->userByToken(sessionToken(req));
+    if (!user.has_value())
+        return -1;
+    const std::optional<PersonalRoom> room = m_personalRooms->firstByOwner(user->id);
+    return room.has_value() ? room->id : -1;
+}
+
+bool HttpApi::routeLegacyRoom(const HttpRequest &req, const Respond &respond)
+{
+    const QString &p = req.path;
+    if (p != QLatin1String("/api/me/room") && !p.startsWith(QLatin1String("/api/me/room/")))
+        return false;
+
+    const QByteArray &m = req.method;
+
+    // Создание — единственное место, где старая ручка НЕ переводится в новую.
+    // Позволить ей завести вторую комнату значило бы дать клиенту создать то,
+    // чего он сам показать не умеет: человек нажал бы «создать», получил успех
+    // и не увидел результата. Поэтому здесь по-прежнему одна комната на
+    // владельца, с прежним кодом ошибки.
+    if (p == QLatin1String("/api/me/room") && m == "POST") {
+        if (firstRoomId(req) >= 0) {
+            respond(err(409, QStringLiteral("room_exists")));
+            return true;
+        }
+        respond(handleMyRooms(req));
+        return true;
+    }
+
+    const int roomId = firstRoomId(req);
+    if (roomId < 0) {
+        // Сессии нет или комнат нет — ответ тот же, что и раньше.
+        const std::optional<User> user = m_auth->userByToken(sessionToken(req));
+        respond(user.has_value() ? err(404, QStringLiteral("no_room"))
+                                 : err(401, QStringLiteral("no_session")));
+        return true;
+    }
+
+    if (p == QLatin1String("/api/me/room")) {
+        respond(handleMyRoom(req, roomId));
+    } else if (p == QLatin1String("/api/me/room/close")) {
+        respond(m == "POST" ? handleCloseMyRoom(req, roomId)
+                            : err(405, QStringLiteral("method_not_allowed")));
+    } else if (p == QLatin1String("/api/me/room/aliases")) {
+        respond(handleMyAliases(req, roomId));
+    } else if (p.startsWith(QLatin1String("/api/me/room/aliases/"))) {
+        respond(handleMyAlias(req, p.mid(int(qstrlen("/api/me/room/aliases/")))));
+    } else {
+        respond(err(404, QStringLiteral("unknown_endpoint")));
+    }
+    return true;
+}
+
 // ---------- Помощники ----------
 
 ApiResponse HttpApi::err(int status, const QString &code)
@@ -625,7 +742,8 @@ ApiResponse HttpApi::err(int status, const QString &code)
 int HttpApi::statusForError(const QString &code)
 {
     if (code == QLatin1String("login_taken") || code == QLatin1String("code_taken")
-        || code == QLatin1String("room_exists") || code == QLatin1String("alias_limit"))
+        || code == QLatin1String("room_exists") || code == QLatin1String("alias_limit")
+        || code == QLatin1String("room_limit"))
         return 409;
     if (code == QLatin1String("wrong_credentials") || code == QLatin1String("no_session"))
         return 401;

@@ -69,6 +69,28 @@
   .actions-row > * { flex: 1 1 auto; }
   .room-note { margin-top: 12px; font-size: var(--text-xs); color: var(--text-faint); }
 
+  /* Список комнат: та, что в эфире, раскрыта карточкой, остальные — строками.
+     Одинаковые карточки на всё читались бы как «четыре равных дела», хотя
+     дело обычно одно — то, где сейчас люди. */
+  .rooms-head { display: flex; align-items: baseline; justify-content: space-between;
+                gap: 12px; margin-bottom: 12px; }
+  .rooms-head b { font-size: 15px; font-weight: 700; }
+  .rooms-quota { font-family: var(--font-label); font-size: 11px; letter-spacing: .08em;
+                 text-transform: uppercase; color: var(--text-muted);
+                 border: 1px solid var(--border-strong); border-radius: 999px;
+                 padding: 3px 9px; white-space: nowrap; }
+  .rooms-list { display: flex; flex-direction: column; gap: 10px; }
+  .room-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+              border: 1px solid var(--border); border-radius: var(--radius);
+              background: var(--surface); }
+  .room-row-name { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+  .room-row-name b { font-weight: 600; font-size: 14.5px; }
+  .room-row-name span { font-family: var(--font-mono); font-size: 12px; color: var(--text-faint);
+                        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .room-add { display: flex; align-items: center; gap: 10px; padding: 12px 14px;
+              border: 1px dashed var(--border-strong); border-radius: var(--radius);
+              color: var(--text-faint); font-size: 13.5px; }
+
   /* ---- элементы аккаунта и модалок (из дизайна «Главная») ---- */
   .hu-avatar { display: inline-flex; align-items: center; justify-content: center; flex: none;
     border-radius: 50%; background: var(--surface-3); color: var(--text);
@@ -229,6 +251,7 @@
       invalid_code: "Код: от 3 до 32 символов — латиница, цифры, «-» и «_».",
       code_taken: "Этот код уже занят другой комнатой.",
       room_exists: "У вас уже есть личная комната.",
+      room_limit: "Больше комнат сервер не разрешает — удалите одну из имеющихся.",
       invalid_title: "Название: от 1 до 64 символов.",
       invalid_password: "Пароль слишком длинный (до 128 символов).",
       no_session: "Сессия истекла — войдите заново.",
@@ -626,7 +649,7 @@
 
   // Ссылки-приглашения комнаты: до 5 дополнительных кодов входа со своими
   // паролем, лимитом использований и списком допущенных логинов.
-  function AliasSection({ open }) {
+  function AliasSection({ open, roomId, maxAliases }) {
     const [items, setItems] = useState(null);   // null — ещё грузим
     const [formOpen, setFormOpen] = useState(false);
     const [busy, setBusy] = useState(false);
@@ -634,13 +657,13 @@
     useEffect(() => {
       if (!open) return;
       setFormOpen(false); setErr("");
-      MeetUp.api("GET", "/api/me/room/aliases").then(r => {
+      MeetUp.roomAliases(roomId).then(r => {
         setItems(r.ok && r.body ? (r.body.aliases || []) : []);
       });
-    }, [open]);
+    }, [open, roomId]);
     async function create(data) {
       setBusy(true);
-      const r = await MeetUp.api("POST", "/api/me/room/aliases", data);
+      const r = await MeetUp.createRoomAlias(roomId, data);
       setBusy(false);
       if (r.ok && r.body && r.body.alias) {
         setItems([...(items || []), r.body.alias]);
@@ -650,13 +673,13 @@
       }
     }
     async function toggle(a) {
-      const r = await MeetUp.api("PATCH", "/api/me/room/aliases/" + a.id, { enabled: !a.enabled });
+      const r = await MeetUp.updateRoomAlias(roomId, a.id, { enabled: !a.enabled });
       if (r.ok && r.body && r.body.alias)
         setItems(items.map(x => x.id === a.id ? r.body.alias : x));
       else setErr(aliasErrText(r.body && r.body.error));
     }
     async function del(a) {
-      const r = await MeetUp.api("DELETE", "/api/me/room/aliases/" + a.id);
+      const r = await MeetUp.deleteRoomAlias(roomId, a.id);
       if (r.ok || r.status === 404) { setItems(items.filter(x => x.id !== a.id)); setErr(""); }
     }
     const list = items || [];
@@ -664,7 +687,7 @@
       <div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
           <div className="hu-label" style={{ flex: 1 }}>Ссылки-приглашения</div>
-          {!formOpen && items !== null && list.length < 5 &&
+          {!formOpen && items !== null && list.length < (maxAliases || 5) &&
             <Button variant="secondary" size="sm" icon="plus" onClick={() => { setFormOpen(true); setErr(""); }}>
               Новая ссылка
             </Button>}
@@ -689,7 +712,7 @@
     );
   }
 
-  function RoomSettingsModal({ open, onClose, room, onChange, onDelete }) {
+  function RoomSettingsModal({ open, onClose, room, maxAliases, onChange, onDelete }) {
     const [title, setTitle] = useState(room ? room.title : "");
     const [code, setCode] = useState(room ? room.code : "");
     const [pass, setPass] = useState("");
@@ -781,7 +804,7 @@
           </div>
           {err && <div style={{ fontSize: 12, color: "var(--danger)" }}>{err}</div>}
           <div style={{ borderTop: "1px solid var(--border)", paddingTop: 14 }}>
-            <AliasSection open={open} />
+            <AliasSection open={open} roomId={room ? room.id : 0} maxAliases={maxAliases} />
           </div>
           <div style={{ borderTop: "1px solid var(--border)", paddingTop: 14,
                         display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -914,15 +937,23 @@
   function HomeScreen() {
     const [user, setUser] = useState(null);
     const [theme, setTheme] = useState(lsGet(THEME_KEY) === "light" ? "light" : "dark");
-    const [room, setRoom] = useState(null);   // личная комната с сервера
+    const [rooms, setRooms] = useState([]);   // личные комнаты с сервера
     const [profileOpen, setProfileOpen] = useState(false);
     const [createOpen, setCreateOpen] = useState(false);
-    const [roomSetOpen, setRoomSetOpen] = useState(false);
+    // Комнат может быть несколько; сколько разрешено — говорит сервер.
+    // roomSetId — какую комнату сейчас настраивают (null — модалка закрыта).
+    const [maxRooms, setMaxRooms] = useState(1);
+    const [roomSetId, setRoomSetId] = useState(null);
+    // Портрет сервера: отсюда берётся потолок ссылок-приглашений, чтобы
+    // кнопка «Новая ссылка» гасла там же, где сервер начнёт отказывать.
+    const [srvCfg, setSrvCfg] = useState(() => MeetUp.serverConfigNow());
+    const maxAliases = srvCfg.max_aliases_per_room || 5;
 
     useEffect(() => {
       document.documentElement.setAttribute("data-theme", theme);
       lsSet(THEME_KEY, theme);
     }, [theme]);
+    useEffect(() => { MeetUp.serverConfig().then(setSrvCfg); }, []);
     const toggleTheme = () => setTheme(t => (t === "dark" ? "light" : "dark"));
 
     // Страница только для вошедших: нет сессии — на логин. Личная комната
@@ -930,8 +961,11 @@
     useEffect(() => {
       MeetUp.authMe().then(async resp => {
         if (resp.ok && resp.body && resp.body.user) {
-          const r = await MeetUp.myRoom();
-          if (r.ok && r.body && r.body.room) setRoom(r.body.room);
+          const r = await MeetUp.myRooms();
+          if (r.ok && r.body) {
+            setRooms(r.body.rooms || []);
+            setMaxRooms(r.body.max || 1);
+          }
           setUser(resp.body.user);
           MeetUp.saveName(resp.body.user.display_name);
           lsSet("meetup.avatar", null);   // старый локальный черновик больше не нужен
@@ -944,9 +978,11 @@
     // Владелец с главной наблюдает за комнатой: участники и статус эфира
     // обновляются раз в 10 секунд (пока вкладка видима) и при возврате на неё.
     useEffect(() => {
-      const upd = () => MeetUp.myRoom().then(r => {
-        if (r.ok && r.body && r.body.room) setRoom(r.body.room);
-        else if (r.status === 404) setRoom(null);
+      const upd = () => MeetUp.myRooms().then(r => {
+        if (r.ok && r.body) {
+          setRooms(r.body.rooms || []);
+          setMaxRooms(r.body.max || 1);
+        }
       });
       window.addEventListener("focus", upd);
       const id = setInterval(() => { if (!document.hidden) upd(); }, 10000);
@@ -984,30 +1020,46 @@
 
     // Операции с личной комнатой: null — успех, иначе машинный код ошибки
     // (текст подбирают модалки через roomErrText).
+    // Обновить одну комнату в списке, не трогая остальные: перезапрашивать
+    // весь список после каждой правки значило бы моргать всей колонкой.
+    function replaceRoom(room) {
+      setRooms(rs => rs.map(r => r.id === room.id ? room : r));
+    }
+    async function reloadRooms() {
+      const r = await MeetUp.myRooms();
+      if (r.ok && r.body) { setRooms(r.body.rooms || []); setMaxRooms(r.body.max || 1); }
+    }
+
     async function createRoom(data) {
       const r = await MeetUp.createMyRoom(data);
-      if (r.ok && r.body && r.body.room) { setRoom(r.body.room); return null; }
+      if (r.ok && r.body && r.body.room) { setRooms(rs => [...rs, r.body.room]); return null; }
       return (r.body && r.body.error) || "server";
     }
-    async function changeRoom(patch) {
-      const r = await MeetUp.updateMyRoom(patch);
-      if (r.ok && r.body && r.body.room) { setRoom(r.body.room); return null; }
+    async function changeRoom(id, patch) {
+      const r = await MeetUp.updateMyRoom(id, patch);
+      if (r.ok && r.body && r.body.room) { replaceRoom(r.body.room); return null; }
       return (r.body && r.body.error) || "server";
     }
-    async function deleteRoom() {
-      await MeetUp.deleteMyRoom();
-      setRoom(null);
-      setRoomSetOpen(false);
+    async function deleteRoom(id) {
+      await MeetUp.deleteMyRoom(id);
+      setRooms(rs => rs.filter(r => r.id !== id));
+      setRoomSetId(null);
     }
-    async function closeRoom() {
-      await MeetUp.closeMyRoom();
+    async function closeRoom(id) {
+      await MeetUp.closeMyRoom(id);
       // Отключения участников доходят до сервера чуть позже самого close.
       await new Promise(res => setTimeout(res, 500));
-      const r = await MeetUp.myRoom();
-      if (r.ok && r.body && r.body.room) setRoom(r.body.room);
+      reloadRooms();
     }
 
     if (!user) return null;   // идёт проверка сессии
+
+    // Впереди та комната, где сейчас люди: сортировка устойчивая, поэтому
+    // порядок создания внутри групп сохраняется.
+    const ordered = [...rooms].sort((a, b) => (b.online ? 1 : 0) - (a.online ? 1 : 0));
+    const lead = ordered[0];
+    const restRooms = ordered.slice(1);
+    const editedRoom = rooms.find(r => r.id === roomSetId) || null;
 
     const name = user.display_name;
     const avatar = avatarSrc(user);
@@ -1034,7 +1086,7 @@
               <div className="hero">
                 <div className="hero-badge">
                   <Avatar size={26} name={name} src={avatar} />
-                  <span className="hb-txt">{room && room.online ? "Вы в эфире" : "Вы онлайн"}</span>
+                  <span className="hb-txt">{rooms.some(r => r.online) ? "Вы в эфире" : "Вы онлайн"}</span>
                 </div>
                 <div>
                   <div className="greet-label">С возвращением</div>
@@ -1047,40 +1099,82 @@
               </div>
 
               <div className="room-slot">
-                {room ? (
-                  <Card elevated>
-                    <div className="room-head">
-                      <h2 className="card-title">{room.title}</h2>
-                      {room.online
-                        ? <LiveDuration sinceMs={room.live_since_ms} />
-                        : <Badge tone="muted" dot>не в эфире</Badge>}
-                    </div>
-                    {room.online &&
-                      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
-                        <ParticipantsStack names={room.participant_names || []} />
-                        <span style={{ fontSize: 13, color: "var(--text-muted)" }}>
-                          Участники ({room.participants})
-                        </span>
-                      </div>}
-                    <LinkRow code={room.code} />
-                    <div className="actions-row">
-                      <Button variant="primary" iconRight="arrow-right"
-                              onClick={() => { location.href = "conference.html?room=" + encodeURIComponent(room.code); }}>
-                        {room.online ? "Войти в эфир" : "Открыть комнату"}
-                      </Button>
-                      <Button variant="secondary" icon="settings" onClick={() => setRoomSetOpen(true)}>Настройки</Button>
-                      {room.online &&
-                        <Button variant="danger" icon="phone-off" onClick={closeRoom}>Завершить</Button>}
-                    </div>
-                    {!room.online &&
-                      <div className="room-note">
-                        Эфир начинается с вашего входа{room.password ? ", гости подключаются по паролю" : ""} —
-                        и продолжается, пока в комнате кто-то есть.
-                      </div>}
-                  </Card>
-                ) : (
+                {rooms.length === 0 ? (
                   <EmptyRoom onCreate={() => setCreateOpen(true)} />
-                )}
+                ) : (<>
+                  {maxRooms > 1 &&
+                    <div className="rooms-head">
+                      <b>Мои комнаты</b>
+                      <span className="rooms-quota">{rooms.length} из {maxRooms}</span>
+                    </div>}
+
+                  <div className="rooms-list">
+                    {/* Раскрыта та, где сейчас люди: обычно дело именно в ней.
+                        Остальные — строками, чтобы список не превращался в
+                        колонку одинаковых карточек. */}
+                    <Card elevated>
+                      <div className="room-head">
+                        <h2 className="card-title">{lead.title}</h2>
+                        {lead.online
+                          ? <LiveDuration sinceMs={lead.live_since_ms} />
+                          : <Badge tone="muted" dot>не в эфире</Badge>}
+                      </div>
+                      {lead.online &&
+                        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+                          <ParticipantsStack names={lead.participant_names || []} />
+                          <span style={{ fontSize: 13, color: "var(--text-muted)" }}>
+                            Участники ({lead.participants})
+                          </span>
+                        </div>}
+                      <LinkRow code={lead.code} />
+                      <div className="actions-row">
+                        <Button variant="primary" iconRight="arrow-right"
+                                onClick={() => { location.href = "conference.html?room=" + encodeURIComponent(lead.code); }}>
+                          {lead.online ? "Войти в эфир" : "Открыть комнату"}
+                        </Button>
+                        <Button variant="secondary" icon="settings"
+                                onClick={() => setRoomSetId(lead.id)}>Настройки</Button>
+                        {lead.online &&
+                          <Button variant="danger" icon="phone-off"
+                                  onClick={() => closeRoom(lead.id)}>Завершить</Button>}
+                      </div>
+                      {!lead.online &&
+                        <div className="room-note">
+                          Эфир начинается с вашего входа{lead.password ? ", гости подключаются по паролю" : ""} —
+                          и продолжается, пока в комнате кто-то есть.
+                        </div>}
+                    </Card>
+
+                    {restRooms.map(r =>
+                      <div className="room-row" key={r.id}>
+                        <div className="room-row-name">
+                          <b>{r.title}</b>
+                          <span>?room={r.code}</span>
+                        </div>
+                        {r.online
+                          ? <Badge tone="live" dot>в эфире · {r.participants}</Badge>
+                          : <Badge tone="muted" dot>не в эфире</Badge>}
+                        <Button variant="secondary" size="sm" iconRight="arrow-right"
+                                onClick={() => { location.href = "conference.html?room=" + encodeURIComponent(r.code); }}>
+                          {r.online ? "Войти" : "Открыть"}
+                        </Button>
+                        <Button variant="ghost" size="sm" icon="settings"
+                                onClick={() => setRoomSetId(r.id)} />
+                      </div>)}
+
+                    {maxRooms > 1 &&
+                      <div className="room-add">
+                        <span style={{ flex: 1 }}>
+                          {rooms.length < maxRooms
+                            ? "Ещё одна комната — со своим кодом и паролем"
+                            : "Больше комнат сервер не разрешает"}
+                        </span>
+                        <Button variant="secondary" size="sm" icon="plus"
+                                disabled={rooms.length >= maxRooms}
+                                onClick={() => setCreateOpen(true)}>Добавить</Button>
+                      </div>}
+                  </div>
+                </>)}
               </div>
             </div>
 
@@ -1109,8 +1203,10 @@
 
         <CreateRoomModal open={createOpen} onClose={() => setCreateOpen(false)}
                          userName={name} onCreate={createRoom} />
-        <RoomSettingsModal open={roomSetOpen} onClose={() => setRoomSetOpen(false)}
-                           room={room} onChange={changeRoom} onDelete={deleteRoom} />
+        <RoomSettingsModal open={roomSetId !== null} onClose={() => setRoomSetId(null)}
+                           room={editedRoom} maxAliases={maxAliases}
+                           onChange={patch => changeRoom(roomSetId, patch)}
+                           onDelete={() => deleteRoom(roomSetId)} />
       </div>
     );
   }

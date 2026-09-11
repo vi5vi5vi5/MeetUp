@@ -1,11 +1,14 @@
 #pragma once
 
+#include <algorithm>
+
 #include <QHash>
+#include <QList>
 
 #include "interface/Abstract/IPersonalRooms.h"
 
-// Личные комнаты в памяти: живут до перезапуска сервера. Дополнительные
-// хеши — индексы по коду (join, проверка занятости) и владельцу (главная).
+// Личные комнаты в памяти: живут до перезапуска сервера. Дополнительный
+// хеш — индекс по коду (join, проверка занятости).
 class InMemoryPersonalRooms : public IPersonalRooms
 {
 public:
@@ -22,7 +25,6 @@ public:
 
         m_rooms.insert(room.id, room);
         m_byCode.insert(room.code, room.id);
-        m_byOwner.insert(room.ownerId, room.id);
     }
 
     std::optional<PersonalRoom> findById(int id) const override
@@ -41,12 +43,19 @@ public:
         return findById(*it);
     }
 
-    std::optional<PersonalRoom> findByOwner(int ownerId) const override
+    QList<PersonalRoom> listByOwner(int ownerId) const override
     {
-        const auto it = m_byOwner.constFind(ownerId);
-        if (it == m_byOwner.constEnd())
-            return std::nullopt;
-        return findById(*it);
+        // Индекса по владельцу больше нет: комнат у него теперь несколько, а
+        // держать ради этого список списков в образцовой реализации незачем —
+        // проход по хешу здесь и дешевле, и понятнее. В SQLite для того же
+        // есть idx_personal_rooms_owner.
+        QList<PersonalRoom> out;
+        for (const PersonalRoom &r : m_rooms)
+            if (r.ownerId == ownerId)
+                out.append(r);
+        std::sort(out.begin(), out.end(),
+                  [](const PersonalRoom &a, const PersonalRoom &b) { return a.id < b.id; });
+        return out;
     }
 
     bool removeBy(int id) override
@@ -55,7 +64,6 @@ public:
         if (it == m_rooms.constEnd())
             return false;
         m_byCode.remove(it->code);
-        m_byOwner.remove(it->ownerId);
         m_rooms.remove(id);
         return true;
     }
@@ -63,6 +71,5 @@ public:
 private:
     QHash<int, PersonalRoom> m_rooms;
     QHash<QString, int> m_byCode;
-    QHash<int, int> m_byOwner;
     int m_nextId = 1;
 };

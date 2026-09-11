@@ -117,6 +117,10 @@ int main(int argc, char *argv[])
     auto db = std::make_shared<SqliteDb>(QDir(dataDir).filePath(QStringLiteral("meetup.db")));
     if (!db->isOpen())
         return 1;
+    // Миграция схемы сорвалась. База при этом цела — всё шло в транзакции, —
+    // но продолжать нельзя: половина кода уже рассчитывает на новую схему.
+    if (db->migrationFailed())
+        return 1;
     auto users = std::make_shared<SqliteUsers>(db);
     auto sessions = std::make_shared<SqliteSessions>(db);
     auto personalRooms = std::make_shared<SqlitePersonalRooms>(db);
@@ -127,7 +131,7 @@ int main(int argc, char *argv[])
                    cfg.minPasswordLen, cfg.pbkdf2Iters});
     auto rooms = std::make_shared<PersonalRoomService>(
         personalRooms, roomAliases,
-        RoomLimits{cfg.codeMinLen, cfg.maxAliasesPerRoom});
+        RoomLimits{cfg.codeMinLen, cfg.maxAliasesPerRoom, cfg.maxPersonalPerUser});
 
     HttpApi api(auth, rooms, &registry, dataDir, cfg);
     ConferenceServer conference(wsPort, &registry, auth, rooms, cfg);
@@ -154,6 +158,8 @@ int main(int argc, char *argv[])
         closed << QStringLiteral("разовые комнаты выключены");
     if (cfg.maxTotalRooms > 0)
         closed << QStringLiteral("потолок разовых комнат: %1").arg(cfg.maxTotalRooms);
+    if (cfg.maxPersonalPerUser != 1)
+        closed << QStringLiteral("личных комнат на человека: %1").arg(cfg.maxPersonalPerUser);
     if (!closed.isEmpty())
         qCInfo(lcApp).noquote() << QStringLiteral("Ограничения: %1").arg(closed.join(
             QStringLiteral("; ")));

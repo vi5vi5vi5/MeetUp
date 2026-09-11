@@ -2,6 +2,8 @@
 
 #include <optional>
 
+#include <QList>
+
 #include "models/PersonalRoom.h"
 
 // Хранилище личных комнат. Как и IUsers: сервисы работают с интерфейсом,
@@ -19,8 +21,10 @@ public:
     // code должен быть уже нормализован (PersonalRoomService::normalizeCode).
     virtual std::optional<PersonalRoom> findByCode(const QString &code) const = 0;
 
-    // Комната одна на пользователя, поэтому поиск по владельцу однозначен.
-    virtual std::optional<PersonalRoom> findByOwner(int ownerId) const = 0;
+    // Все комнаты владельца, по возрастанию id — то есть в порядке создания.
+    // Порядок важен: старые клиенты знают только про одну комнату и получают
+    // первую из списка, и она не должна меняться от запроса к запросу.
+    virtual QList<PersonalRoom> listByOwner(int ownerId) const = 0;
 
     virtual bool removeBy(int id) = 0;
 };

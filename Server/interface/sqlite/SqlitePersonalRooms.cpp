@@ -70,14 +70,18 @@ std::optional<PersonalRoom> SqlitePersonalRooms::findByCode(const QString &code)
     return rowToRoom(q);
 }
 
-std::optional<PersonalRoom> SqlitePersonalRooms::findByOwner(int ownerId) const
+QList<PersonalRoom> SqlitePersonalRooms::listByOwner(int ownerId) const
 {
+    // ORDER BY id — не украшение: старые клиенты знают только про одну комнату
+    // и получают первую из этого списка. Без явного порядка «первая» могла бы
+    // меняться от запроса к запросу, и клиент показывал бы то одну, то другую.
     SqliteStmt q(*m_db, "SELECT id, owner_id, code, title, password, created_at_ms "
-                        "FROM personal_rooms WHERE owner_id = ?");
+                        "FROM personal_rooms WHERE owner_id = ? ORDER BY id");
     q.bind(1, ownerId);
-    if (!q.step())
-        return std::nullopt;
-    return rowToRoom(q);
+    QList<PersonalRoom> out;
+    while (q.step())
+        out.append(rowToRoom(q));
+    return out;
 }
 
 bool SqlitePersonalRooms::removeBy(int id)

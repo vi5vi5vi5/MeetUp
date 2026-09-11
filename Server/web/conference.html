@@ -887,10 +887,11 @@
     const engine = M.engine;
 
     useEffect(() => { document.documentElement.setAttribute("data-theme", theme); }, [theme]);
-    // Правила сервера (потолок картинки в чате, прежде всего). Сюда часто
-    // заходят прямо по ссылке, минуя вход и главную, — значит спросить
-    // должен и этот экран, иначе ужимать будем под чужое число.
-    useEffect(() => { MeetUp.serverConfig(); }, []);
+    // Портрет сервера: потолок картинки в чате (см. imageLimitB64) и то, что
+    // показывается в «О программе». Сюда часто заходят прямо по ссылке, минуя
+    // вход и главную, — значит спросить должен и этот экран.
+    const [srvCfg, setSrvCfg] = useState(() => MeetUp.serverConfigNow());
+    useEffect(() => { MeetUp.serverConfig().then(setSrvCfg); }, []);
     const toggleTheme = () => setTheme(t => (t === "dark" ? "light" : "dark"));
 
     useEffect(() => { if (roomTitle) document.title = roomTitle + " — MeetUp"; }, [roomTitle]);
@@ -2722,6 +2723,26 @@
             <KV k="Сервер" v={location.host} />
             <KV k="Комната" v={roomTitle ? roomTitle + " · #" + roomCode : "#" + roomCode} />
             <KV k="Протокол" v="Бинарный v2 поверх WebSocket" />
+          </div>
+        </Field>
+
+        <Field label="Этот сервер"
+               hint="Со слов самого сервера: проверить это снаружи нечем, потому что отвечает он сам за себя. Годится, чтобы понять, с кем имеете дело и почему часть кнопок не нарисована.">
+          <div>
+            <KV k="Название" v={srvCfg.name || "MeetUp"} />
+            <KV k="Сборка" v={srvCfg.version && srvCfg.version.commit
+                              ? srvCfg.version.commit
+                                + (srvCfg.version.modified ? " · с правками" : "")
+                              : "не сообщает"} />
+            <KV k="Журнал подключений"
+                v={srvCfg.logs_names === undefined ? "не сообщает"
+                   : srvCfg.logs_names ? "ведётся — имена и коды комнат попадают в лог"
+                                       : "не ведётся"} />
+            <KV k="Регистрация" v={srvCfg.registration === false ? "закрыта" : "открыта"} />
+            <KV k="Разовые комнаты"
+                v={srvCfg.anonymous_rooms === "off" ? "выключены"
+                   : srvCfg.anonymous_rooms === "account" ? "только из аккаунта"
+                   : "создаёт кто угодно"} />
           </div>
         </Field>
 

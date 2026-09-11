@@ -16,7 +16,7 @@ public:
     void save(PersonalRoom &room) override;
     std::optional<PersonalRoom> findById(int id) const override;
     std::optional<PersonalRoom> findByCode(const QString &code) const override;
-    std::optional<PersonalRoom> findByOwner(int ownerId) const override;
+    QList<PersonalRoom> listByOwner(int ownerId) const override;
     bool removeBy(int id) override;
 
 private:

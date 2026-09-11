@@ -69,15 +69,32 @@ private:
     // которые всё равно ответят отказом.
     ApiResponse handleConfig() const;
 
-    // Личная комната владельца: /api/me/room (GET/POST/PATCH/DELETE)
-    // и /api/me/room/close («Завершить» — выгоняет всех участников).
-    ApiResponse handleMyRoom(const HttpRequest &req);
-    ApiResponse handleCloseMyRoom(const HttpRequest &req);
+    // Личные комнаты владельца: /api/me/rooms (GET — список, POST — создать).
+    ApiResponse handleMyRooms(const HttpRequest &req);
 
-    // Alias-ссылки комнаты: /api/me/room/aliases (GET/POST)
-    // и /api/me/room/aliases/<id> (PATCH/DELETE).
-    ApiResponse handleMyAliases(const HttpRequest &req);
+    // Одна комната: /api/me/rooms/<id> (GET/PATCH/DELETE) и .../close
+    // («Завершить» — выгоняет всех участников).
+    ApiResponse handleMyRoom(const HttpRequest &req, int roomId);
+    ApiResponse handleCloseMyRoom(const HttpRequest &req, int roomId);
+
+    // Alias-ссылки комнаты: /api/me/rooms/<id>/aliases (GET/POST)
+    // и .../aliases/<aliasId> (PATCH/DELETE). Номер алиаса уникален сам по
+    // себе, поэтому комнату для него повторно называть не нужно — владение
+    // проверяет сервис.
+    ApiResponse handleMyAliases(const HttpRequest &req, int roomId);
     ApiResponse handleMyAlias(const HttpRequest &req, const QString &idStr);
+
+    // ---- Совместимость со старыми клиентами ----
+    // Скачанный .exe знает ровно одну личную комнату и ходит в /api/me/room
+    // без номера. Для него «комната» — первая (самая старая); остальные он не
+    // видит и создать не может. Ломать его нельзя: обновляются не все и не сразу.
+    bool routeLegacyRoom(const HttpRequest &req, const Respond &respond);
+    // Номер первой комнаты владельца; -1 — комнат нет.
+    int firstRoomId(const HttpRequest &req) const;
+
+    // Комната целиком (включая пароль — владелец вправе его посмотреть)
+    // плюс живое состояние эфира.
+    ApiResponse roomResponse(const PersonalRoom &room) const;
 
     // Живое состояние личной комнаты: online («в эфире» — внутри кто-то
     // есть), число участников; владельцу — ещё имена и старт эфира.

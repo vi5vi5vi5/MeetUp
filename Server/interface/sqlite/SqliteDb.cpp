@@ -1,5 +1,6 @@
 #include "interface/sqlite/SqliteDb.h"
 
+#include <QByteArray>
 #include <QDebug>
 
 #include "config/Log.h"
@@ -33,12 +34,13 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user    ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at_ms);
 CREATE TABLE IF NOT EXISTS personal_rooms(
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  owner_id      INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+  owner_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   code          TEXT    NOT NULL UNIQUE,
   title         TEXT    NOT NULL,
   password      TEXT    NOT NULL DEFAULT '',
   created_at_ms INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_personal_rooms_owner ON personal_rooms(owner_id);
 CREATE TABLE IF NOT EXISTS room_aliases(
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   room_id       INTEGER NOT NULL REFERENCES personal_rooms(id) ON DELETE CASCADE,
@@ -68,6 +70,7 @@ SqliteDb::SqliteDb(const QString &path)
     exec("PRAGMA journal_mode=WAL;");
     exec("PRAGMA foreign_keys=ON;");
     exec(kSchema);
+    migrate();
 
     qCInfo(lcApp).noquote() << QStringLiteral("SQLite: %1 (%2)")
                                    .arg(path, QString::fromUtf8(sqlite3_libversion()));
@@ -86,6 +89,127 @@ void SqliteDb::exec(const char *sql)
         qWarning().noquote() << QStringLiteral("SQLite exec: %1").arg(QString::fromUtf8(err));
         sqlite3_free(err);
     }
+}
+
+bool SqliteDb::execChecked(const char *sql)
+{
+    char *err = nullptr;
+    if (sqlite3_exec(m_db, sql, nullptr, nullptr, &err) == SQLITE_OK)
+        return true;
+    qCritical().noquote() << QStringLiteral("SQLite: %1 — на запросе: %2")
+                                 .arg(QString::fromUtf8(err), QString::fromUtf8(sql));
+    sqlite3_free(err);
+    return false;
+}
+
+int SqliteDb::userVersion() const
+{
+    SqliteStmt q(*this, "PRAGMA user_version;");
+    return q.step() ? q.colInt(0) : 0;
+}
+
+void SqliteDb::setUserVersion(int v)
+{
+    // PRAGMA не принимает подстановку параметров — число подставляем в текст.
+    // Оно наше собственное, не из внешнего мира.
+    exec(QByteArray("PRAGMA user_version=" + QByteArray::number(v) + ';').constData());
+}
+
+bool SqliteDb::hasUniqueOwner() const
+{
+    SqliteStmt idx(*this, "PRAGMA index_list('personal_rooms');");
+    while (idx.step()) {
+        // Колонки: seq, name, unique, origin, partial. origin='u' — индекс
+        // создан ограничением UNIQUE в объявлении таблицы (а не CREATE INDEX).
+        if (idx.colInt(2) != 1 || idx.colText(3) != QLatin1String("u"))
+            continue;
+        const QString name = idx.colText(1);
+        SqliteStmt cols(*this, QByteArray("PRAGMA index_info('" + name.toUtf8() + "');")
+                                   .constData());
+        while (cols.step()) {
+            if (cols.colText(2) == QLatin1String("owner_id"))
+                return true;
+        }
+    }
+    return false;
+}
+
+// Снятие ограничения «одна личная комната на владельца».
+//
+// В SQLite ограничение нельзя изменить на месте — таблицу пересоздают. Три
+// вещи здесь обязательны, и все три из-за room_aliases, которые ссылаются на
+// personal_rooms(id) с ON DELETE CASCADE:
+//
+//   * foreign_keys выключаем ДО транзакции: внутри неё PRAGMA не действует;
+//   * id переносим как есть — иначе ссылки алиасов уедут в пустоту;
+//   * DROP старой таблицы делаем при выключенных ключах, иначе каскад снесёт
+//     ВСЕ ссылки-приглашения на сервере.
+//
+// Всё, кроме PRAGMA, — в одной транзакции: сорвалось на середине, и база
+// осталась ровно такой, какой была.
+bool SqliteDb::dropUniqueOwner()
+{
+    static const char *kRebuild = R"sql(
+CREATE TABLE personal_rooms_new(
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  owner_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  code          TEXT    NOT NULL UNIQUE,
+  title         TEXT    NOT NULL,
+  password      TEXT    NOT NULL DEFAULT '',
+  created_at_ms INTEGER NOT NULL
+);
+INSERT INTO personal_rooms_new(id, owner_id, code, title, password, created_at_ms)
+  SELECT id, owner_id, code, title, password, created_at_ms FROM personal_rooms;
+DROP TABLE personal_rooms;
+ALTER TABLE personal_rooms_new RENAME TO personal_rooms;
+CREATE INDEX IF NOT EXISTS idx_personal_rooms_owner ON personal_rooms(owner_id);
+)sql";
+
+    exec("PRAGMA foreign_keys=OFF;");
+    bool ok = execChecked("BEGIN;") && execChecked(kRebuild);
+    ok = execChecked(ok ? "COMMIT;" : "ROLLBACK;") && ok;
+    exec("PRAGMA foreign_keys=ON;");
+    if (!ok)
+        return false;
+
+    // Ссылки-приглашения должны по-прежнему указывать на живые комнаты.
+    // Проверка дешёвая и делается один раз в жизни базы — не жалко.
+    SqliteStmt check(*this, "PRAGMA foreign_key_check;");
+    if (check.step()) {
+        qCritical().noquote()
+            << QStringLiteral("SQLite: после миграции остались висячие ссылки — "
+                              "восстановите базу из копии");
+        return false;
+    }
+    return true;
+}
+
+void SqliteDb::migrate()
+{
+    if (userVersion() >= kSchemaVersion)
+        return;
+
+    // Свежая база уже создана новой схемой — мигрировать нечего, просто
+    // помечаем версию. Старая узнаётся по UNIQUE на owner_id.
+    if (hasUniqueOwner()) {
+        qCInfo(lcApp).noquote()
+            << QStringLiteral("SQLite: миграция схемы — снимаем «одна личная комната "
+                              "на владельца»");
+        if (!dropUniqueOwner()) {
+            // База цела (транзакция откатилась), но работать с ней как с
+            // новой нельзя: вставка второй комнаты упрётся в ограничение и
+            // молча ничего не сделает. Пусть лучше сервер не поднимется —
+            // это видно сразу, а тихо испорченные данные не видно никогда.
+            m_migrationFailed = true;
+            qCritical().noquote()
+                << QStringLiteral("SQLite: миграция не удалась, база не тронута. "
+                                  "Проверьте место на диске и права на %1")
+                       .arg(QString::fromUtf8(sqlite3_db_filename(m_db, "main")));
+            return;
+        }
+        qCInfo(lcApp).noquote() << QStringLiteral("SQLite: миграция прошла");
+    }
+    setUserVersion(kSchemaVersion);
 }
 
 qint64 SqliteDb::lastInsertId() const

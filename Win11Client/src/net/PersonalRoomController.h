@@ -4,17 +4,31 @@
 #include <QVariantMap>
 #include <QVariantList>
 
+class QJsonArray;
+
 class ApiClient;
 class QJsonObject;
 
-// Личная комната владельца (/api/me/room): состояние для главной и операции
+// Личные комнаты владельца (/api/me/rooms): состояние для главной и операции
 // создать / настроить / завершить / удалить, плюс alias-ссылки (/aliases).
 // Виден из QML как MyRoom.
+//
+// Комнат у человека может быть несколько (сколько — говорит сервер в поле
+// max). Но экран в каждый момент работает ровно с одной: карточка показывает
+// её, модалка настроек правит её, ссылки-приглашения принадлежат ей. Поэтому
+// «текущая комната» живёт здесь, а не в QML: select(id) переключает, а
+// change/remove/closeRoom и все операции со ссылками относятся к текущей.
+// Так вызовы из QML не таскают за собой номер, который и так один на экран.
 class PersonalRoomController : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool        loaded    READ loaded    NOTIFY roomChanged)
     Q_PROPERTY(bool        exists    READ exists    NOTIFY roomChanged)
+    // Текущая комната: её показывает карточка и правит модалка настроек.
     Q_PROPERTY(QVariantMap room      READ room      NOTIFY roomChanged)
+    // Все комнаты владельца и потолок с сервера — для списка и счётчика «2 из 3».
+    Q_PROPERTY(QVariantList rooms    READ rooms     NOTIFY roomChanged)
+    Q_PROPERTY(int         maxRooms  READ maxRooms  NOTIFY roomChanged)
+    Q_PROPERTY(int         currentId READ currentId NOTIFY roomChanged)
     Q_PROPERTY(bool        busy      READ busy      NOTIFY busyChanged)
     Q_PROPERTY(QString     errorText READ errorText NOTIFY errorTextChanged)
     // Alias-ссылки — своё состояние и своя ошибка (обе секции модалки видны разом).
@@ -25,8 +39,11 @@ public:
     explicit PersonalRoomController(ApiClient* api, QObject* parent = nullptr);
 
     bool loaded() const { return m_loaded; }
-    bool exists() const { return m_exists; }
+    bool exists() const { return !m_rooms.isEmpty(); }
     QVariantMap room() const { return m_room; }
+    QVariantList rooms() const { return m_rooms; }
+    int maxRooms() const { return m_maxRooms; }
+    int currentId() const { return m_currentId; }
     bool busy() const { return m_busy; }
     QString errorText() const { return m_errorText; }
     QVariantList aliases() const { return m_aliases; }
@@ -34,6 +51,8 @@ public:
     QString aliasError() const { return m_aliasError; }
 
     Q_INVOKABLE void refresh();                          // GET: обновить состояние
+    // Переключить текущую комнату. Номер чужой или несуществующей игнорируем.
+    Q_INVOKABLE void select(int roomId);
     Q_INVOKABLE void create(const QString& code, const QString& title,
                             const QString& password);    // POST: новая комната
     Q_INVOKABLE void change(const QVariantMap& patch);   // PATCH: только изменившееся
@@ -61,7 +80,12 @@ signals:
     void aliasCreated();    // форма новой ссылки закрывается
 
 private:
-    void applyRoom(const QJsonObject& room);
+    void applyRooms(const QJsonArray& rooms, int max);
+    // Сделать текущей комнату с этим номером; -1 — выбрать саму подходящую
+    // (ту, где сейчас люди, иначе первую).
+    void setCurrent(int roomId);
+    // Адрес текущей комнаты: "/api/me/rooms/<id>" плюс хвост.
+    QString roomPath(const QString& tail = QString()) const;
     void setBusy(bool v);
     void setError(const QString& t);
     void setAliasError(const QString& t);
@@ -69,9 +93,11 @@ private:
     static QString aliasErrText(const QString& code);
 
     ApiClient* m_api;          // не владеем
-    bool m_loaded = false;     // хоть один ответ (200/404) получен
-    bool m_exists = false;
-    QVariantMap m_room;
+    bool m_loaded = false;     // хоть один ответ получен
+    QVariantMap m_room;        // текущая комната
+    QVariantList m_rooms;      // все комнаты владельца, в порядке создания
+    int m_maxRooms = 1;
+    int m_currentId = -1;
     bool m_busy = false;
     QString m_errorText;
     QVariantList m_aliases;

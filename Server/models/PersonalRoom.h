@@ -19,9 +19,14 @@ struct PersonalRoom
     qint64  createdAtMs = 0;
 
     // Представление для владельца: он видит всё, включая пароль.
+    //
+    // id появился, когда комнат стало несколько: по нему клиент адресует
+    // конкретную комнату (/api/me/rooms/<id>). Старые клиенты лишнее поле
+    // просто не замечают.
     QJsonObject ownerJson() const
     {
         return QJsonObject{
+            {"id", id},
             {"code", code},
             {"title", title},
             {"password", password},

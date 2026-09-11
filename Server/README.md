@@ -47,8 +47,8 @@
 - Сквозное шифрование по желанию участников: AES-256-GCM целиком на клиенте —
   сервер видит и хранит только шифротекст
 - Аккаунты: регистрация, вход, сессии в HttpOnly-куке, отображаемое имя, аватары
-- Личные комнаты с постоянным кодом-ссылкой и ссылки-приглашения (свой пароль,
-  лимит использований, список допущенных логинов)
+- Личные комнаты с постоянным кодом-ссылкой (сколько на человека — настройка)
+  и ссылки-приглашения (свой пароль, лимит использований, список логинов)
 - Хранение в SQLite (WAL, один файл), скользящее продление сессий
 - Настройки в `mount/meetup.conf`: имя инстанса, отключение веб-клиента,
   уровень журнала; портрет сервера для клиентов в `GET /api/config`
@@ -211,7 +211,7 @@ level = errors              # off | errors (умолчание) | normal
 | `[server]` | `name`, `public_url` |
 | `[web]` | `enabled` |
 | `[auth]` | `registration`, `allow_anonymous_join`, `session_ttl_days`, `min_password_len`, `pbkdf2_iters` |
-| `[rooms]` | `anonymous_create`, `max_total`, `idle_ttl_s`, `code_min_len`, `max_aliases_per_room` |
+| `[rooms]` | `anonymous_create`, `max_total`, `idle_ttl_s`, `max_personal_per_user`, `code_min_len`, `max_aliases_per_room` |
 | `[chat]` | `history_size`, `history_images`, `image_max_kb` |
 | `[log]` | `level` |
 

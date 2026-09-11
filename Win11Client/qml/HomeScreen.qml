@@ -13,7 +13,14 @@ Item {
     id: root
     objectName: "home"
 
+    // Текущая комната: её показывает большая карточка. Какая именно —
+    // решает контроллер (та, где люди, иначе первая), переключает select().
     readonly property var room: MyRoom.room
+    // Остальные комнаты — строками под карточкой. Одинаковые карточки на все
+    // читались бы как «три равных дела», хотя дело обычно одно.
+    readonly property var otherRooms: MyRoom.rooms.filter(function (r) {
+        return r.id !== MyRoom.currentId
+    })
     readonly property string name: Auth.displayName
 
     // «05:14», после часа — «1:05:14» (fmtDuration веба)
@@ -287,6 +294,44 @@ Item {
                     }
                 }
 
+                // Заголовок списка и счётчик «2 из 3». Появляется только там,
+                // где комнат может быть больше одной: на сервере с лимитом 1
+                // строка «1 из 1» — шум.
+                Item {
+                    visible: MyRoom.exists && MyRoom.maxRooms > 1
+                    Layout.fillWidth: true
+                    implicitHeight: 26
+                    Text {
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Мои комнаты"
+                        color: Theme.text
+                        font.family: Theme.uiFont
+                        font.pixelSize: Theme.textMd
+                        font.weight: Font.Bold
+                    }
+                    Rectangle {
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: quotaText.implicitWidth + 18
+                        height: 22
+                        radius: 11
+                        color: "transparent"
+                        border.width: 1
+                        border.color: Theme.borderStrong
+                        Text {
+                            id: quotaText
+                            anchors.centerIn: parent
+                            text: MyRoom.rooms.length + " из " + MyRoom.maxRooms
+                            color: Theme.textMuted
+                            font.family: Theme.labelFont
+                            font.pixelSize: Theme.text2xs
+                            font.letterSpacing: 0.8
+                            font.capitalization: Font.AllUppercase
+                        }
+                    }
+                }
+
                 // Personal room card (когда комната есть)
                 Card {
                     visible: MyRoom.exists
@@ -386,6 +431,131 @@ Item {
                         color: Theme.textFaint
                         font.family: Theme.uiFont
                         font.pixelSize: Theme.textXs
+                    }
+                }
+
+                // Остальные комнаты — компактными строками.
+                Repeater {
+                    model: root.otherRooms
+                    delegate: Rectangle {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        implicitHeight: 56
+                        radius: Theme.radiusCard
+                        color: Theme.surface
+                        border.width: 1
+                        border.color: Theme.border
+
+                        Row {
+                            anchors.fill: parent
+                            anchors.leftMargin: 14
+                            anchors.rightMargin: 10
+                            spacing: 12
+
+                            Column {
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: Math.max(0, parent.width - 320)
+                                spacing: 2
+                                Text {
+                                    width: parent.width
+                                    elide: Text.ElideRight
+                                    text: modelData.title || ""
+                                    color: Theme.text
+                                    font.family: Theme.uiFont
+                                    font.pixelSize: Theme.textSm
+                                    font.weight: Font.DemiBold
+                                }
+                                Text {
+                                    width: parent.width
+                                    elide: Text.ElideRight
+                                    text: "?room=" + (modelData.code || "")
+                                    color: Theme.textFaint
+                                    font.family: Theme.monoFont
+                                    font.pixelSize: Theme.text2xs
+                                }
+                            }
+
+                            Badge {
+                                anchors.verticalCenter: parent.verticalCenter
+                                dot: true
+                                tone: modelData.online === true ? "live" : "muted"
+                                text: modelData.online === true
+                                      ? "в эфире · " + (modelData.participants || 0)
+                                      : "не в эфире"
+                            }
+
+                            AppButton {
+                                anchors.verticalCenter: parent.verticalCenter
+                                size: "sm"
+                                variant: "secondary"
+                                iconRight: "arrow-right"
+                                text: modelData.online === true ? "Войти" : "Открыть"
+                                onClicked: Rooms.enter(modelData.code, Auth.displayName)
+                            }
+                            IconButton {
+                                anchors.verticalCenter: parent.verticalCenter
+                                size: "sm"
+                                icon: "settings"
+                                label: "Настройки комнаты"
+                                // Сначала переключаем текущую: модалка и ссылки
+                                // работают именно с ней.
+                                onClicked: { MyRoom.select(modelData.id); roomModal.open = true }
+                            }
+                        }
+                    }
+                }
+
+                // Ещё одна комната. Кнопка гаснет там же, где сервер начнёт
+                // отказывать, — чтобы отказ не приходил после заполненной формы.
+                Item {
+                    id: addSlot
+                    visible: MyRoom.exists && MyRoom.maxRooms > 1
+                    Layout.fillWidth: true
+                    implicitHeight: 52
+
+                    Shape {
+                        anchors.fill: parent
+                        ShapePath {
+                            strokeColor: Theme.borderStrong
+                            strokeWidth: 1
+                            strokeStyle: ShapePath.DashLine
+                            dashPattern: [5, 4]
+                            fillColor: "transparent"
+                            // PathRectangle — не Item, и parent у него не тот,
+                            // что кажется: размеры задаём явно, через id
+                            // контейнера (та же грабля, что в пустом состоянии).
+                            PathRectangle {
+                                width: addSlot.width
+                                height: addSlot.height
+                                radius: Theme.radiusCard
+                            }
+                        }
+                    }
+                    Row {
+                        anchors.fill: parent
+                        anchors.leftMargin: 14
+                        anchors.rightMargin: 10
+                        spacing: 12
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: Math.max(0, parent.width - 140)
+                            wrapMode: Text.WordWrap
+                            text: MyRoom.rooms.length < MyRoom.maxRooms
+                                  ? "Ещё одна комната — со своим кодом и паролем"
+                                  : "Больше комнат сервер не разрешает"
+                            color: Theme.textFaint
+                            font.family: Theme.uiFont
+                            font.pixelSize: Theme.textXs
+                        }
+                        AppButton {
+                            anchors.verticalCenter: parent.verticalCenter
+                            size: "sm"
+                            variant: "secondary"
+                            icon: "plus"
+                            text: "Добавить"
+                            enabled: MyRoom.rooms.length < MyRoom.maxRooms && !MyRoom.busy
+                            onClicked: createModal.open = true
+                        }
                     }
                 }
 
@@ -512,6 +682,9 @@ Item {
                     Text {
                         width: parent.width
                         horizontalAlignment: Text.AlignHCenter
+                        // Без переноса Text рисует строку за своей шириной — и
+                        // длинная подпись вылезала за края карточки.
+                        wrapMode: Text.WordWrap
                         text: Rooms.errorText !== "" ? Rooms.errorText
                              : Server.anonymousRooms === "off"
                                ? "Разовые конференции на этом сервере выключены — встречайтесь в личной комнате."

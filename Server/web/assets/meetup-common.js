@@ -86,11 +86,26 @@
   // --- Личная комната владельца ----------------------------------------------
   // body.room: { code, title, password, online, participants }. Ошибки:
   // "no_room", "invalid_code", "code_taken", "room_exists", "invalid_title".
-  function myRoom() { return api("GET", "/api/me/room"); }
-  function createMyRoom(data) { return api("POST", "/api/me/room", data); }
-  function updateMyRoom(patch) { return api("PATCH", "/api/me/room", patch); }
-  function deleteMyRoom() { return api("DELETE", "/api/me/room"); }
-  function closeMyRoom() { return api("POST", "/api/me/room/close"); }
+  // Комнат у человека может быть несколько (сколько — говорит сервер в
+  // rooms.max). Все операции адресуют конкретную комнату по её id.
+  //
+  // Ручки без номера (/api/me/room) на сервере остались, но нужны они не нам:
+  // по ним ходят скачанные раньше десктопные клиенты, которые знают ровно про
+  // одну комнату. Веб-клиент раздаётся вместе с сервером и всегда одной с ним
+  // версии, поэтому здесь сразу новые адреса.
+  function myRooms() { return api("GET", "/api/me/rooms"); }
+  function createMyRoom(data) { return api("POST", "/api/me/rooms", data); }
+  function updateMyRoom(id, patch) { return api("PATCH", "/api/me/rooms/" + id, patch); }
+  function deleteMyRoom(id) { return api("DELETE", "/api/me/rooms/" + id); }
+  function closeMyRoom(id) { return api("POST", "/api/me/rooms/" + id + "/close"); }
+  function roomAliases(id) { return api("GET", "/api/me/rooms/" + id + "/aliases"); }
+  function createRoomAlias(id, data) { return api("POST", "/api/me/rooms/" + id + "/aliases", data); }
+  function updateRoomAlias(id, aliasId, patch) {
+    return api("PATCH", "/api/me/rooms/" + id + "/aliases/" + aliasId, patch);
+  }
+  function deleteRoomAlias(id, aliasId) {
+    return api("DELETE", "/api/me/rooms/" + id + "/aliases/" + aliasId);
+  }
 
   // --- «Добавить на главный экран» -------------------------------------------
   // Регистрируем service worker: с ним страница ставится на телефон как
@@ -119,10 +134,14 @@
     authLogout: authLogout,
     authMe: authMe,
     updateMe: updateMe,
-    myRoom: myRoom,
+    myRooms: myRooms,
     createMyRoom: createMyRoom,
     updateMyRoom: updateMyRoom,
     deleteMyRoom: deleteMyRoom,
     closeMyRoom: closeMyRoom,
+    roomAliases: roomAliases,
+    createRoomAlias: createRoomAlias,
+    updateRoomAlias: updateRoomAlias,
+    deleteRoomAlias: deleteRoomAlias,
   };
 })();

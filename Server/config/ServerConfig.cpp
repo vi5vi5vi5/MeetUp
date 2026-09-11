@@ -97,6 +97,10 @@ const char *kSample = R"conf(# MeetUp — настройки сервера.
 # связи последнего участника не убивал комнату вместе с историей чата.
 #idle_ttl_s = 600
 
+# Сколько личных комнат человек может держать за собой. Каждая — со своим
+# кодом-ссылкой, паролем и приглашениями.
+#max_personal_per_user = 1
+
 # Нижняя граница длины кода личной комнаты. На публичном сервере короткие коды
 # разбирают первыми.
 #code_min_len = 3
@@ -312,6 +316,9 @@ ServerConfig ServerConfig::load(const QString &dataDir)
     if (const auto v = ini.take("rooms", "idle_ttl_s"))
         cfg.roomIdleTtlS = parseInt(*v, cfg.roomIdleTtlS, 10, 86400,
                                     "rooms.idle_ttl_s", &cfg.warnings);
+    if (const auto v = ini.take("rooms", "max_personal_per_user"))
+        cfg.maxPersonalPerUser = parseInt(*v, cfg.maxPersonalPerUser, 1, 100,
+                                          "rooms.max_personal_per_user", &cfg.warnings);
     if (const auto v = ini.take("rooms", "code_min_len"))
         cfg.codeMinLen = parseInt(*v, cfg.codeMinLen, 1, 32,
                                   "rooms.code_min_len", &cfg.warnings);

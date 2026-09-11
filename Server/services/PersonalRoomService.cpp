@@ -40,8 +40,12 @@ bool PersonalRoomService::validPassword(const QString &password)
 RoomResult PersonalRoomService::create(int ownerId, const QString &rawCode,
                                        const QString &rawTitle, const QString &password)
 {
-    if (m_rooms->findByOwner(ownerId).has_value())
-        return RoomResult::fail("room_exists");
+    // Код ошибки зависит от лимита, и это не мелочь. При лимите 1 отвечаем
+    // ровно как раньше — "room_exists": старые клиенты знают этот код и
+    // показывают «у вас уже есть комната». Появился бы новый код, и старый
+    // клиент сказал бы «ошибка сервера» там, где ничего не сломалось.
+    if (m_rooms->listByOwner(ownerId).size() >= m_limits.maxPerUser)
+        return RoomResult::fail(m_limits.maxPerUser <= 1 ? "room_exists" : "room_limit");
 
     const QString code = normalizeCode(rawCode);
     if (!validCode(code))
@@ -69,12 +73,12 @@ RoomResult PersonalRoomService::create(int ownerId, const QString &rawCode,
     return res;
 }
 
-RoomResult PersonalRoomService::update(int ownerId,
+RoomResult PersonalRoomService::update(int ownerId, int roomId,
                                        const std::optional<QString> &rawCode,
                                        const std::optional<QString> &rawTitle,
                                        const std::optional<QString> &password)
 {
-    std::optional<PersonalRoom> existing = m_rooms->findByOwner(ownerId);
+    std::optional<PersonalRoom> existing = byOwnerAndId(ownerId, roomId);
     if (!existing.has_value())
         return RoomResult::fail("no_room");
     PersonalRoom room = *existing;
@@ -109,17 +113,33 @@ RoomResult PersonalRoomService::update(int ownerId,
     return res;
 }
 
-bool PersonalRoomService::remove(int ownerId)
+bool PersonalRoomService::remove(int ownerId, int roomId)
 {
-    const std::optional<PersonalRoom> room = m_rooms->findByOwner(ownerId);
+    const std::optional<PersonalRoom> room = byOwnerAndId(ownerId, roomId);
     if (!room.has_value())
         return false;
     return m_rooms->removeBy(room->id);
 }
 
-std::optional<PersonalRoom> PersonalRoomService::byOwner(int ownerId) const
+QList<PersonalRoom> PersonalRoomService::byOwner(int ownerId) const
 {
-    return m_rooms->findByOwner(ownerId);
+    return m_rooms->listByOwner(ownerId);
+}
+
+std::optional<PersonalRoom> PersonalRoomService::firstByOwner(int ownerId) const
+{
+    const QList<PersonalRoom> all = m_rooms->listByOwner(ownerId);
+    if (all.isEmpty())
+        return std::nullopt;
+    return all.first();
+}
+
+std::optional<PersonalRoom> PersonalRoomService::byOwnerAndId(int ownerId, int roomId) const
+{
+    const std::optional<PersonalRoom> room = m_rooms->findById(roomId);
+    if (!room.has_value() || room->ownerId != ownerId)
+        return std::nullopt;
+    return room;
 }
 
 std::optional<PersonalRoom> PersonalRoomService::byCode(const QString &rawCode) const
@@ -171,11 +191,11 @@ QString PersonalRoomService::generateAliasCode() const
     }
 }
 
-AliasResult PersonalRoomService::createAlias(int ownerId, const QString &password,
+AliasResult PersonalRoomService::createAlias(int ownerId, int roomId, const QString &password,
                                              int usesLeft, const QStringList &rawLogins,
                                              bool enabled)
 {
-    const std::optional<PersonalRoom> room = m_rooms->findByOwner(ownerId);
+    const std::optional<PersonalRoom> room = byOwnerAndId(ownerId, roomId);
     if (!room.has_value())
         return AliasResult::fail("no_room");
     if (m_aliases->listByRoom(room->id).size() >= m_limits.maxAliases)
@@ -211,11 +231,10 @@ AliasResult PersonalRoomService::updateAlias(int ownerId, int aliasId,
                                              const std::optional<QStringList> &rawLogins,
                                              const std::optional<bool> &enabled)
 {
-    // Алиас должен принадлежать комнате именно этого владельца — чужой id
+    // Алиас должен вести в комнату именно этого владельца — чужой id
     // неотличим от несуществующего.
-    const std::optional<PersonalRoom> room = m_rooms->findByOwner(ownerId);
     std::optional<RoomAlias> existing = m_aliases->findById(aliasId);
-    if (!room.has_value() || !existing.has_value() || existing->roomId != room->id)
+    if (!existing.has_value() || !roomOfAlias(ownerId, *existing).has_value())
         return AliasResult::fail("no_alias");
     RoomAlias alias = *existing;
 
@@ -248,19 +267,23 @@ AliasResult PersonalRoomService::updateAlias(int ownerId, int aliasId,
 
 bool PersonalRoomService::removeAlias(int ownerId, int aliasId)
 {
-    const std::optional<PersonalRoom> room = m_rooms->findByOwner(ownerId);
     const std::optional<RoomAlias> alias = m_aliases->findById(aliasId);
-    if (!room.has_value() || !alias.has_value() || alias->roomId != room->id)
+    if (!alias.has_value() || !roomOfAlias(ownerId, *alias).has_value())
         return false;
     return m_aliases->removeBy(aliasId);
 }
 
-QList<RoomAlias> PersonalRoomService::aliasesByOwner(int ownerId) const
+QList<RoomAlias> PersonalRoomService::aliasesByRoom(int ownerId, int roomId) const
 {
-    const std::optional<PersonalRoom> room = m_rooms->findByOwner(ownerId);
-    if (!room.has_value())
+    if (!byOwnerAndId(ownerId, roomId).has_value())
         return {};
-    return m_aliases->listByRoom(room->id);
+    return m_aliases->listByRoom(roomId);
+}
+
+std::optional<PersonalRoom> PersonalRoomService::roomOfAlias(int ownerId,
+                                                            const RoomAlias &alias) const
+{
+    return byOwnerAndId(ownerId, alias.roomId);
 }
 
 std::optional<RoomAlias> PersonalRoomService::aliasByCode(const QString &rawCode) const
