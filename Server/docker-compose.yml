@@ -14,7 +14,14 @@
 
 services:
   app:
-    build: .
+    build:
+      context: .
+      # Коммит и признак локальных правок считает тот, кто запускает сборку
+      # (tools/update.sh их экспортирует). Запустили `docker compose up`
+      # руками — подставится unknown, и сервер об этом честно скажет.
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
+        GIT_MODIFIED: ${GIT_MODIFIED:-0}
     restart: unless-stopped
     volumes:
       # Всё персистентное (SQLite) — в ./mount на хосте: переживает

@@ -2,6 +2,8 @@
 
 #include <QDebug>
 
+#include "config/Log.h"
+
 #include "sqlite3.h"
 
 namespace {
@@ -67,8 +69,8 @@ SqliteDb::SqliteDb(const QString &path)
     exec("PRAGMA foreign_keys=ON;");
     exec(kSchema);
 
-    qInfo().noquote() << QStringLiteral("SQLite: %1 (%2)")
-                             .arg(path, QString::fromUtf8(sqlite3_libversion()));
+    qCInfo(lcApp).noquote() << QStringLiteral("SQLite: %1 (%2)")
+                                   .arg(path, QString::fromUtf8(sqlite3_libversion()));
 }
 
 SqliteDb::~SqliteDb()

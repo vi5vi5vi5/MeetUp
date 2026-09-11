@@ -13,6 +13,7 @@ class PersonalRoomService;
 class RoomRegistry;
 struct HttpRequest;
 struct PersonalRoom;
+struct ServerConfig;
 
 // Ответ API: HTTP-статус, JSON-тело и дополнительные заголовки (Set-Cookie).
 // Если contentType непуст, вместо JSON уходит rawBody (бинарные аватарки).
@@ -39,7 +40,8 @@ public:
 
     HttpApi(std::shared_ptr<AuthService> auth,
             std::shared_ptr<PersonalRoomService> personalRooms,
-            RoomRegistry *rooms, const QString &dataDir);
+            RoomRegistry *rooms, const QString &dataDir,
+            const ServerConfig &config);
 
     // false — путь не из /api, пусть обрабатывает статика. true — маршрут
     // взят в работу и respond будет позван (возможно, уже позван).
@@ -61,6 +63,11 @@ private:
     QString avatarPath(int userId) const;
     ApiResponse handleCreateRoom();
     ApiResponse handleCheckRoom(const QString &code);
+
+    // Публичный портрет сервера: имя, версия сборки, что на нём разрешено.
+    // Без авторизации — клиент читает это ДО входа, чтобы не рисовать кнопки,
+    // которые всё равно ответят отказом.
+    ApiResponse handleConfig() const;
 
     // Личная комната владельца: /api/me/room (GET/POST/PATCH/DELETE)
     // и /api/me/room/close («Завершить» — выгоняет всех участников).
@@ -85,6 +92,7 @@ private:
     std::shared_ptr<PersonalRoomService> m_personalRooms;
     RoomRegistry *m_rooms;   // не владеет (общий с ConferenceServer)
     QString m_dataDir;       // персистентные данные (БД, аватарки)
+    const ServerConfig &m_config;   // не владеет: живёт в main дольше нас
 
     // Аватарка ужимается клиентом до 256px JPEG (~10–40 КБ); потолок
     // декодированного файла — защита от заливки гигантов.

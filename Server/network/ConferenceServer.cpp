@@ -1,4 +1,5 @@
 #include "network/ConferenceServer.h"
+#include "config/Log.h"
 #include "core/ClientSession.h"
 #include "core/ConferenceRoom.h"
 #include "core/RoomRegistry.h"
@@ -33,7 +34,7 @@ ConferenceServer::ConferenceServer(quint16 port, RoomRegistry *registry,
     if (m_server->listen(QHostAddress::Any, port)) {
         connect(m_server, &QWebSocketServer::newConnection,
                 this, &ConferenceServer::onNewConnection);
-        qInfo().noquote() << QStringLiteral("WebSocket relay listening on ws://localhost:%1").arg(port);
+        qCInfo(lcApp).noquote() << QStringLiteral("WebSocket: порт %1").arg(port);
     } else {
         qCritical().noquote() << QStringLiteral("Failed to listen on port %1: %2")
                                      .arg(port).arg(m_server->errorString());

@@ -22,8 +22,18 @@ RUN apt-get update \
 WORKDIR /src
 COPY . .
 
+# Из какого коммита собираемся. Гита внутри образа нет и быть не должно:
+# .git в контекст сборки не попадает (.dockerignore), а поднимать контекст до
+# корня репозитория ради истории значит тащить туда ещё и клиент. Поэтому
+# значения считает хост и передаёт сюда — см. tools/update.sh и
+# docker-compose.yml. Собрали руками без них — будет "unknown", и это
+# честный ответ, а не ошибка.
+ARG GIT_COMMIT=unknown
+ARG GIT_MODIFIED=0
+
 # Конфигурируем напрямую (без CMakePresets — там зашиты Windows-пути к Qt).
 RUN cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+        -DMEETUP_COMMIT="${GIT_COMMIT}" -DMEETUP_MODIFIED="${GIT_MODIFIED}" \
  && cmake --build build
 
 # Веб-клиент: JSX компилируется ЗДЕСЬ, один раз, а не в браузере у каждого

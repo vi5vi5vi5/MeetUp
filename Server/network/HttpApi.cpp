@@ -6,6 +6,8 @@
 #include <QJsonArray>
 #include <QSaveFile>
 
+#include "config/Log.h"
+#include "config/ServerConfig.h"
 #include "core/ClientSession.h"
 #include "core/ConferenceRoom.h"
 #include "core/RoomRegistry.h"
@@ -20,9 +22,10 @@ constexpr qint64 kCookieMaxAgeS = AuthService::kSessionTtlMs / 1000;
 
 HttpApi::HttpApi(std::shared_ptr<AuthService> auth,
                  std::shared_ptr<PersonalRoomService> personalRooms,
-                 RoomRegistry *rooms, const QString &dataDir)
+                 RoomRegistry *rooms, const QString &dataDir,
+                 const ServerConfig &config)
     : m_auth(std::move(auth)), m_personalRooms(std::move(personalRooms)), m_rooms(rooms),
-      m_dataDir(dataDir)
+      m_dataDir(dataDir), m_config(config)
 {
 }
 
@@ -33,6 +36,11 @@ bool HttpApi::route(const HttpRequest &req, const Respond &respond)
         return false;
 
     const QByteArray &m = req.method;
+
+    if (p == QLatin1String("/api/config")) {
+        respond(m == "GET" ? handleConfig() : err(405, QStringLiteral("method_not_allowed")));
+        return true;
+    }
 
     if (p == QLatin1String("/api/auth/register")) {
         if (m == "POST") handleRegister(req, respond);
@@ -99,6 +107,40 @@ bool HttpApi::route(const HttpRequest &req, const Respond &respond)
 
     respond(err(404, QStringLiteral("unknown_endpoint")));
     return true;
+}
+
+// ---------- Портрет сервера ----------
+
+// Всё, что клиенту нужно знать про сервер до входа. Отвечаем без авторизации:
+// эти сведения всё равно видны по поведению сервера, а без них клиент рисует
+// кнопки, которые заведомо ответят отказом.
+//
+// Про version — важная оговорка. Это то, что сервер СООБЩАЕТ о себе, а не то,
+// что кто-то проверил: бинарь исполняется на чужой машине, и правка одной
+// строки заставит его сказать что угодно. Годится как диагностика («у вас
+// сборка трёхмесячной давности»), не годится как гарантия. Клиент обязан
+// подписывать это соответственно.
+ApiResponse HttpApi::handleConfig() const
+{
+    QJsonObject version{
+        {"commit", ServerConfig::buildCommit()},
+        {"modified", ServerConfig::buildModified()},
+    };
+    const QString builtAt = ServerConfig::buildTime();
+    if (!builtAt.isEmpty())
+        version.insert(QStringLiteral("built_at"), builtAt);
+
+    QJsonObject j{
+        {"name", m_config.name},
+        {"version", version},
+        {"web", m_config.webEnabled},
+        // Честный ответ на вопрос «а вы записываете, кто к вам ходит».
+        // Клиент показывает это человеку на гейте.
+        {"logs_names", Log::keepsNames()},
+    };
+    if (!m_config.publicUrl.isEmpty())
+        j.insert(QStringLiteral("public_url"), m_config.publicUrl);
+    return ApiResponse{200, j, {}};
 }
 
 // ---------- Аккаунты ----------

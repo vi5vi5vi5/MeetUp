@@ -5,6 +5,8 @@
 
 #include <memory>
 
+#include "config/Log.h"
+#include "config/ServerConfig.h"
 #include "core/RoomRegistry.h"
 #include "interface/sqlite/SqliteDb.h"
 #include "interface/sqlite/SqlitePersonalRooms.h"
@@ -85,6 +87,25 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    // Настройки лежат рядом с базой, в той же примонтированной папке, поэтому
+    // читаются сразу же, как только известен dataDir. Первое, что делаем с
+    // прочитанным, — ставим обработчик журнала: всё, что случится дальше,
+    // должно печататься уже по правилам из конфига, а не по умолчанию Qt.
+    const ServerConfig cfg = ServerConfig::load(dataDir);
+    Log::install(cfg.logLevel);
+
+    qCInfo(lcApp).noquote()
+        << QStringLiteral("MeetUp %1 · сборка %2%3")
+               .arg(QCoreApplication::applicationVersion(), ServerConfig::buildCommit(),
+                    ServerConfig::buildModified() ? QStringLiteral(" (с локальными изменениями)")
+                                                  : QString());
+    if (cfg.createdNow)
+        qCInfo(lcApp).noquote() << QStringLiteral("Создан файл настроек %1").arg(cfg.path);
+    // Про опечатки в конфиге говорим вслух и на уровне errors: настройка,
+    // которая молча не применилась, хуже настройки, которой нет.
+    for (const QString &warning : cfg.warnings)
+        qWarning().noquote() << warning;
+
     // Хранилища и сервисы (как в MedFlow: репозитории → сервисы → серверы).
     // Репозитории на SQLite; InMemory-реализации остаются для тестов и как
     // образец — интерфейсы у них общие.
@@ -98,9 +119,9 @@ int main(int argc, char *argv[])
     auto auth = std::make_shared<AuthService>(users, sessions);
     auto rooms = std::make_shared<PersonalRoomService>(personalRooms, roomAliases);
 
-    HttpApi api(auth, rooms, &registry, dataDir);
+    HttpApi api(auth, rooms, &registry, dataDir, cfg);
     ConferenceServer conference(wsPort, &registry, auth, rooms);
-    HttpFileServer http(httpPort, webRoot, &api);
+    HttpFileServer http(httpPort, webRoot, &api, cfg.webEnabled);
 
     if (!conference.isListening() || !http.isListening())
         return 1;
@@ -112,6 +133,12 @@ int main(int argc, char *argv[])
                      [&auth] { auth->purgeExpiredSessions(); });
     purgeSessionsTimer.start(60 * 60 * 1000);
 
-    qInfo().noquote() << QStringLiteral("Ready. Open http://localhost:%1 in your browser.").arg(httpPort);
+    if (cfg.webEnabled)
+        qCInfo(lcApp).noquote()
+            << QStringLiteral("Готово. Откройте http://localhost:%1").arg(httpPort);
+    else
+        qCInfo(lcApp).noquote()
+            << QStringLiteral("Готово. Веб-клиент выключен — сервер отвечает только "
+                              "по /api и WebSocket.");
     return app.exec();
 }

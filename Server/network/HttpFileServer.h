@@ -17,12 +17,17 @@ struct ApiResponse;
 //   2) JSON API (/api/...): запросы разбираются здесь (HttpRequestParser),
 //      маршрутизацией и вызовом сервисов занимается HttpApi.
 // Точкой входа служит login.html — «/» отдаёт именно его.
+//
+// Первую роль можно выключить (web.enabled = false в конфиге): тогда наружу
+// торчит только API, а страниц, которые открываются браузером, на сервере нет
+// вовсе. Десктопные клиенты от этого не страдают — они живут на API и
+// WebSocket; заодно с сервера исчезает всё, что можно открыть и дефейснуть.
 class HttpFileServer : public QObject
 {
     Q_OBJECT
 public:
     HttpFileServer(quint16 port, const QString &rootDir,
-                   HttpApi *api, QObject *parent = nullptr);
+                   HttpApi *api, bool serveWeb, QObject *parent = nullptr);
     ~HttpFileServer() override;
 
     bool isListening() const;
@@ -49,4 +54,5 @@ private:
     QHash<QTcpSocket *, HttpRequestParser *> m_parsers;   // парсер на соединение
     QString m_root;
     quint16 m_port;
+    bool m_serveWeb;   // false — отдаём только /api
 };

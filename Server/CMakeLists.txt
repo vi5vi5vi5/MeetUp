@@ -23,6 +23,10 @@ target_compile_definitions(sqlite3 PRIVATE
 add_executable(MeetUpServer
     main.cpp
 
+    # config/ — настройки сервера (mount/meetup.conf) и правила журнала
+    config/ServerConfig.h      config/ServerConfig.cpp
+    config/Log.h               config/Log.cpp
+
     # models/ — структуры данных (пользователь, сессия, личная комната)
     models/User.h
     models/Session.h
@@ -74,4 +78,30 @@ target_link_libraries(MeetUpServer PRIVATE
 # Так сервер найдёт index.html, откуда бы его ни запустили.
 target_compile_definitions(MeetUpServer PRIVATE
     WEB_ROOT_DEFAULT="${CMAKE_CURRENT_SOURCE_DIR}/web"
+)
+
+# Из какого коммита собран сервер — он отдаёт это в GET /api/config.
+#
+# Значения приходят СНАРУЖИ, а не берутся здесь через `git rev-parse`, и это
+# не лень: в докере .git в контекст сборки не попадает (см. .dockerignore), а
+# поднимать контекст до корня репозитория ради истории значит тащить туда ещё
+# и клиент. На хосте, где репозиторий полный, те же две команды отвечают
+# точнее — их и зовут tools/update.sh и tools/update.ps1.
+#
+# Собрали руками без -D — получится "unknown". Это честный ответ, а не ошибка.
+#
+# Заметьте: MEETUP_MODIFIED — то, что сервер СООБЩАЕТ о себе. Проверить его
+# снаружи нечем: код исполняется на машине того, кого проверяют. Годится как
+# диагностика, не годится как гарантия.
+set(MEETUP_COMMIT "unknown" CACHE STRING "Git commit the server is built from")
+set(MEETUP_MODIFIED "0"     CACHE STRING "1 if the working tree had local changes")
+
+# Время конфигурации, а не компиляции: разница в секунды, зато не заставляет
+# пересобирать всё дерево при каждом запуске сборки.
+string(TIMESTAMP MEETUP_BUILD_TIME "%Y-%m-%dT%H:%M:%SZ" UTC)
+
+target_compile_definitions(MeetUpServer PRIVATE
+    MEETUP_COMMIT="${MEETUP_COMMIT}"
+    MEETUP_MODIFIED=${MEETUP_MODIFIED}
+    MEETUP_BUILD_TIME="${MEETUP_BUILD_TIME}"
 )

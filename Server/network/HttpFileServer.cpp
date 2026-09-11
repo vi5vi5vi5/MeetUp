@@ -1,4 +1,5 @@
 #include "network/HttpFileServer.h"
+#include "config/Log.h"
 #include "network/HttpApi.h"
 #include "network/HttpRequest.h"
 
@@ -14,22 +15,28 @@
 #include <QDebug>
 
 HttpFileServer::HttpFileServer(quint16 port, const QString &rootDir,
-                               HttpApi *api, QObject *parent)
+                               HttpApi *api, bool serveWeb, QObject *parent)
     : QObject(parent),
       m_api(api),
       m_root(QDir(rootDir).absolutePath()),
-      m_port(port)
+      m_port(port),
+      m_serveWeb(serveWeb)
 {
     m_server = new QTcpServer(this);
     connect(m_server, &QTcpServer::newConnection,
             this, &HttpFileServer::onNewConnection);
 
-    if (m_server->listen(QHostAddress::Any, port))
-        qInfo().noquote() << QStringLiteral("HTTP serving %1 at http://localhost:%2")
-                                 .arg(m_root).arg(port);
-    else
+    if (m_server->listen(QHostAddress::Any, port)) {
+        if (m_serveWeb)
+            qCInfo(lcApp).noquote() << QStringLiteral("HTTP: порт %1, веб-клиент из %2")
+                                           .arg(port).arg(m_root);
+        else
+            qCInfo(lcApp).noquote() << QStringLiteral("HTTP: порт %1, только /api "
+                                                      "(веб-клиент выключен)").arg(port);
+    } else {
         qCritical().noquote() << QStringLiteral("HTTP: failed to listen on port %1: %2")
                                      .arg(port).arg(m_server->errorString());
+    }
 }
 
 HttpFileServer::~HttpFileServer()
@@ -116,6 +123,18 @@ void HttpFileServer::dispatch(QTcpSocket *socket, HttpRequestParser *parser)
 
 void HttpFileServer::serveFile(QTcpSocket *socket, const QString &urlPath)
 {
+    // Веб-клиент выключен. Отвечаем 404 (страницы тут и правда нет), но не
+    // молча: человек, открывший адрес в браузере, должен понять, что сервер
+    // жив и что делать дальше, а не гадать над пустой страницей. Секрета мы
+    // при этом не выдаём — то же самое лежит в GET /api/config.
+    if (!m_serveWeb) {
+        sendResponse(socket, 404, statusText(404), "text/plain; charset=utf-8",
+                     "На этом сервере MeetUp веб-клиент выключен.\n"
+                     "Подключитесь приложением MeetUp, указав адрес этого сервера:\n"
+                     "https://github.com/vi5vi5vi5/MeetUp/releases/latest\n");
+        return;
+    }
+
     QString rel = urlPath;
     // Точка входа продукта — страница логина (анонимный вход тоже там).
     if (rel.isEmpty() || rel == QLatin1String("/"))
