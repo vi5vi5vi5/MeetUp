@@ -9,6 +9,14 @@ Column {
     width: parent ? parent.width : 0
     spacing: 18
 
+    // Окно с портретом сервера открывает SettingsModal: модалка обязана
+    // накрывать весь экран, а раздел живёт внутри прокрутки панели.
+    signal serverInfoRequested()
+
+    // Отклик меряем при каждом заходе в раздел: число из прошлого захода —
+    // это уже не про сейчас.
+    Component.onCompleted: Server.refresh()
+
     component InfoRow: Item {
         id: line
         property string key: ""
@@ -80,8 +88,8 @@ Column {
         width: parent.width
         spacing: 2
 
-        // «Версия клиента» отдельной строкой больше не нужна — она в шапке выше.
-        InfoRow { key: "Сервер"; value: Sys.host }
+        // «Версия клиента» отдельной строкой больше не нужна — она в шапке
+        // выше, а адрес сервера — в карточке ниже.
         // Что умеем принимать: отправка уже своя у каждой полосы и видна в
         // «Диагностике», а старая строка «openh264 · libvpx · opus» устарела в
         // день, когда демонстрация уехала на HEVC и видеокарту.
@@ -90,9 +98,11 @@ Column {
 
     Rectangle { width: parent.width; height: 1; color: Theme.border }
 
-    // Портрет сервера — той же панелью, что и окно «Сервер» на входе: это
-    // одни и те же сведения, и расходиться им незачем. Заголовок у панели
-    // выключен — свой уже стоит ниже.
+    // Сервер — одной карточкой, подробности по нажатию. Целиком портрет
+    // сервера здесь лежать не должен: десяток строк «ключ — значение» посреди
+    // настроек читается как продолжение таблицы выше, хотя это отдельный
+    // разговор. В карточке — то, что спрашивают чаще всего: куда подключены и
+    // жив ли он сейчас. Окно открывается то же самое, что и на экране входа.
     Column {
         width: parent.width
         spacing: 10
@@ -106,9 +116,95 @@ Column {
             font.capitalization: Font.AllUppercase
         }
 
-        ServerInfoPanel {
+        Rectangle {
+            id: srvCard
             width: parent.width
-            showHeader: false
+            height: 66
+            radius: Theme.radiusMd
+            color: srvHover.hovered ? Theme.surface3 : Theme.surface2
+            border.width: 1
+            border.color: srvHover.hovered ? Theme.borderStrong : Theme.border
+            Behavior on color { ColorAnimation { duration: Theme.durFast } }
+
+            Row {
+                anchors.left: parent.left
+                anchors.leftMargin: 14
+                anchors.right: parent.right
+                anchors.rightMargin: 12
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 12
+
+                Rectangle {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 38
+                    height: 38
+                    radius: Theme.radiusSm
+                    color: Theme.surface
+                    border.width: 1
+                    border.color: Theme.border
+                    AppIcon {
+                        anchors.centerIn: parent
+                        name: "info"
+                        size: 18
+                        color: Theme.accentInk
+                    }
+                }
+
+                Column {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: parent.width - 38 - srvPing.width - 24 - 36
+                    spacing: 2
+                    Text {
+                        width: parent.width
+                        elide: Text.ElideRight
+                        text: Server.name
+                        color: Theme.text
+                        font.family: Theme.uiFont
+                        font.pixelSize: Theme.textMd
+                        font.weight: Font.DemiBold
+                    }
+                    Text {
+                        width: parent.width
+                        elide: Text.ElideMiddle
+                        text: Sys.host
+                        color: Theme.textMuted
+                        font.family: Theme.monoFont
+                        font.pixelSize: Theme.textXs
+                    }
+                }
+
+                Row {
+                    id: srvPing
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 7
+                    Rectangle {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 7; height: 7; radius: 3.5
+                        color: Server.reachable ? Theme.live : Theme.danger
+                    }
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: Server.pingMs >= 0 ? Server.pingMs + " мс" : "—"
+                        color: Theme.text
+                        font.family: Theme.uiFont
+                        font.pixelSize: Theme.textSm
+                        font.weight: Font.DemiBold
+                    }
+                }
+
+                AppIcon {
+                    anchors.verticalCenter: parent.verticalCenter
+                    name: "arrow-right"
+                    size: 16
+                    color: srvHover.hovered ? Theme.accentInk : Theme.textFaint
+                }
+            }
+
+            HoverHandler { id: srvHover; cursorShape: Qt.PointingHandCursor }
+            TapHandler {
+                gesturePolicy: TapHandler.ReleaseWithinBounds
+                onTapped: page.serverInfoRequested()
+            }
         }
     }
 

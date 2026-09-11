@@ -14,11 +14,13 @@ class QJsonObject;
 // Виден из QML как MyRoom.
 //
 // Комнат у человека может быть несколько (сколько — говорит сервер в поле
-// max). Но экран в каждый момент работает ровно с одной: карточка показывает
-// её, модалка настроек правит её, ссылки-приглашения принадлежат ей. Поэтому
+// max). Но правят их по одной: модалка настроек работает ровно с одной
+// комнатой, и ссылки-приглашения принадлежат ей же. Поэтому
 // «текущая комната» живёт здесь, а не в QML: select(id) переключает, а
-// change/remove/closeRoom и все операции со ссылками относятся к текущей.
-// Так вызовы из QML не таскают за собой номер, который и так один на экран.
+// change/remove и все операции со ссылками относятся к текущей. Так вызовы из
+// QML не таскают за собой номер, который и так один на экран. Исключение —
+// closeRoom(id): «Завершить» есть у каждой комнаты списка, и переключать ради
+// неё текущую значило бы перестраивать список прямо под курсором.
 class PersonalRoomController : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool        loaded    READ loaded    NOTIFY roomChanged)
@@ -57,7 +59,8 @@ public:
                             const QString& password);    // POST: новая комната
     Q_INVOKABLE void change(const QVariantMap& patch);   // PATCH: только изменившееся
     Q_INVOKABLE void remove();                           // DELETE: удалить насовсем
-    Q_INVOKABLE void closeRoom();                        // POST close: завершить эфир
+    // POST close: завершить эфир. По умолчанию — у текущей комнаты.
+    Q_INVOKABLE void closeRoom(int roomId = -1);
     Q_INVOKABLE void reset();                            // при выходе из аккаунта
     Q_INVOKABLE QString slugify(const QString& raw) const; // код по правилам сервера
     Q_INVOKABLE void clearError() { setError(""); }

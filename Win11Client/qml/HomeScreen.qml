@@ -13,14 +13,26 @@ Item {
     id: root
     objectName: "home"
 
-    // Текущая комната: её показывает большая карточка. Какая именно —
-    // решает контроллер (та, где люди, иначе первая), переключает select().
-    readonly property var room: MyRoom.room
+    // Раскрыта та комната, где сейчас люди, иначе первая. Кто впереди —
+    // решает список, а НЕ «текущая» из контроллера: раньше карточку выбирал
+    // currentId, и любое нажатие на свёрнутой комнате (её приходилось делать
+    // текущей ради модалки и закрытия) меняло карточки местами прямо под
+    // курсором — нажал «Настройки» у второй, а она прыгнула на место первой.
+    readonly property var lead: {
+        var rs = MyRoom.rooms
+        for (var i = 0; i < rs.length; ++i)
+            if (rs[i].online === true) return rs[i]
+        return rs.length > 0 ? rs[0] : ({})
+    }
+    readonly property int leadId: root.lead.id !== undefined ? root.lead.id : -1
     // Остальные комнаты — строками под карточкой. Одинаковые карточки на все
     // читались бы как «три равных дела», хотя дело обычно одно.
     readonly property var otherRooms: MyRoom.rooms.filter(function (r) {
-        return r.id !== MyRoom.currentId
+        return r.id !== root.leadId
     })
+    // Комната, которую правит модалка настроек: её назначает select(), к ней же
+    // относятся change/remove и ссылки-приглашения. На порядок карточек не влияет.
+    readonly property var edited: MyRoom.room
     readonly property string name: Auth.displayName
 
     // «05:14», после часа — «1:05:14» (fmtDuration веба)
@@ -233,7 +245,11 @@ Item {
                 Layout.fillWidth: true
                 Layout.preferredWidth: 525
                 Layout.alignment: Qt.AlignTop
-                spacing: 34
+                // Комнаты идут плотным списком — как .rooms-list в вебе (gap 10).
+                // Общий шаг колонки в 34 пикселя растаскивал свёрнутые карточки
+                // так, что список переставал читаться списком; крупные
+                // промежутки теперь расставлены полями там, где они нужны.
+                spacing: 10
 
                 // Hero
                 ColumnLayout {
@@ -255,7 +271,7 @@ Item {
                             Avatar { anchors.verticalCenter: parent.verticalCenter; name: root.name; source: Auth.avatarUrl; size: 26 }
                             Text {
                                 anchors.verticalCenter: parent.verticalCenter
-                                text: (MyRoom.exists && root.room.online === true ? "Вы в эфире" : "Вы онлайн").toUpperCase()
+                                text: (MyRoom.exists && root.lead.online === true ? "Вы в эфире" : "Вы онлайн").toUpperCase()
                                 color: Theme.textMuted
                                 font.family: Theme.labelFont
                                 font.pixelSize: Theme.text2xs
@@ -302,8 +318,10 @@ Item {
                 // где комнат может быть больше одной: на сервере с лимитом 1
                 // строка «1 из 1» — шум.
                 Item {
+                    id: roomsHead
                     visible: MyRoom.exists && MyRoom.maxRooms > 1
                     Layout.fillWidth: true
+                    Layout.topMargin: 24          // +spacing = 34 от приветствия
                     implicitHeight: 26
                     Text {
                         anchors.left: parent.left
@@ -340,6 +358,9 @@ Item {
                 Card {
                     visible: MyRoom.exists
                     Layout.fillWidth: true
+                    // 12 под заголовком списка (как margin-bottom в вебе),
+                    // 34 — если заголовка нет и карточка идёт сразу за hero.
+                    Layout.topMargin: roomsHead.visible ? 2 : 24
                     elevated: true
                     spacing: 16
 
@@ -352,7 +373,7 @@ Item {
                             anchors.verticalCenter: parent.verticalCenter
                             width: parent.width - 170
                             elide: Text.ElideRight
-                            text: root.room.title || ""
+                            text: root.lead.title || ""
                             color: Theme.text
                             font.family: Theme.displayFont
                             font.pixelSize: Theme.textXl
@@ -363,35 +384,35 @@ Item {
                             id: liveBadge
                             anchors.right: parent.right
                             anchors.verticalCenter: parent.verticalCenter
-                            tone: root.room.online === true ? "live" : "muted"
+                            tone: root.lead.online === true ? "live" : "muted"
                             dot: true
                             property double nowMs: Date.now()
-                            text: root.room.online === true
-                                  ? "в эфире · " + root.fmtDuration(nowMs - (root.room.live_since_ms || nowMs))
+                            text: root.lead.online === true
+                                  ? "в эфире · " + root.fmtDuration(nowMs - (root.lead.live_since_ms || nowMs))
                                   : "не в эфире"
                         }
                         Timer { // секундная стрелка бейджа (LiveDuration веба)
                             interval: 1000; repeat: true
-                            running: root.room.online === true
+                            running: root.lead.online === true
                             onTriggered: liveBadge.nowMs = Date.now()
                         }
                     }
 
                     Row { // стопка участников — только в эфире
-                        visible: root.room.online === true
+                        visible: root.lead.online === true
                         width: parent.width
                         spacing: 10
                         Row {
                             spacing: -8    // аватарки внахлёст (hu-stack)
                             Repeater {
-                                model: (root.room.participant_names || []).slice(0, 4)
+                                model: (root.lead.participant_names || []).slice(0, 4)
                                 delegate: Avatar { required property var modelData; name: modelData; size: 30 }
                             }
                         }
                         Text {
-                            visible: (root.room.participant_names || []).length > 4
+                            visible: (root.lead.participant_names || []).length > 4
                             anchors.verticalCenter: parent.verticalCenter
-                            text: "+" + ((root.room.participant_names || []).length - 4)
+                            text: "+" + ((root.lead.participant_names || []).length - 4)
                             color: Theme.textMuted
                             font.family: Theme.uiFont
                             font.pixelSize: Theme.textXs
@@ -399,38 +420,49 @@ Item {
                         }
                         Text {
                             anchors.verticalCenter: parent.verticalCenter
-                            text: "Участники (" + (root.room.participants || 0) + ")"
+                            text: "Участники (" + (root.lead.participants || 0) + ")"
                             color: Theme.textMuted
                             font.family: Theme.uiFont
                             font.pixelSize: Theme.textSm
                         }
                     }
 
-                    LinkRow { width: parent.width; code: root.room.code || "" }
+                    LinkRow { width: parent.width; code: root.lead.code || "" }
 
                     Flow { // actions — переносятся на след. строку, если не влезли
                         width: parent.width
                         spacing: 10
                         AppButton {
-                            text: root.room.online === true ? "Войти в эфир" : "Открыть комнату"
+                            text: root.lead.online === true ? "Войти в эфир" : "Открыть комнату"
                             variant: "primary"
                             iconRight: "arrow-right"
-                            onClicked: Rooms.enter(root.room.code, Auth.displayName)
+                            onClicked: Rooms.enter(root.lead.code, Auth.displayName)
                         }
-                        AppButton { text: "Настройки"; variant: "secondary"; icon: "settings"; onClicked: roomModal.open = true }
                         AppButton {
-                            visible: root.room.online === true
-                            text: "Завершить"; variant: "danger"; icon: "phone-off"
-                            onClicked: MyRoom.closeRoom()
+                            text: "Настройки"; variant: "secondary"; icon: "settings"
+                            // Модалка правит «текущую» комнату — назначаем её перед
+                            // открытием. Порядок карточек от этого не меняется.
+                            onClicked: { MyRoom.select(root.leadId); roomModal.open = true }
+                        }
+                        // Иконкой, а не плашкой во всю строку: третья кнопка
+                        // переносилась на свою строку и ярко-красной полосой
+                        // перетягивала на себя весь взгляд — хотя нажимают её
+                        // реже всего. В свёрнутых карточках она выглядит так же.
+                        IconButton {
+                            visible: root.lead.online === true
+                            size: "sm"
+                            icon: "phone-off"
+                            variant: "danger"
+                            onClicked: MyRoom.closeRoom(root.leadId)
                         }
                     }
 
                     Text { // подпись, когда не в эфире (room-note веба)
-                        visible: root.room.online !== true
+                        visible: root.lead.online !== true
                         width: parent.width
                         wrapMode: Text.WordWrap
                         text: "Эфир начинается с вашего входа"
-                              + (root.room.password ? ", гости подключаются по паролю" : "")
+                              + (root.lead.password ? ", гости подключаются по паролю" : "")
                               + " — и продолжается, пока в комнате кто-то есть."
                         color: Theme.textFaint
                         font.family: Theme.uiFont
@@ -532,7 +564,10 @@ Item {
                                 size: "sm"
                                 icon: "phone-off"
                                 variant: "danger"
-                                onClicked: { MyRoom.select(roomRow.modelData.id); MyRoom.closeRoom() }
+                                // Завершаем именно эту комнату, не делая её
+                                // текущей: список не должен перестраиваться
+                                // под курсором из-за нажатия на кнопку.
+                                onClicked: MyRoom.closeRoom(roomRow.modelData.id)
                             }
                             IconButton {
                                 Layout.alignment: Qt.AlignVCenter
@@ -550,7 +585,11 @@ Item {
                 // отказывать, — чтобы отказ не приходил после заполненной формы.
                 Item {
                     id: addSlot
+                    // Комнат уже максимум — плашки нет вовсе: счётчик «3 из 3»
+                    // наверху сказал то же самое, а мёртвая кнопка рядом с
+                    // казённым «больше не разрешает» только занимала место.
                     visible: MyRoom.exists && MyRoom.maxRooms > 1
+                             && MyRoom.rooms.length < MyRoom.maxRooms
                     Layout.fillWidth: true
                     implicitHeight: 52
 
@@ -581,9 +620,7 @@ Item {
                             anchors.verticalCenter: parent.verticalCenter
                             width: Math.max(0, parent.width - 140)
                             wrapMode: Text.WordWrap
-                            text: MyRoom.rooms.length < MyRoom.maxRooms
-                                  ? "Ещё одна комната — со своим кодом и паролем"
-                                  : "Больше комнат сервер не разрешает"
+                            text: "Ещё одна комната — со своим кодом и паролем"
                             color: Theme.textFaint
                             font.family: Theme.uiFont
                             font.pixelSize: Theme.textXs
@@ -594,7 +631,7 @@ Item {
                             variant: "secondary"
                             icon: "plus"
                             text: "Добавить"
-                            enabled: MyRoom.rooms.length < MyRoom.maxRooms && !MyRoom.busy
+                            enabled: !MyRoom.busy
                             onClicked: createModal.open = true
                         }
                     }
@@ -605,6 +642,7 @@ Item {
                     id: emptySlot
                     visible: MyRoom.loaded && !MyRoom.exists   // не мигает, пока грузимся
                     Layout.fillWidth: true
+                    Layout.topMargin: 24
                     implicitHeight: emptyCol.implicitHeight + 72
 
                     Shape { // пунктирная рамка — у Rectangle пунктира нет
@@ -1048,8 +1086,8 @@ Item {
         onOpenChanged: if (open) {
             MyRoom.clearError()
             MyRoom.loadAliases()
-            rsCode.text = root.room.code || ""
-            rsTitle.text = root.room.title || ""
+            rsCode.text = root.edited.code || ""
+            rsTitle.text = root.edited.title || ""
             editingPass = false; showPass = false; confirmDel = false
             aliasSection.formOpen = false
         }
@@ -1064,7 +1102,7 @@ Item {
         Column {
             width: parent.width
             spacing: 6
-            visible: root.room.online === true      // в эфире код менять нельзя
+            visible: root.edited.online === true      // в эфире код менять нельзя
             Text {
                 text: "ССЫЛКА ДЛЯ ПОДКЛЮЧЕНИЯ"
                 color: Theme.textFaint
@@ -1072,7 +1110,7 @@ Item {
                 font.pixelSize: Theme.text2xs
                 font.letterSpacing: 2
             }
-            LinkRow { width: parent.width; code: root.room.code || "" }
+            LinkRow { width: parent.width; code: root.edited.code || "" }
             Text {
                 text: "Ссылку нельзя изменить, пока идёт конференция."
                 color: Theme.textFaint
@@ -1082,7 +1120,7 @@ Item {
         }
         Field {
             width: parent.width
-            visible: root.room.online !== true
+            visible: root.edited.online !== true
             label: "Ссылка для подключения"
             hint: Sys.host + "/conference.html?room=" + (MyRoom.slugify(rsCode.text) || "…")
             AppInput {
@@ -1091,7 +1129,7 @@ Item {
                 // Enter или уход фокуса — сохранить, если код реально другой.
                 onEditingFinished: {
                     var c = MyRoom.slugify(text)
-                    if (c !== "" && c !== root.room.code) MyRoom.change({ code: c })
+                    if (c !== "" && c !== root.edited.code) MyRoom.change({ code: c })
                 }
             }
         }
@@ -1114,7 +1152,7 @@ Item {
                     enabled: !MyRoom.busy
                     onClicked: {
                         var t = rsTitle.text.trim()
-                        if (t !== "" && t !== root.room.title) MyRoom.change({ title: t })
+                        if (t !== "" && t !== root.edited.title) MyRoom.change({ title: t })
                     }
                 }
             }
@@ -1133,11 +1171,11 @@ Item {
             }
 
             Row {   // просмотр: пароль есть
-                visible: !roomModal.editingPass && (root.room.password || "") !== ""
+                visible: !roomModal.editingPass && (root.edited.password || "") !== ""
                 spacing: 10
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
-                    text: roomModal.showPass ? root.room.password : "••••••"
+                    text: roomModal.showPass ? root.edited.password : "••••••"
                     color: Theme.text
                     font.family: Theme.monoFont
                     font.pixelSize: 14
@@ -1150,7 +1188,7 @@ Item {
                 }
                 AppButton {
                     text: "Изменить"; variant: "secondary"; size: "sm"
-                    onClicked: { rsPass.text = root.room.password || ""; roomModal.editingPass = true }
+                    onClicked: { rsPass.text = root.edited.password || ""; roomModal.editingPass = true }
                 }
                 AppButton {
                     text: "Удалить"; variant: "ghost"; size: "sm"; icon: "x"
@@ -1160,7 +1198,7 @@ Item {
             }
 
             Row {   // просмотр: пароля нет
-                visible: !roomModal.editingPass && (root.room.password || "") === ""
+                visible: !roomModal.editingPass && (root.edited.password || "") === ""
                 width: parent.width
                 spacing: 10
                 Text {

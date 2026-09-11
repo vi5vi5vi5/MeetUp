@@ -1206,15 +1206,15 @@
                         </div>
                       </div>)}
 
-                    {maxRooms > 1 &&
+                    {/* Комнат уже максимум — плашки нет вовсе: счётчик «3 из 3»
+                        наверху сказал то же самое, а мёртвая кнопка рядом с
+                        казённым «больше не разрешает» только занимала место. */}
+                    {maxRooms > 1 && rooms.length < maxRooms &&
                       <div className="room-add">
                         <span style={{ flex: 1 }}>
-                          {rooms.length < maxRooms
-                            ? "Ещё одна комната — со своим кодом и паролем"
-                            : "Больше комнат сервер не разрешает"}
+                          Ещё одна комната — со своим кодом и паролем
                         </span>
                         <Button variant="secondary" size="sm" icon="plus"
-                                disabled={rooms.length >= maxRooms}
                                 onClick={() => setCreateOpen(true)}>Добавить</Button>
                       </div>}
                   </div>

@@ -19,6 +19,8 @@ Item {
     signal signInRequested()
 
     default property alias cardContent: card.content
+    // Слот для модалок — см. overlayHost внизу файла.
+    property alias overlay: overlayHost.data
     readonly property bool wide: width > 900
 
     // ---- Top bar ----
@@ -178,5 +180,17 @@ Item {
                 spacing: 16
             }
         }
+    }
+
+    // Слой модалок. Модалка обязана накрывать весь экран, а её место в разметке
+    // — не колонка карточки: AppModal растягивается якорем anchors.fill, а
+    // Column такого ребёнка не просто игнорирует — она бросает раскладывать
+    // ВСЕХ детей разом. Причём в тот момент, когда модалку показали (до этого
+    // невидимый ребёнок позиционеру не интересен), поэтому ломалось не при
+    // запуске, а по нажатию. Кладём в отдельный слой поверх страницы.
+    Item {
+        id: overlayHost
+        anchors.fill: parent
+        z: 100
     }
 }

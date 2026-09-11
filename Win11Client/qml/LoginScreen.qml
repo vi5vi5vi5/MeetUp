@@ -137,7 +137,9 @@ AuthScaffold {
         }
     }
 
-    ServerInfoModal {
+    // Не в теле карточки, а в слое поверх страницы: модалка накрывает экран
+    // целиком, и колонка карточки для неё — неподходящее место (см. AuthScaffold).
+    overlay: ServerInfoModal {
         id: serverModal
         onClosed: serverModal.open = false
     }

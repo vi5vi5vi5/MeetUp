@@ -78,22 +78,6 @@ for var in DOMAIN LETSENCRYPT_EMAIL HTTP_PORT HTTPS_PORT; do
     fi
 done
 
-# Из какого коммита собираем: сервер отдаёт это в GET /api/config. Внутри
-# образа гита нет и не будет (см. Dockerfile), поэтому считаем здесь и
-# передаём аргументами сборки через docker-compose.yml.
-#
-# Смотрим только на Server/ (мы в ней и стоим): правки в клиенте не делают
-# сборку сервера «изменённой». Untracked-файлы не считаем — заметка, забытая
-# рядом с исходниками, в бинарь не попадает, а CMakeLists, куда её пришлось бы
-# вписать, отслеживается, и такое изменение мы увидим.
-GIT_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
-if [[ -n "$(git status --porcelain -uno -- . 2>/dev/null)" ]]; then
-    GIT_MODIFIED=1
-else
-    GIT_MODIFIED=0
-fi
-export GIT_COMMIT GIT_MODIFIED
-
 if [[ -n "${DOMAIN:-}" ]]; then
     echo "Режим TLS: Let's Encrypt для домена ${DOMAIN}"
     if [[ -z "${LETSENCRYPT_EMAIL:-}" ]]; then
@@ -117,6 +101,27 @@ if [[ "$FORCE" -eq 0 && "$OLD_REV" == "$NEW_REV" ]]; then
     echo "Пересборка не требуется. Запустите с --force, чтобы пересобрать принудительно."
     exit 0
 fi
+
+# Из какого коммита собираем: сервер отдаёт это в GET /api/config. Внутри
+# образа гита нет и не будет (см. Dockerfile), поэтому считаем здесь и
+# передаём аргументами сборки через docker-compose.yml.
+#
+# ПОСЛЕ git pull, а не до: считали до — и в собранный бинарь попадал номер
+# коммита, из которого мы уходим. Сервер потом честно докладывал в /api/config
+# версию, которой в нём уже нет, и лечилось это только вторым запуском с
+# --force, когда HEAD успевал догнать.
+#
+# Смотрим только на Server/ (мы в ней и стоим): правки в клиенте не делают
+# сборку сервера «изменённой». Untracked-файлы не считаем — заметка, забытая
+# рядом с исходниками, в бинарь не попадает, а CMakeLists, куда её пришлось бы
+# вписать, отслеживается, и такое изменение мы увидим.
+GIT_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+if [[ -n "$(git status --porcelain -uno -- . 2>/dev/null)" ]]; then
+    GIT_MODIFIED=1
+else
+    GIT_MODIFIED=0
+fi
+export GIT_COMMIT GIT_MODIFIED
 
 echo
 echo "=== 2/3 Пересборка и перезапуск (docker compose) ==="

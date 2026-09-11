@@ -189,8 +189,12 @@ void PersonalRoomController::remove() {
         });
 }
 
-void PersonalRoomController::closeRoom() {
-    QNetworkReply* reply = m_api->post(roomPath("/close"));
+void PersonalRoomController::closeRoom(int roomId) {
+    // Номер приходит из списка: кнопка «Завершить» есть у каждой комнаты, а
+    // делать её ради этого текущей нельзя — карточки менялись бы местами.
+    const int id = roomId >= 0 ? roomId : m_currentId;
+    if (id < 0) return;
+    QNetworkReply* reply = m_api->post("/api/me/rooms/" + QString::number(id) + "/close");
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         reply->deleteLater();
         // Отключения выгнанных участников доезжают до сервера чуть позже самого

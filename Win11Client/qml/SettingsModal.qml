@@ -373,4 +373,21 @@ Item {
             }
         }
     }
+
+    // Портрет сервера — окном поверх настроек, тем же, что и на экране входа.
+    // Внутри раздела ему места нет: это не строчка таблицы, а отдельный
+    // разговор, да и модалка обязана накрывать экран целиком, а раздел живёт
+    // внутри прокрутки панели.
+    ServerInfoModal {
+        id: serverInfo
+        onClosed: serverInfo.open = false
+    }
+
+    // Раздел просит окно сигналом. Цель — page.item, а не сам раздел: Loader
+    // пересоздаёт страницу при каждой смене раздела, и постоянной цели тут нет.
+    Connections {
+        target: page.item
+        ignoreUnknownSignals: true
+        function onServerInfoRequested() { serverInfo.open = true }
+    }
 }
