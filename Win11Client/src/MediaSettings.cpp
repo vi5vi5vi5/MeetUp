@@ -39,6 +39,7 @@ MediaSettings::MediaSettings(QObject* parent) : QObject(parent) {
     m_sensitivity = qBound(0, s.value("sens", 100).toInt(), 200);
     m_noiseSuppression = s.value("noiseSuppression", true).toBool();
     m_autoGain = s.value("autoGain", true).toBool();
+    m_echoCancel = s.value("echoCancel", true).toBool();
     // Ползунок при включённом автоусилении показывает не сохранённое число, а
     // то, что насчитает AutoGain на живом звуке. До первого кадра показать
     // нечего — берём ручное значение, с него автоусиление и стартует.
@@ -259,6 +260,13 @@ void MediaSettings::setAutoGain(bool on) {
     save("autoGain", on);
     resetAgcReadout();
     emit autoGainChanged();
+}
+
+void MediaSettings::setEchoCancel(bool on) {
+    if (m_echoCancel == on) return;
+    m_echoCancel = on;
+    save("echoCancel", on);
+    emit echoCancelChanged();
 }
 
 void MediaSettings::resetAgcReadout() {

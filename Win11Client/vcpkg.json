@@ -2,6 +2,7 @@
   "name": "win11client",
   "dependencies": [
     "opus",
+    "speexdsp",
     {
       "name": "ffmpeg",
       "default-features": false,

@@ -35,6 +35,10 @@ class MediaSettings : public QObject {
     // Работает ТОЛЬКО вместе с шумоподавлением, поэтому читается не сама
     // настройка, а «выбрано и разрешено»; подробности у autoGain().
     Q_PROPERTY(bool autoGain READ autoGain WRITE setAutoGain NOTIFY autoGainChanged)
+    // Эхоподавление микрофона (SpeexDSP, см. media/EchoCanceller.h). По
+    // умолчанию включено — как echoCancellation:true у веб-клиента. В наушниках
+    // не мешает: вычитать нечего, и фильтр это видит сам.
+    Q_PROPERTY(bool echoCancel READ echoCancel WRITE setEchoCancel NOTIFY echoCancelChanged)
     // Множитель, который СЕЙЧАС держит автоусиление, в тех же процентах, что и
     // ползунок чувствительности. Только чтение и только в памяти: значение
     // живёт двадцать миллисекунд, и хранить его между запусками так же
@@ -137,6 +141,7 @@ public:
     int volume() const { return m_volume; }
     int sensitivity() const { return m_sensitivity; }
     bool noiseSuppression() const { return m_noiseSuppression; }
+    bool echoCancel() const { return m_echoCancel; }
     // Выбор человека И разрешение его применить. Без шумоподавления усиливать
     // пришлось бы фон вместе с голосом, и автоусиление упирается в собственный
     // предохранитель по шумовой полке, то есть почти ничего не делает —
@@ -185,6 +190,7 @@ public:
     void setSensitivity(int v);
     void setNoiseSuppression(bool on);
     void setAutoGain(bool on);
+    void setEchoCancel(bool on);
     void setCamQuality(const QString& q);
     void setAudioQuality(const QString& q);
     void setScreenRes(const QString& r);
@@ -244,6 +250,7 @@ signals:
     void sensitivityChanged();
     void noiseSuppressionChanged();
     void autoGainChanged();
+    void echoCancelChanged();
     void agcSensitivityChanged();
     void camQualityChanged();
     void audioQualityChanged();
@@ -284,6 +291,7 @@ private:
     int m_volume = 100, m_sensitivity = 100;
     bool m_noiseSuppression = true;
     bool m_autoGain = true;
+    bool m_echoCancel = true;
     QString m_camQuality = "med", m_audioQuality = "med";
     QString m_screenRes = "720";
     int m_screenFps = 30;

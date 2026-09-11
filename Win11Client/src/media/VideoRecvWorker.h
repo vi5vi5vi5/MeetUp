@@ -157,6 +157,10 @@ private:
     // Снять шифрование с payload. false — кадр не наш (чужой ключ): счётчик
     // подрос, а на трёх подряд плитка получит «замок».
     bool unseal(Peer& p, quint32 sender, quint8 type, quint8 codec, QByteArray& payload);
+    // Единственный вход кадра в полосу: по флагу — unseal() или пропуск как
+    // есть; открытый кадр заодно снимает «замок» (см. .cpp).
+    bool openFrame(Peer& p, quint32 sender, quint8 flags, quint8 type, quint8 codec,
+                   QByteArray& payload);
 
     // Все кадры очереди устарели: поднять ожидание опорного и попросить его.
     void restartAfterFlush();

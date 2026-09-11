@@ -24,6 +24,8 @@ Item {
     signal expandRequested()
     // Сбросить буфер приёма. Сцена не знает про Media и тосты — просит экран.
     signal resetRequested()
+    // «Ввести ключ» с заслонки: настройки открывает экран, сцена только просит.
+    signal keyRequested()
 
     // ---- Полноэкранный показ: интерфейс уходит вместе с курсором ----
     // В развёрнутом показе смотрят чужой экран, а не наши кнопки: единственный
@@ -121,6 +123,8 @@ Item {
         LockPlate {
             visible: root.locked
             anchors.fill: parent
+            actionable: true
+            onKeyRequested: root.keyRequested()
         }
 
         // Пока кадров нет: ведущий уже закреплён, но опорный кадр ещё в пути.

@@ -29,6 +29,13 @@ find_package(Opus CONFIG REQUIRED)
 list(PREPEND CMAKE_MODULE_PATH "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/ffmpeg")
 find_package(FFMPEG REQUIRED)   # наполняет переменные FFMPEG_*
 
+# SpeexDSP: эхоподавитель микрофона (см. src/media/EchoCanceller.h). Порт vcpkg
+# отдаёт только заголовки и библиотеку, без CMake-конфига, поэтому ищем их
+# руками; тулчейн vcpkg сам подставляет свои каталоги в пути поиска (и
+# debug/lib — для Debug). DLL (libspeexdsp.dll) он же кладёт рядом с exe.
+find_path(SPEEXDSP_INCLUDE_DIR speex/speex_echo.h REQUIRED)
+find_library(SPEEXDSP_LIBRARY NAMES speexdsp libspeexdsp REQUIRED)
+
 qt_standard_project_setup(REQUIRES 6.5)
 
 # ---- RNNoise: шумоподавление микрофона -------------------------------------
@@ -111,6 +118,7 @@ qt_add_executable(Win11Client
     src/media/AudioWorker.cpp
     src/media/AutoGain.cpp
     src/media/Denoiser.cpp
+    src/media/EchoCanceller.cpp
     src/media/ScreenAudioCapture.cpp
     src/media/VideoDecoder.cpp
     src/media/VideoEncoder.cpp
@@ -292,3 +300,7 @@ endif()
 target_include_directories(Win11Client PRIVATE ${FFMPEG_INCLUDE_DIRS})
 target_link_directories(Win11Client PRIVATE ${FFMPEG_LIBRARY_DIRS})
 target_link_libraries(Win11Client PRIVATE ${FFMPEG_LIBRARIES})
+
+# SpeexDSP — те же две переменные, что нашли выше.
+target_include_directories(Win11Client PRIVATE ${SPEEXDSP_INCLUDE_DIR})
+target_link_libraries(Win11Client PRIVATE ${SPEEXDSP_LIBRARY})

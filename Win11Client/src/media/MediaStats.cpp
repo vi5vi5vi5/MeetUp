@@ -109,6 +109,21 @@ void MediaStats::noteSyncHold(qint64 ms) {
     ++m_holdCount;
 }
 
+// У эхоподавителя свой ритм (раз в секунду) — общего тика не ждём, сообщаем
+// сразу; но только когда есть что: одинаковые числа GUI не нужны.
+void MediaStats::noteEcho(bool on, qreal suppressionDb, int delayMs, bool farActive,
+                          int driftPpm) {
+    if (m_aecOn == on && qRound(m_aecDb) == qRound(suppressionDb)
+        && m_aecDelay == delayMs && m_aecFar == farActive && m_aecDrift == driftPpm)
+        return;
+    m_aecOn = on;
+    m_aecDb = suppressionDb;
+    m_aecDelay = delayMs;
+    m_aecFar = farActive;
+    m_aecDrift = driftPpm;
+    emit updated();
+}
+
 // Раз в секунду: счётчики -> скорости. Окно меряем часами, а не считаем ровно
 // секундой: таймер может опоздать под нагрузкой, и тогда «килобиты в секунду»
 // оказались бы завышены ровно в момент, когда на них смотрят внимательнее всего.

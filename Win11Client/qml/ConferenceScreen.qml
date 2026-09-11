@@ -176,9 +176,19 @@ Item {
     readonly property int pageCount: Math.max(1, Math.ceil(tileItems.length / perPage))
     readonly property int curPage: Math.min(page, pageCount - 1)
 
+    // Страниц стало меньше (участники ушли) — номер не должен висеть за краем:
+    // curPage и так показывает последнюю, но следующий пришедший вернул бы
+    // человека на страницу, с которой он не уходил.
+    onPageCountChanged: if (page > pageCount - 1) page = Math.max(0, pageCount - 1)
+
     // Что рисуем в сетке (в режиме сцены — ничего, там свои плитки).
     readonly property var pageItems: stageMode ? []
         : tileItems.slice(curPage * perPage, curPage * perPage + perPage)
+    // Ровно три плитки — «дизайнерская» раскладка, как у веба на широком
+    // экране: первая крупно слева на всю высоту, две другие столбиком справа.
+    // В сетке 2×2 четвёртая клетка пустовала бы, и дыра читается как «кто-то
+    // отвалился». Один и два — и так по-вебовски (одна на всё, две рядом).
+    readonly property bool featured3: !stageMode && pageItems.length === 3
     // Закреплённый (0 или 1 элемент). Закрепление СТАРШЕ демонстрации: нажал
     // на лицо — видишь лицо (так же и в вебе), нажал ещё раз — вернулся экран.
     // Из полного списка, не из отфильтрованного: закреплённый выключил камеру
@@ -257,6 +267,12 @@ Item {
     function openShare() {
         sharePop.open = true
         copyInvite()
+    }
+    // «Ввести ключ» с заслонки «зашифровано»: сразу в раздел «Шифрование», а не
+    // на первую страницу настроек — искать его за рельсом человеку незачем.
+    function openCrypto() {
+        settings.current = "SettingsCrypto.qml"
+        settings.open = true
     }
 
     // ---------------------------------------------------------------- Звуки
@@ -408,7 +424,14 @@ Item {
                     Text {
                         id: tabLabel
                         anchors.centerIn: parent
-                        text: modelData.label
+                        // Числа в подписях, как у веба: сколько людей в комнате —
+                        // не открывая вкладку, и сколько сообщений пропущено, пока
+                        // смотрели участников. Считаются здесь, а не в модели
+                        // вкладок: пересборка модели пересоздала бы обе кнопки.
+                        text: modelData.idx === 1
+                            ? modelData.label + " (" + Conf.participants.length + ")"
+                            : modelData.label + (chatTab.unread > 0 && root.activeTab !== 0
+                                                 ? " (" + chatTab.unread + ")" : "")
                         color: root.activeTab === modelData.idx ? Theme.accentFg : Theme.textMuted
                         font.family: Theme.uiFont
                         font.pixelSize: Theme.textSm
@@ -490,7 +513,10 @@ Item {
                 // В перевёрнутой ленте новейшее прижато к НИЗУ экрана, то есть
                 // к atYEnd (проверено отдельным опытом: индекс 0 в BottomToTop
                 // даёт atYEnd, хотя по модели это «начало»).
-                onAtYEndChanged: if (atYEnd) chatTab.unread = 0
+                // …но только когда лента на виду: невидимая лента при вставке
+                // строки тоже дёргает atYEnd, а гасить счётчик, который никто не
+                // видел, значило бы потерять сообщение.
+                onAtYEndChanged: if (atYEnd && root.chatVisible) chatTab.unread = 0
             }
 
             // Пилюля «новые сообщения»: единственное, что нужно человеку,
@@ -544,7 +570,20 @@ Item {
             Connections {
                 target: Conf
                 function onChatArrived(self) {
-                    if (!self && !chatList.atYEnd) chatTab.unread++
+                    // Не прочитано и то, что пришло, пока лента была скрыта
+                    // (другая вкладка, убранная панель, полный экран), и то, что
+                    // пришло под читающего старое. Раньше считался только второй
+                    // случай: с вкладки «Участники» сообщения приходили молча.
+                    if (!self && (!root.chatVisible || !chatList.atYEnd)) chatTab.unread++
+                }
+            }
+            // Вернулись к ленте, и она прижата к новому краю — всё прочитано.
+            // Если человек стоял на старом, счётчик остаётся и пилюля ниже
+            // ведёт его к новому.
+            Connections {
+                target: root
+                function onChatVisibleChanged() {
+                    if (root.chatVisible && chatList.atYEnd) chatTab.unread = 0
                 }
             }
             Connections {
@@ -613,6 +652,10 @@ Item {
                 // уходит только другим), поэтому у себя берём живой тумблер —
                 // ровно как плитки. Иначе свой значок не менялся при мьюте.
                 readonly property bool micLive: modelData.isSelf ? root.micOn : modelData.mic
+                // Кто говорит — акцентом на значке. В большой комнате говорящий
+                // может быть на другой странице сетки, и список — единственное
+                // место, где его видно целиком.
+                readonly property bool speaking: Conf.speakingIds.indexOf(modelData.id) >= 0
                 width: ListView.view.width
                 height: 52
                 Rectangle {
@@ -643,7 +686,9 @@ Item {
                     AppIcon {
                         name: partRow.micLive ? "mic" : "mic-off"
                         size: 16
-                        color: partRow.micLive ? Theme.textMuted : Theme.danger
+                        color: !partRow.micLive ? Theme.danger
+                             : partRow.speaking ? Theme.accentInk : Theme.textMuted
+                        Behavior on color { ColorAnimation { duration: Theme.durFast } }
                     }
                 }
                 HoverHandler { id: hov }
@@ -731,14 +776,24 @@ Item {
             anchors.bottomMargin: 116   // clear the floating dock
             columnSpacing: Theme.gapGrid
             rowSpacing: Theme.gapGrid
-            columns: Math.max(1, Math.ceil(Math.sqrt(Math.max(1, root.pageItems.length))))
+            columns: root.featured3 ? 2
+                   : Math.max(1, Math.ceil(Math.sqrt(Math.max(1, root.pageItems.length))))
 
             Repeater {
                 model: root.pageItems
                 delegate: VideoTile {
                     required property var modelData
+                    required property int index
                     Layout.fillWidth: true
                     Layout.fillHeight: true
+                    // Раскладка «трое» (см. featured3): первая плитка на две
+                    // строки и две трети ширины — 2fr/1fr веба. Доли задаются
+                    // предпочтительной шириной, растяжение доводит до точных
+                    // пикселей. Тот же Repeater и те же плитки: пересоздание
+                    // делегатов под другую раскладку моргало бы видео.
+                    Layout.rowSpan: root.featured3 && index === 0 ? 2 : 1
+                    Layout.preferredWidth: root.featured3
+                        ? (grid.width - grid.columnSpacing) * (index === 0 ? 2 : 1) / 3 : -1
                     pid: modelData.id
                     name: modelData.name
                     isSelf: modelData.isSelf
@@ -752,6 +807,23 @@ Item {
                     }
                 }
             }
+        }
+
+        // Сетка пуста не потому, что никого нет, а потому, что фильтры
+        // «Интерфейса» всех спрятали. Пустая сцена без слова читается как
+        // обрыв связи — говорим, что случилось на самом деле.
+        Text {
+            visible: !root.stageMode && root.inRoom && root.pageItems.length === 0
+            anchors.centerIn: grid
+            width: Math.min(grid.width - 40, 420)
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.WordWrap
+            text: Conf.participants.length <= 1
+                ? "Пока вы здесь одни. Своя плитка скрыта в настройках «Интерфейса»."
+                : "Все участники скрыты фильтром «без видео» в настройках «Интерфейса»."
+            color: Theme.textMuted
+            font.family: Theme.uiFont
+            font.pixelSize: Theme.textSm
         }
 
         // ---- Режим сцены: плёнка сверху, крупно — экран или закреплённый ----
@@ -818,6 +890,7 @@ Item {
                     sharerName: root.sharerName
                     expanded: root.theater
                     onExpandRequested: root.toggleTheater()
+                    onKeyRequested: root.openCrypto()
                     // Ручной сброс — тот же, что в «Диагностике»; тост нужен,
                     // иначе замершая до опорного кадра картинка выглядит как
                     // «кнопка не сработала».
@@ -840,6 +913,7 @@ Item {
                     cam: modelData.isSelf ? root.camOn : modelData.cam
                     avatar: modelData.isSelf ? Auth.avatarUrl : (modelData.avatarUrl || "")
                     onClicked: root.pinnedId = null
+                    onKeyRequested: root.openCrypto()
                     onVolumeRequested: function (pos) {
                         root.openPeerVolume(modelData.id, modelData.name, pos)
                     }
@@ -873,6 +947,53 @@ Item {
             }
         }
 
+        // ---- Стрелки страниц: по краям сетки, как у веба. Точки внизу малы и
+        // требуют прицела; стрелка у края — крупная цель, и по ней же видно, что
+        // страницы вообще есть. У края гаснет: листать дальше некуда. Висит
+        // поверх первой и последней колонки (34 px от края, как .gridwrap веба),
+        // а не отнимает у сетки ширину: плитки под ней и так с полями.
+        IconButton {
+            visible: !root.stageMode && root.pageCount > 1
+            anchors.left: parent.left
+            anchors.leftMargin: 34
+            anchors.verticalCenter: grid.verticalCenter
+            z: 30
+            size: "sm"
+            icon: "arrow-right"
+            rotation: 180               // стрелки «влево» в наборе нет
+            enabled: root.curPage > 0
+            opacity: enabled ? 1 : 0.45
+            onClicked: root.page = root.curPage - 1
+        }
+        IconButton {
+            visible: !root.stageMode && root.pageCount > 1
+            anchors.right: parent.right
+            anchors.rightMargin: 34
+            anchors.verticalCenter: grid.verticalCenter
+            z: 30
+            size: "sm"
+            icon: "arrow-right"
+            enabled: root.curPage < root.pageCount - 1
+            opacity: enabled ? 1 : 0.45
+            onClicked: root.page = root.curPage + 1
+        }
+        // ← и → листают страницы (как у веба). Только в сетке и только когда
+        // стрелки никому не нужнее: в поле ввода они двигают курсор, в
+        // ползунке — ручку. Настройки и карточка громкости закрыты — иначе
+        // ползунок чувствительности листал бы участников.
+        Shortcut {
+            sequences: ["Left"]
+            enabled: root.inRoom && !root.stageMode && root.pageCount > 1
+                     && !settings.open && !peerVolume.open && !chatInput.activeFocus
+            onActivated: root.page = Math.max(0, root.curPage - 1)
+        }
+        Shortcut {
+            sequences: ["Right"]
+            enabled: root.inRoom && !root.stageMode && root.pageCount > 1
+                     && !settings.open && !peerVolume.open && !chatInput.activeFocus
+            onActivated: root.page = Math.min(root.pageCount - 1, root.curPage + 1)
+        }
+
         // ---- Кнопка чата: на узком окне панель скрыта, открыть её больше нечем
         IconButton {
             visible: root.inRoom && !root.sideDocked && !root.panelOpen && !root.theater
@@ -884,6 +1005,28 @@ Item {
             icon: "chat"
             variant: "neutral"
             onClicked: root.panelOpen = true
+
+            // Непрочитанное — числом в углу (badge-n у веба): панель убрана,
+            // и без числа человек узнал бы о сообщении только открыв её.
+            Rectangle {
+                visible: chatTab.unread > 0
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: -6
+                width: Math.max(20, fabCount.implicitWidth + 12)
+                height: 20
+                radius: 10
+                color: Theme.accent
+                Text {
+                    id: fabCount
+                    anchors.centerIn: parent
+                    text: chatTab.unread > 99 ? "99+" : chatTab.unread
+                    color: Theme.accentFg
+                    font.family: Theme.uiFont
+                    font.pixelSize: Theme.text2xs
+                    font.weight: Font.Bold
+                }
+            }
         }
 
         // Floating dock

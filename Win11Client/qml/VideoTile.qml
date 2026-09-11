@@ -56,7 +56,7 @@ Item {
 
         // Faint watermark initials (only while there is neither video nor photo).
         Text {
-            visible: root.cam && !root.videoShown && root.avatar === ""
+            visible: root.cam && !root.videoShown && root.avatar === "" && !root.locked
             anchors.centerIn: parent
             text: root._initials
             color: Qt.rgba(1, 1, 1, 0.10)
@@ -66,8 +66,10 @@ Item {
         }
 
         // Аватарка (фото с сервера или инициалы) — пока нет живого видео.
+        // Под заслонкой аватарки нет (как у веба, где locked отменяет media и
+        // аватарку разом): замок и инициалы в одной точке спорят друг с другом.
         Avatar {
-            visible: !root.videoShown && !(root.cam && root.avatar === "")
+            visible: !root.videoShown && !(root.cam && root.avatar === "") && !root.locked
             anchors.centerIn: parent
             name: root.name
             source: root.avatar
@@ -183,6 +185,7 @@ Item {
                 anchors.centerIn: parent
                 spacing: 6
                 AppIcon {
+                    id: micIcon
                     visible: !root.mic
                     anchors.verticalCenter: parent.verticalCenter
                     name: "mic-off"
@@ -193,6 +196,7 @@ Item {
                 // ловушка: человек молчит не потому, что молчит, а потому что
                 // его выключили — и об этом забывают через минуту.
                 AppIcon {
+                    id: muteIcon
                     visible: root.mutedByMe
                     anchors.verticalCenter: parent.verticalCenter
                     name: "volume-off"
@@ -202,6 +206,12 @@ Item {
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
                     text: root.name + (root.isSelf ? " · вы" : "")
+                    // Имя бывает до 40 знаков, а плитка в плёнке — 168 px: чип
+                    // не должен выезжать за её край, режем многоточием. Ширина
+                    // чипа = текст + поля + значки, отсюда и вычитаемое.
+                    width: Math.min(implicitWidth, tile.width - 20 - 16
+                                    - (micIcon.visible ? 19 : 0) - (muteIcon.visible ? 19 : 0))
+                    elide: Text.ElideRight
                     color: Theme.dark ? "#ffffff" : Theme.text
                     font.family: Theme.uiFont
                     font.pixelSize: Theme.textXs

@@ -23,6 +23,8 @@ Item {
     signal clicked()
     // Правая кнопка — личная громкость участника (см. VideoTile).
     signal volumeRequested(point scenePos)
+    // «Ввести ключ» с заслонки — настройки открывает экран (см. ScreenStage).
+    signal keyRequested()
 
     readonly property bool videoShown: cam && live
 
@@ -68,7 +70,9 @@ Item {
         // Камеры нет: крупная аватарка (у веба .stage-ava — 20% ширины, но не
         // больше 168 и не меньше 72 пикселей).
         Avatar {
-            visible: !root.videoShown && root.avatar !== ""
+            // Под заслонкой аватарки нет (как у веба): замок и лицо в одной
+            // точке спорят друг с другом, а заслонка и так полупрозрачная.
+            visible: !root.videoShown && root.avatar !== "" && !root.locked
             anchors.centerIn: parent
             name: root.name
             source: root.avatar
@@ -89,6 +93,8 @@ Item {
         LockPlate {
             visible: root.locked
             anchors.fill: parent
+            actionable: true
+            onKeyRequested: root.keyRequested()
         }
 
         // Рамка — поверх видео (дети рисуются над отрисовкой самого Rectangle).

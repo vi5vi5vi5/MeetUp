@@ -182,8 +182,7 @@ void VideoRecvWorker::onFrameBody(const QByteArray& d) {
 
     if (f.type == m_jpegType) {
         Peer& p = m_peers[f.sender];
-        if ((f.flags & Proto::FLAG_ENCRYPTED)
-            && !unseal(p, f.sender, f.type, f.codec, f.payload)) return;
+        if (!openFrame(p, f.sender, f.flags, f.type, f.codec, f.payload)) return;
         emitJpeg(f.sender, f.payload, qint64(f.ts));
         return;
     }
@@ -202,10 +201,24 @@ void VideoRecvWorker::onFrameBody(const QByteArray& d) {
     // Расшифровываем ДО декодера: он должен получить те же байты, что вышли из
     // кодера отправителя, иначе поток для него — мусор.
     Peer& p = m_peers[f.sender];
-    if ((f.flags & Proto::FLAG_ENCRYPTED)
-        && !unseal(p, f.sender, f.type, f.codec, f.payload)) return;
+    if (!openFrame(p, f.sender, f.flags, f.type, f.codec, f.payload)) return;
 
     routeCoded(f.sender, f.flags, f.codec, f.ts, f.payload);
+}
+
+// Кадр к декодеру: запечатанный открываем, открытый пропускаем как есть. Но
+// открытый кадр — это ещё и событие: собеседник выключил шифрование. «Замок»,
+// повешенный на его прежние, запечатанные кадры, снимается только здесь —
+// unseal() такой кадр не увидит, а других мест, где замок снимают, у полосы
+// нет. Без этого заслонка «нужен ключ» оставалась висеть поверх демонстрации,
+// которая под ней уже шла в открытую, — и человек видел картинку «сквозь блюр».
+// У звука (AudioWorker::onFrame) это сделано так же.
+bool VideoRecvWorker::openFrame(Peer& p, quint32 sender, quint8 flags, quint8 type,
+                                quint8 codec, QByteArray& payload) {
+    if (flags & Proto::FLAG_ENCRYPTED) return unseal(p, sender, type, codec, payload);
+    p.cryptoFails = 0;
+    setLocked(p, sender, false);
+    return true;
 }
 
 // Кадр не открылся — у собеседника другой ключ или его нет. Один такой кадр

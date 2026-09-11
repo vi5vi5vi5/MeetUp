@@ -2,6 +2,7 @@
 #include "ScreenAudioCapture.h"
 #include "Denoiser.h"
 #include "AutoGain.h"
+#include "EchoCanceller.h"
 #include "../net/Protocol.h"
 #include "../crypto/E2eCipher.h"
 #include <QAudioSource>
@@ -150,6 +151,8 @@ void AudioWorker::setDevices(const QAudioDevice& input, const QAudioDevice& outp
             m_sink->deleteLater();
             m_sink = nullptr;
             m_out = nullptr;
+            // Другие динамики — другой путь до эха: отклик фильтра с нуля.
+            if (m_aec) m_aec->dropPlayback();
         }
         if (m_wantPlayback && !m_sink) startPlayback();
     }
@@ -219,6 +222,18 @@ void AudioWorker::setAutoGain(bool on) {
     }
 }
 
+void AudioWorker::setEchoCancel(bool on) {
+    if (m_wantAec == on) return;
+    m_wantAec = on;
+    if (!m_source) return;                 // поднимется вместе с захватом
+    if (on && !m_aec) {
+        m_aec = std::make_unique<EchoCanceller>();
+    } else if (!on && m_aec) {
+        m_aec.reset();
+        emit echoStats(false, 0, -1, false, 0);
+    }
+}
+
 void AudioWorker::setGains(qreal volume, qreal sensitivity, qreal screenVolume) {
     m_volGain = volume;
     m_sensGain = sensitivity;
@@ -268,6 +283,10 @@ void AudioWorker::startCapture() {
 
     if (m_wantDenoise) m_denoiser = std::make_unique<Denoiser>();
     if (m_wantAgc) m_agc = std::make_unique<AutoGain>(m_sensGain);
+    // Свежий, с пустой очередью опорных кадров: первый кадр микрофона возьмёт
+    // первый же кадр, записанный в синк после этого момента, — так задаётся
+    // выравнивание (см. EchoCanceller.h), и другого способа его задать нет.
+    if (m_wantAec) m_aec = std::make_unique<EchoCanceller>();
 
     m_pcm.clear();
     m_audioClockMs = 0;           // часы меток начнутся с первой пачки
@@ -290,6 +309,11 @@ void AudioWorker::stopCapture() {
     m_denoiser.reset();           // рвём поток сэмплов — рвём и его состояние
     m_agc.reset();                // …и накопленный множитель вместе с ним:
                                   // следующий микрофон может быть совсем другим
+    if (m_aec) {                  // …и отклик пути до эха: он про этот микрофон
+        m_aec.reset();
+        emit echoStats(false, 0, -1, false, 0);
+    }
+    m_echoStatsAt = 0;
     m_pcm.clear();                // недособранный хвост кадра — в мусор
     m_audioClockMs = 0;
     m_micLevelAt = 0;
@@ -319,9 +343,13 @@ void AudioWorker::onCaptured() {
     while (m_pcm.size() >= kFrameBytes) {
         opus_int16* samples = reinterpret_cast<opus_int16*>(m_pcm.data());
 
-        // Шумоподавление — ПЕРВЫМ действием над кадром: RNNoise обучен на
-        // естественных уровнях, и накрученные до 200 % сэмплы сбивают ему
-        // оценку полос, поэтому оно идёт до гейна чувствительности.
+        // Эхоподавление — самым первым: RNNoise и автоусиление должны видеть
+        // микрофон уже без голосов собеседников из колонок (см. EchoCanceller.h).
+        if (m_aec) m_aec->capture(samples, kFrameSamples);
+
+        // Шумоподавление — следом, и до гейна чувствительности: RNNoise обучен
+        // на естественных уровнях, и накрученные до 200 % сэмплы сбивают ему
+        // оценку полос.
         // Кадр 960 сэмплов ложится на RNNoise ровно двумя блоками по 480.
         // Тот же вызов попутно отдаёт вероятность речи; -1 — шумодав выключен,
         // и считать её нечем.
@@ -389,6 +417,11 @@ void AudioWorker::onCaptured() {
         if (m_agc && nowMs - m_agcGainAt >= 100) {
             m_agcGainAt = nowMs;
             emit agcGain(m_agc->gain());
+        }
+        if (m_aec && nowMs - m_echoStatsAt >= 1000) {
+            m_echoStatsAt = nowMs;
+            emit echoStats(true, m_aec->suppressionDb(), m_aec->echoDelayMs(),
+                           m_aec->farActive(), m_aec->driftPpm());
         }
 
         const int bytes = opus_encode(m_enc, samples, kFrameSamples,
@@ -511,6 +544,7 @@ void AudioWorker::stopPlayback() {
         m_sink = nullptr;
         m_out = nullptr;
     }
+    if (m_aec) m_aec->dropPlayback();   // динамики замолчали — отклик с нуля
     resetPeers();
 }
 
@@ -667,8 +701,19 @@ void AudioWorker::pump() {
     // сверх этого, — задержка, которую слышно как «собеседник отвечает позже».
     const int target = kFrameBytes * kSinkTargetFrames;
     while (m_sink->bytesFree() >= kFrameBytes
-           && (m_sink->bufferSize() - m_sink->bytesFree()) < target)
-        m_out->write(mixOneFrame());
+           && (m_sink->bufferSize() - m_sink->bytesFree()) < target) {
+        const QByteArray frame = mixOneFrame();
+        m_out->write(frame);
+        // Ровно этот кадр — с громкостью и «общим звуком» — услышит микрофон:
+        // эхоподавителю он нужен как опорный (см. EchoCanceller.h). Вместе с
+        // ним отдаём остаток синка ПОСЛЕ записи: разница «записано минус
+        // остаток» — это сэмплы, которые динамики уже отыграли, и по ней
+        // эхоподавитель ловит дрейф часов двух устройств.
+        if (m_aec) {
+            const int queued = (m_sink->bufferSize() - m_sink->bytesFree()) / 2;
+            m_aec->playback(frame, queued);
+        }
+    }
     publishPlayheads();
 }
 

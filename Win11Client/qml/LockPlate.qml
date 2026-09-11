@@ -14,8 +14,17 @@ import MeetUp
 Rectangle {
     id: root
 
-    // На маленькой плитке в сетке подпись не помещается — остаётся замок.
-    property bool compact: height < 96 || width < 132
+    // На маленькой плитке подпись не помещается — остаётся замок. Порог выше
+    // плёнки (168×96): при «< 96» плёнка считалась полноразмерной, и подпись в
+    // две строки ложилась поверх чипа с именем.
+    property bool compact: height < 120 || width < 180
+    // Кнопка «ввести ключ» под подписью. Заслонка объясняет, ЧТО случилось, а
+    // куда идти дальше — нет: раздел «Шифрование» лежит в настройках за
+    // шестерёнкой и рельсом, и человек, впервые видящий замок, его не найдёт.
+    // Только там, где есть место (сцена, а не плитка в сетке) и только если
+    // снаружи есть кому открыть настройки — заслонка сама про них не знает.
+    property bool actionable: false
+    signal keyRequested()
 
     // Радиус задаёт тот, кого закрываем (это обычный Rectangle).
     radius: Theme.radiusLg
@@ -46,6 +55,16 @@ Rectangle {
             font.family: Theme.uiFont
             font.pixelSize: Theme.textXs
             font.weight: Font.DemiBold
+        }
+        // Подпись и кнопка говорят об одном и том же случае, поэтому и глагол
+        // следует за подписью: нет ключа — «ввести», есть, но не тот — «сменить».
+        AppButton {
+            visible: !root.compact && root.actionable
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: Crypto.active ? "Сменить ключ…" : "Ввести ключ…"
+            variant: "secondary"
+            size: "sm"
+            onClicked: root.keyRequested()
         }
     }
 }

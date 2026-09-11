@@ -70,6 +70,63 @@ The media pipeline (see `docs/ROADMAP.md`).
   punch a hole at the receiver, and a hole there widens the jitter buffer by
   2 chunks, which would pay for the saved bandwidth in conversation delay.
 
+  **Echo cancellation** (`EchoCanceller`, on top of SpeexDSP from vcpkg) is
+  the *first* stage on the capture path, ahead of the denoiser: both RNNoise
+  and the AGC must see a microphone without the far end's voices in it,
+  otherwise the denoiser keeps the echo as speech and the AGC pulls it up.
+  The reference signal is free — the very frame `pump()` writes to the sink,
+  volume and deafen already applied, is what the speakers play and the mic
+  hears; capture and playback share the audio thread, so no locking. The
+  cancellation itself is Speex's MDF adaptive filter (400 ms tail, ample for
+  the ~60 ms sink backlog plus render/capture driver latency), followed by the
+  Speex preprocessor for *residual* echo only — its own denoiser is dialled to
+  0 dB so it does not fight RNNoise. The one delicate part is alignment, and
+  `EchoCanceller.h` spells it out: played frames queue up, each captured frame
+  takes the oldest, so the reference stream is contiguous and identical to
+  what was played; the n-th mic frame meets the n-th written frame, and the
+  delay the filter finds is the real sink→speaker→mic path. Queue depth is
+  only headroom for bursts.
+
+  Two failure modes are handled separately, and conflating them is what broke
+  the first two attempts:
+
+  - A **one-off offset** (the pump stalls for a moment, capture drains the
+    queue meanwhile) is harmless in itself — a few tens of ms of extra echo
+    delay, well inside the tail — and is fixed *discretely*, by moving the
+    read cursor. Dragging an offset out with a resampler means warping the
+    reference in time, i.e. manufacturing exactly the drift we are about to
+    fight: the bench fell from 20 dB to 4.
+  - **Clock drift** is the part Speex does not do (its docs demand a shared
+    clock): a USB or webcam mic against onboard speakers runs tens to hundreds
+    of ppm apart, and 50 ppm is 2.4 samples per second — enough to smear the
+    response within seconds. Here a fractional read step *is* the right tool,
+    driven by a slow PI loop (ω ≈ 0.15 rad/s, damping ≈ 1.2, so it converges
+    in 20–30 s), with cubic interpolation between samples — linear tops out
+    around −30 dB on the high end, which is the ceiling we are working at.
+
+  What the loop measures matters as much as what it does. The obvious signal —
+  the length of our own reference queue — is quantised to whole 20 ms frames,
+  because that is how the pump fills it; 50 ppm moves that staircase by one
+  step every several minutes, so the loop either sees nothing or jerks by
+  thousands of ppm at a step. The signal that works is what the sound card has
+  *actually played*: samples written to the sink minus what still sits in it
+  (`QAudioSink` reports the remainder to the sample). That number advances
+  continuously at the speakers' own rate, so its divergence from our read
+  position is the drift itself — visible within seconds and even while the
+  far end is silent. It is averaged over a second before use: "played" only
+  refreshes when the pump writes, so individual frames read a frame stale, and
+  a minimum-based statistic latched onto exactly those outliers.
+
+  Bench (speech-shaped noise, three-tap echo at −10 dB, 100–250 ms): **21 dB
+  ERLE on a shared clock** with the drift estimate parked at exactly 0, and
+  **13–15 dB at ±50, ±200 and ±400 ppm**, drift found to within ~10 % in
+  20–60 s, no re-alignments and no frame ever amplified. The found drift and
+  echo delay are both shown in Diagnostics — if speakers are audible and the
+  delay is missing, the alignment is wrong, not the room. If `bytesFree` ever
+  reports something implausible (played not advancing at roughly the sample
+  rate), the loop skips the tick rather than guessing, and the canceller
+  degrades to its shared-clock behaviour.
+
   **Auto-gain** (`AutoGain`) is the next stage, after suppression and *instead
   of* the sensitivity slider — never on top of it, since the slider is what
   displays the result and multiplying the two would close a feedback loop

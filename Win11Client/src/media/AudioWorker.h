@@ -16,6 +16,7 @@ class ScreenAudioCapture;
 class E2eCipher;
 class Denoiser;
 class AutoGain;
+class EchoCanceller;
 struct OpusEncoder;   // C-структуры из opus.h — вперёд объявляются как struct
 struct OpusDecoder;
 
@@ -74,6 +75,9 @@ public slots:
     // применяется вовсе: множитель считает AutoGain, а ползунок показывает
     // то, что он насчитал. Переключается на лету, как и шумоподавление.
     void setAutoGain(bool on);
+    // Эхоподавление: вычитать из микрофона то, что сами сыграли в динамики
+    // (см. EchoCanceller.h). Живёт с захватом, переключается на лету.
+    void setEchoCancel(bool on);
     void setGains(qreal volume, qreal sensitivity, qreal screenVolume);
     void setOutputMuted(bool muted);
     // Личная громкость участника (множитель 0..2). Только голос: у звука
@@ -93,6 +97,10 @@ signals:
     // Прорежен до ~10 Гц: ползунок в настройках не обязан знать про каждый
     // двадцатимиллисекундный кадр, а QSettings — тем более (см. MediaSettings).
     void agcGain(qreal gain);
+    // Эхоподавитель — для «Диагностики», раз в секунду: включён ли, подавление
+    // (дБ), где нашёл эхо (мс; −1 — не сошёлся), звучали ли динамики, найденный
+    // дрейф часов (ppm).
+    void echoStats(bool on, qreal suppressionDb, int delayMs, bool farActive, int driftPpm);
     void selfSpeaking();                         // мы говорим (подсветка плитки)
     void speaking(qint64 id);                    // говорит участник
     void screenLive(bool on);                    // звук демонстрации идёт
@@ -157,6 +165,7 @@ private:
     bool m_wantCapture = false, m_wantPlayback = false, m_wantScreenAudio = false;
     bool m_wantDenoise = true;          // настройка; сам объект живёт с захватом
     bool m_wantAgc = true;              // то же для автоусиления
+    bool m_wantAec = true;              // …и для эхоподавления
     bool m_outputMuted = false;
     int  m_bitrate = 32000;
     qreal m_volGain = 1.0, m_sensGain = 1.0, m_scrVolGain = 1.0;
@@ -172,10 +181,16 @@ private:
     // только про микрофон: фонограмма демонстрации — это чужой сведённый звук,
     // и выравнивать его по речевой цели незачем.
     std::unique_ptr<AutoGain> m_agc;
+    // Эхоподавитель. В цепочке стоит ПЕРВЫМ — до RNNoise и автоусиления: обоим
+    // нужен микрофон без голосов из колонок, иначе шумодав примет эхо за речь
+    // и сохранит его, а автоусиление — подтянет. Опорный сигнал ему отдаёт
+    // насос вывода (pump), поэтому он единственный из троих знает про синк.
+    std::unique_ptr<EchoCanceller> m_aec;
     OpusEncoder* m_enc = nullptr;       // кодер (жив вместе с захватом)
     qint64 m_audioClockMs = 0;          // монотонные часы меток отправки
     qint64 m_micLevelAt = 0;            // прореживание индикатора уровня
     qint64 m_agcGainAt = 0;             // …и множителя автоусиления
+    qint64 m_echoStatsAt = 0;           // …и показателей эхоподавителя
     qint64 m_selfSpokeAt = 0;           // прореживание «говорит» для себя
     bool m_selfSpeech = false;          // речь идёт: нижний порог VAD держит её
     SpeechGate m_selfGate;              // …когда шумодава нет и VAD взять негде

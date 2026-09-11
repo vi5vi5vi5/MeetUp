@@ -78,6 +78,15 @@ class MediaStats : public QObject {
     // Сколько раз за эту конференцию очередь приёма сбрасывали — сама или
     // кнопкой. Ноль — порог ни разу не понадобился.
     Q_PROPERTY(int rxResets READ rxResets NOTIFY updated)
+    // Эхоподавитель (см. EchoCanceller.h): работает ли, на сколько дБ давит,
+    // где нашёл эхо (мс; −1 — фильтр ещё не сошёлся) и звучали ли динамики —
+    // без последнего первые два ничего не значат.
+    Q_PROPERTY(bool aecOn READ aecOn NOTIFY updated)
+    Q_PROPERTY(qreal aecSuppressionDb READ aecSuppressionDb NOTIFY updated)
+    Q_PROPERTY(int aecDelayMs READ aecDelayMs NOTIFY updated)
+    Q_PROPERTY(bool aecFarActive READ aecFarActive NOTIFY updated)
+    // Дрейф часов «динамики относительно микрофона», ppm; 0 на общем клоке.
+    Q_PROPERTY(int aecDriftPpm READ aecDriftPpm NOTIFY updated)
 public:
     explicit MediaStats(SignalingClient* conf, QObject* parent = nullptr);
 
@@ -111,6 +120,11 @@ public:
     int rxLagCamMs() const { return m_rxLagCam; }
     int rxLagScrMs() const { return m_rxLagScr; }
     int rxResets() const { return m_rxResets; }
+    bool aecOn() const { return m_aecOn; }
+    qreal aecSuppressionDb() const { return m_aecDb; }
+    int aecDelayMs() const { return m_aecDelay; }
+    bool aecFarActive() const { return m_aecFar; }
+    int aecDriftPpm() const { return m_aecDrift; }
 
     // ---- со стороны движков ----
     void noteTxVideo(bool screen, int bytes);
@@ -146,6 +160,8 @@ public:
     // микрофон, и картинка демонстрации под её фонограмму — механизм один и тот
     // же, а два числа в «Диагностике» разошлись бы там, где человеку нужно одно.
     void noteSyncHold(qint64 ms);
+    // Эхоподавитель отчитался (раз в секунду, пока идёт захват).
+    void noteEcho(bool on, qreal suppressionDb, int delayMs, bool farActive, int driftPpm);
 
 signals:
     // Один сигнал на все свойства: они пересчитываются одним тиком, и плодить
@@ -186,6 +202,9 @@ private:
     int m_rxQueue = 0;
     int m_rxLagCam = 0, m_rxLagScr = 0;   // пики за последнее окно
     int m_rxResets = 0;
+    bool m_aecOn = false, m_aecFar = false;
+    qreal m_aecDb = 0;
+    int m_aecDelay = -1, m_aecDrift = 0;
 
     int m_rxFrames = 0;
     QSet<quint32> m_rxSenders;     // сколько разных потоков рисовалось за окно
