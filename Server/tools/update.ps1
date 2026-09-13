@@ -64,19 +64,6 @@ foreach ($var in @('DOMAIN', 'LETSENCRYPT_EMAIL', 'HTTP_PORT', 'HTTPS_PORT')) {
     }
 }
 
-# Из какого коммита собираем: сервер отдаёт это в GET /api/config. Внутри
-# образа гита нет и не будет (см. Dockerfile), поэтому считаем здесь и
-# передаём аргументами сборки через docker-compose.yml.
-#
-# Смотрим только на Server/ (мы в ней и стоим): правки в клиенте не делают
-# сборку сервера «изменённой». Untracked-файлы не считаем — заметка рядом с
-# исходниками в бинарь не попадает, а CMakeLists, куда её пришлось бы вписать,
-# отслеживается, и такое изменение мы увидим.
-$env:GIT_COMMIT = (git rev-parse --short HEAD)
-if (-not $env:GIT_COMMIT) { $env:GIT_COMMIT = "unknown" }
-$dirty = (git status --porcelain -uno -- .)
-if ($dirty) { $env:GIT_MODIFIED = "1" } else { $env:GIT_MODIFIED = "0" }
-
 Write-Host ""
 Write-Host "=== 1/3 Получение новой версии из GitHub ===" -ForegroundColor Cyan
 $oldRev = (git rev-parse HEAD 2>$null); if (-not $oldRev) { $oldRev = 'none' }
@@ -91,6 +78,24 @@ if (-not $Force -and $oldRev -eq $newRev) {
     Write-Host "Пересборка не требуется. Запустите с -Force, чтобы пересобрать принудительно." -ForegroundColor Yellow
     exit 0
 }
+
+# Из какого коммита собираем: сервер отдаёт это в GET /api/config. Внутри
+# образа гита нет и не будет (см. Dockerfile), поэтому считаем здесь и
+# передаём аргументами сборки через docker-compose.yml.
+#
+# ПОСЛЕ git pull, а не до: считали до — и в собранный бинарь попадал номер
+# коммита, из которого мы уходим. Сервер потом честно докладывал в /api/config
+# версию, которой в нём уже нет, и лечилось это только вторым запуском с
+# -Force, когда HEAD успевал догнать.
+#
+# Смотрим только на Server/ (мы в ней и стоим): правки в клиенте не делают
+# сборку сервера «изменённой». Untracked-файлы не считаем — заметка рядом с
+# исходниками в бинарь не попадает, а CMakeLists, куда её пришлось бы вписать,
+# отслеживается, и такое изменение мы увидим.
+$env:GIT_COMMIT = (git rev-parse --short HEAD)
+if (-not $env:GIT_COMMIT) { $env:GIT_COMMIT = "unknown" }
+$dirty = (git status --porcelain -uno -- .)
+if ($dirty) { $env:GIT_MODIFIED = "1" } else { $env:GIT_MODIFIED = "0" }
 
 Write-Host ""
 Write-Host "=== 2/3 Пересборка и перезапуск (docker compose) ===" -ForegroundColor Cyan
