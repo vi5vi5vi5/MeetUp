@@ -269,10 +269,19 @@ void VideoSendWorker::encodeFrame(const QVideoFrame& frame, int maxW, int maxH,
         // упирается в видеокарту, у камеры — в процессор (см. VideoEncoder::open).
         const bool screen = (m_msgType == Proto::SCREEN_CODED);
         if (!m_enc->open(tw, th, useFps, bitrate, screen, m_codecStep, m_codecChoice)) {
-            delete m_enc;                  // энкодеров нет — молча не вещаем
+            delete m_enc;
             m_enc = nullptr;
+            // Кодировщиков нет вовсе. Дальше этой ветки полоса не пойдёт
+            // никогда — сказать об этом человеку обязаны мы, больше некому:
+            // снаружи это выглядит как работающая камера, от которой почему-то
+            // ничего не приходит.
+            if (!m_toldUnavailable) {
+                m_toldUnavailable = true;
+                emit encoderUnavailable(screen);
+            }
             return;
         }
+        m_toldUnavailable = false;
         m_openedFps = useFps;
         m_openedBitrate = bitrate;
         m_openedAtMs = tsMs;

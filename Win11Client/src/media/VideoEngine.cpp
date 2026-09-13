@@ -342,6 +342,20 @@ VideoEngine::VideoEngine(SignalingClient* conf, MediaSettings* settings,
     m_holdTimer = new QTimer(this);
     m_holdTimer->setInterval(15);
     connect(m_holdTimer, &QTimer::timeout, this, &VideoEngine::drainHeld);
+
+    // Самопроверка кодировщиков — сразу на старте, не дожидаясь, пока человек
+    // откроет настройки (а он их не откроет: список кодеков спрятан за
+    // режимом разработчика).
+    //
+    // Она нужна не списку, а человеку. Кодировщик, которого нет, обнаруживал
+    // себя в худший момент: посреди разговора, при нажатии на кнопку камеры, и
+    // ничем себя не выдавал — камера «включена», картинки нет. Проба стоит
+    // около полусекунды на потоке пула один раз за запуск; это дешевле одного
+    // такого разговора.
+    //
+    // Отложена на возврат в цикл событий: конструктор ещё идёт, а проба
+    // публикует результат сигналом.
+    QTimer::singleShot(0, this, [this] { probeCodecs(); });
 }
 
 VideoEngine::~VideoEngine() {
@@ -694,6 +708,20 @@ void VideoEngine::wireSendWorker(bool screen) {
     connect(w, &VideoSendWorker::encoderOpened, this,
             [this, screen](int c, int width, int height, bool hw) {
                 noteEncoderOpened(screen, c, width, height, hw);
+            });
+    // …а если не открылся ни один — это единственное место, где человек об
+    // этом узнает. Текст говорит и что случилось, и что делать: своими силами
+    // тут не чинится, кодировщиков просто нет в установленной программе.
+    connect(w, &VideoSendWorker::encoderUnavailable, this,
+            [this](bool screen) {
+                qWarning() << "VideoEngine: ни один кодировщик не открылся, полоса"
+                           << (screen ? "экрана" : "камеры") << "не вещает";
+                emit codecNotice(
+                    QStringLiteral("%1 не передаётся: на этом компьютере не открылся "
+                                   "ни один видеокодировщик. Похоже, установка повреждена "
+                                   "— переустановите программу.")
+                        .arg(screen ? QStringLiteral("Демонстрация")
+                                    : QStringLiteral("Камера")));
             });
 }
 
@@ -1317,15 +1345,58 @@ void VideoEngine::probeCodecs() {
         if (com) CoUninitialize();
 #endif
         if (!self) return;
-        QMetaObject::invokeMethod(self, [self, found, skipHardware] {
+        QMetaObject::invokeMethod(self, [self, found, names, skipHardware] {
             if (!self) return;
             self->m_codecOptions = found;
             self->m_codecsProbed = true;
             self->m_codecProbePartial = skipHardware;
             self->m_codecProbeRunning = false;
             emit self->codecOptionsChanged();
+            self->checkInstall(names);
         }, Qt::QueuedConnection);
     });
+}
+
+// Целы ли программные кодировщики. Отдельный вопрос от «что умеет эта
+// машина», и отвечается он не про машину, а про УСТАНОВКУ.
+//
+// Аппаратных кодировщиков может не быть по совершенно законным причинам:
+// виртуалка, старая встройка, сервер без видеокарты. Судить о них нельзя.
+//
+// А вот программные обязаны быть всегда, и это не пожелание, а свойство
+// сборки:
+//   - libvpx (VP9 и VP8) вкомпилирован внутрь avcodec — отдельного файла,
+//     который мог бы потеряться, попросту нет;
+//   - libopenh264 живёт в openh264-7.dll, но avcodec импортирует её обычным
+//     импортом, не отложенным. Нет файла — не грузится avcodec — не
+//     запускается программа. Проверено: без openh264-7.dll процесс падает на
+//     старте с 0xC0000135, до единой строчки нашего кода.
+// Значит, если программа работает, а программных кодировщиков нет, — рядом с
+// ней лежит ЧУЖОЙ avcodec. Чаще всего это распаковка обновления поверх старой
+// папки с «пропустить существующие файлы».
+//
+// Молчать об этом нельзя: снаружи поломка выглядит как неисправная камера, и
+// человек будет менять камеру, драйверы и провайдера, а не программу.
+// Говорим только про НИ ОДНОГО — когда часть на месте, лестница дотянет, а
+// пугать человека ложной тревогой хуже, чем не сказать.
+void VideoEngine::checkInstall(const QStringList& probed) {
+    if (m_installChecked) return;
+    m_installChecked = true;
+
+    static const char* const kSoftware[] = { "libopenh264", "libvpx-vp9", "libvpx" };
+    QStringList missing;
+    for (const char* id : kSoftware)
+        if (!probed.contains(QLatin1String(id))) missing << QLatin1String(id);
+    if (missing.isEmpty()) return;
+
+    qWarning() << "VideoEngine: программных кодировщиков не хватает:" << missing.join(", ")
+               << "— вероятно, рядом чужой avcodec";
+    if (missing.size() < 3) return;      // что-то есть — лестница справится сама
+
+    emit codecNotice(QStringLiteral(
+        "Установка повреждена: рядом с программой лежит чужая библиотека кодеков "
+        "— ни один программный кодировщик не открылся. Видео будет идти через "
+        "видеокарту, пока она есть. Переустановите программу целиком, в пустую папку."));
 }
 
 void VideoEngine::noteEncoderOpened(bool screen, int codec, int width, int height,

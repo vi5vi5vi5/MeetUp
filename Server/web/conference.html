@@ -2064,7 +2064,11 @@
     const tiles = allTiles.filter(t => {
       if (t.id != null && (t.id === pinnedId || screenIds.includes(t.id))) return true;
       if (t.self) return showSelf;
-      if (hideNoVideo && !(t.cam && t.hasFrame)) return false;
+      // Фильтр смотрит на тумблер камеры, а НЕ на «пришёл ли кадр». По кадру
+      // он прятал бы плитку ровно до того момента, когда она должна родиться,
+      // — а без плитки кадр и не разберётся (гейт в decodeVideo). Участника с
+      // включённой, но ещё не доехавшей камерой прятать не за что.
+      if (hideNoVideo && !t.cam) return false;
       return true;
     });
 
@@ -2286,19 +2290,30 @@
         if (cam)
           media = <video ref={selfVideoRef} className={"tile-media" + (mirror ? " mirror" : "")}
                          autoPlay muted playsInline />;
-      } else if (t.cam && t.hasFrame && !locked && !onStage) {
+      } else if (t.cam && !locked && !onStage) {
+        // Холст живёт, пока у человека включена камера, а НЕ с первого кадра.
+        // Иначе получается замкнутый круг: движок не разбирает поток, пока
+        // некуда рисовать (см. гейт в decodeVideo), а рисовать некуда, пока
+        // не пришёл кадр. Так плитка не появлялась вообще никогда.
+        // Пустой холст не виден: пока кадров нет, поверх лежит аватарка.
         media = <canvas className="tile-media" ref={engine.videoSinkRef(t.id)} />;
       }
+      // Аватарка теперь не ВМЕСТО картинки, а ПОВЕРХ неё (.tile-ava — inset:0)
+      // и только пока картинки нет: холст обязан попасть в документ раньше
+      // первого кадра, иначе кадра не будет никогда (см. выше).
+      // Живая картинка есть, когда: у себя — включена камера, у соседа — уже
+      // пришёл кадр и плитка не отдала его сцене (onStage).
       // Ни видео, ни аватарки — инициалы, но кружком: крупные буквы во всю
       // плитку выглядели как заглушка вёрстки, а не как человек.
-      if (!media && !locked)
-        media = (
+      const live = t.self ? cam : (t.hasFrame && !onStage);
+      const ava = (!locked && !live)
+        ? (
           <div className="tile-ava">
             {t.avatar
               ? <img src={t.avatar} alt="" />
               : <div className={"ini" + (t.self ? " self" : "")}>{initials(t.name)}</div>}
           </div>
-        );
+        ) : null;
       const spanSelf = !film && featured && tiles.length === 3 && idx === 0;
       const pinned = pinActive && t.id === pinnedId;
       return (
@@ -2315,8 +2330,9 @@
                       ...(film ? null : { minHeight: 0, ...(spanSelf ? { gridRow: "1 / 3" } : null) }) }}>
           <VideoTile name={t.name} self={t.self} muted={!t.mic} speaking={t.speaking}
                      style={{ aspectRatio: "auto", height: "100%" }}>
-            {(media || locked) ? <>
+            {(media || ava || locked) ? <>
               {media}
+              {ava}
               {locked &&
                 <div className="tile-lock">
                   <div><b>🔒</b>Зашифровано — нужен ключ</div>
@@ -2328,27 +2344,37 @@
     }
 
     // Что показывает сцена при закреплённом участнике.
+    //
+    // Холст, как и в плитке, монтируется по включённой камере, а не по первому
+    // кадру: иначе кадру неоткуда взяться (замкнутый круг с гейтом в
+    // decodeVideo). Пока картинки нет, поверх холста лежит заглушка.
     function stagePinMedia() {
       const t = pinnedTile;
+      const locked = !t.self && lockedIds.has(t.id);
+      const live = t.self ? cam : t.hasFrame;
+      let media = null;
       if (t.self) {
         if (cam)
-          return <video ref={stagePinSelfRef} className={"stage-media" + (mirror ? " mirror" : "")}
-                        autoPlay muted playsInline />;
-      } else if (t.cam && t.hasFrame && !lockedIds.has(t.id)) {
-        return <canvas key={"pin" + t.id} className="stage-media"
-                       ref={engine.videoSinkRef(t.id)} />;
+          media = <video ref={stagePinSelfRef} className={"stage-media" + (mirror ? " mirror" : "")}
+                         autoPlay muted playsInline />;
+      } else if (t.cam && !locked) {
+        media = <canvas key={"pin" + t.id} className="stage-media"
+                        ref={engine.videoSinkRef(t.id)} />;
       }
-      if (t.avatar || !t.cam || !t.hasFrame)
-        return (
+      if (live && media) return media;
+      const over = (t.avatar || !t.cam || !live)
+        ? (
           <div className="tile-ava stage-ava">
             {t.avatar
               ? <img src={t.avatar} alt="" />
               : <div className={"ini" + (t.self ? " self" : "")}>{initials(t.name)}</div>}
           </div>
+        ) : (
+          <div className="stage-wait">
+            {!t.self && t.cam ? "Подключаем камеру…" : "Камера выключена"}
+          </div>
         );
-      return <div className="stage-wait">
-        {!t.self && t.cam ? "Подключаем камеру…" : "Камера выключена"}
-      </div>;
+      return <>{media}{over}</>;
     }
 
     function onTouchStart(e) { touchX.current = e.touches[0].clientX; }

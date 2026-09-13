@@ -14,6 +14,12 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
+// Сколько кадров подряд декодер вправе принять, не отдав ни одного, прежде чем
+// мы объявим кодек неподдержанным (см. routeCoded). Тридцать — это больше
+// секунды на любой частоте, которую мы вещаем, и на порядок больше самой
+// глубокой конвейерной задержки, какая бывает у аппаратного разбора.
+static constexpr int kMuteRunLimit = 30;
+
 VideoRecvWorker::VideoRecvWorker(quint8 codedType, quint8 jpegType, E2eCipher* cipher,
                                  QObject* parent)
     : QObject(parent), m_codedType(codedType), m_jpegType(jpegType), m_cipher(cipher) {}
@@ -47,6 +53,7 @@ void VideoRecvWorker::dropDecoder(Peer& p) {
     p.prevAt = 0;
     p.slowRun = 0;
     p.complainedSlow = false;
+    p.muteRun = 0;
 }
 
 void VideoRecvWorker::reset() {
@@ -346,7 +353,38 @@ void VideoRecvWorker::routeCoded(quint32 sender, quint8 flags, quint8 codec,
         emit keyframeNeeded(m_codedType);
         return;
     }
-    if (!frame) return;
+
+    // Немой декодер: открылся, кадры принимает, ошибки не возвращает — и не
+    // отдаёт ничего. Никогда.
+    //
+    // Так ведёт себя декодер, у которого есть только аппаратный путь, а
+    // видеокарта этот поток не берёт: FFmpeg не считает это ошибкой, потому
+    // что формально он и не начинал разбирать. Наблюдается на AV1: декодер
+    // "av1" открывается на любой машине, перечисляет поддерживаемые GUID
+    // видеокарты — и молчит, а failed() остаётся false.
+    //
+    // Без этой проверки случай проваливается в дыру между двумя ветками выше:
+    // не «нет декодера» (он есть) и не «декодер сломался» (он цел). Зрителю —
+    // чёрный экран, отправителю — тишина: жалоба не уходит, лестница кодеков
+    // не спускается, и никто ничего не узнаёт. Ровно та беда, ради которой
+    // CODEC_UNSUPPORTED и заводили.
+    //
+    // Порог с большим запасом. Пустой ответ сам по себе законен: конвейер
+    // набирает глубину, у аппаратного разбора это несколько кадров. Секунда с
+    // лишним впустую законной быть уже не может — за это время исправный
+    // декодер отдаёт первый кадр при любой глубине.
+    if (!frame) {
+        if (++p.muteRun >= kMuteRunLimit) {
+            qWarning() << "VideoRecvWorker: декодер кодека" << codec
+                       << "принял" << p.muteRun << "кадров и не отдал ни одного"
+                       << "— считаем кодек неподдержанным";
+            dropDecoder(p);
+            setAwaitKey(p, sender, true);
+            complain(codec);
+        }
+        return;
+    }
+    p.muteRun = 0;
 
     const QVideoFrame vf = convert(p, frame);
     // Приведение пикселей считаем частью разбора: для зрителя это одна работа,

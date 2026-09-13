@@ -7,6 +7,7 @@
 #include <QRect>
 #include <QSet>
 #include <QString>
+#include <QStringList>
 #include <QVariantList>
 #include <QVideoFrame>
 #include <atomic>
@@ -244,6 +245,10 @@ private:
     // …и то же про декодер входящей полосы. Числа расходятся: вещаем мы одним
     // кодеком, а принимаем тем, который выбрал отправитель.
     void noteDecoderOpened(bool screen, int codec, int width, int height, bool hardware);
+    // Цела ли установка: все ли ПРОГРАММНЫЕ кодировщики на месте. probed —
+    // имена из каталога, которые проба открыла. Зовётся один раз за запуск,
+    // по итогу первой пробы. Подробности — в .cpp.
+    void checkInstall(const QStringList& probed);
 
     SignalingClient* m_conf;           // не владеем
     MediaSettings* m_settings;         // не владеем
@@ -367,6 +372,8 @@ private:
     // второго аппаратного кодировщика рядом с работающим и есть самый верный
     // способ подвесить драйвер. Как показ закончится, спросим по-настоящему.
     bool m_codecProbePartial = false;
+    // Про целость установки говорят один раз за запуск (см. checkInstall).
+    bool m_installChecked = false;
     // Чем полоса вещает ПРЯМО СЕЙЧАС, именем кодировщика из каталога. Живой
     // кодировщик — доказательство сильнее любой пробы, и проверять его незачем.
     QString m_scrEncoderId, m_camEncoderId;
