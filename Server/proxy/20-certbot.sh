@@ -10,14 +10,40 @@ set -e
 
 [ -z "$DOMAIN" ] && exit 0
 
+EXTRA_DOMAINS="${EXTRA_DOMAINS:-}"
+
 CERTS=/etc/nginx/certs
 LIVE="$CERTS/live"
 LE_LIVE="/etc/letsencrypt/live/$DOMAIN"
 WEBROOT=/var/www/certbot
 
-# Уже есть сертификат для этого домена — не запрашиваем повторно
-# (у Let's Encrypt жёсткие rate limit). live/ переставит блок ниже.
-if [ ! -d "$LE_LIVE" ]; then
+# Имена, которые идут в сертификат: основной домен плюс соседи с этого же
+# сервера (EXTRA_DOMAINS, через пробел или запятую). Сертификат получается
+# один на всех — так проще и не упирается в лимит «дубликатов».
+DOMAIN_ARGS="-d $DOMAIN"
+if [ -n "$EXTRA_DOMAINS" ]; then
+    for extra in $(echo "$EXTRA_DOMAINS" | tr ',' ' '); do
+        [ -n "$extra" ] && DOMAIN_ARGS="$DOMAIN_ARGS -d $extra"
+    done
+fi
+
+# Сертификат уже лежит — сразу направляем на него live/, чтобы nginx
+# стартовал на настоящем, не дожидаясь ответа certbot.
+if [ -d "$LE_LIVE" ]; then
+    ln -sf "$LE_LIVE/fullchain.pem" "$LIVE/fullchain.pem"
+    ln -sf "$LE_LIVE/privkey.pem"   "$LIVE/privkey.pem"
+    echo "Сертификат Let's Encrypt для $DOMAIN уже есть — live/ на него."
+fi
+
+# Запрос делаем в любом случае, но с --keep-until-expiring: если
+# сертификат свежий и уже покрывает все имена, certbot не пойдёт в сеть
+# и ничего не перевыпустит.
+#
+# Раньше здесь стояло «есть каталог — не трогаем», и это был скрытый
+# капкан: добавленный EXTRA_DOMAINS не попадал в сертификат никогда.
+# Сосед получал ошибку имени, а причину было не видно — сертификат-то
+# есть, и он валидный.
+if true; then
     (
         # Ждём, пока nginx поднимется и начнёт слушать :80 — иначе HTTP-01
         # challenge не пройдёт. Пробуем до ~30 секунд.
@@ -34,12 +60,16 @@ if [ ! -d "$LE_LIVE" ]; then
         EMAIL_ARG="--register-unsafely-without-email"
         [ -n "$LETSENCRYPT_EMAIL" ] && EMAIL_ARG="--email $LETSENCRYPT_EMAIL"
 
-        echo "Запрос сертификата Let's Encrypt для $DOMAIN (HTTP-01, webroot)..."
+        echo "Запрос сертификата Let's Encrypt: $DOMAIN${EXTRA_DOMAINS:+ + $EXTRA_DOMAINS} (HTTP-01, webroot)..."
         # || остаёмся на самоподписанном: контейнер работает в любом случае.
+        # --expand: имя могли добавить к уже существующему сертификату.
+        # --cert-name: путь live/ не должен зависеть от того, сколько
+        #   имён в сертификате, иначе он уезжал бы при каждом соседе.
         if certbot certonly --webroot -w "$WEBROOT" \
             --non-interactive --agree-tos $EMAIL_ARG \
-            -d "$DOMAIN" \
-            --keep-until-expiring; then
+            $DOMAIN_ARGS \
+            --cert-name "$DOMAIN" \
+            --expand --keep-until-expiring; then
 
             ln -sf "$LE_LIVE/fullchain.pem" "$LIVE/fullchain.pem"
             ln -sf "$LE_LIVE/privkey.pem"   "$LIVE/privkey.pem"
@@ -49,9 +79,4 @@ if [ ! -d "$LE_LIVE" ]; then
             echo "Не удалось получить LE-сертификат — остаёмся на самоподписанном."
         fi
     ) &
-else
-    # Сертификат уже есть (прошлый запуск) — убеждаемся, что live/ на него смотрит.
-    ln -sf "$LE_LIVE/fullchain.pem" "$LIVE/fullchain.pem"
-    ln -sf "$LE_LIVE/privkey.pem"   "$LIVE/privkey.pem"
-    echo "Сертификат Let's Encrypt для $DOMAIN уже есть — live/ на него."
 fi

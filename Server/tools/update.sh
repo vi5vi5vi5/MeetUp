@@ -7,6 +7,10 @@
 #  Выбор режима TLS:
 #    ./update.sh                              самоподписанный сертификат (по умолчанию)
 #    ./update.sh --domain meetup.linkpc.net --email you@mail.com   Let's Encrypt
+#
+#  Соседний сервис на этом же сервере (например Ferry) — добавить его имя
+#  в тот же сертификат; его server-блок кладётся в proxy/extra/:
+#    ./update.sh --force --extra-domain fferry.ru
 #  Переопределить порты хоста (с доменом HTTP_PORT переопределять нельзя):
 #    ./update.sh --https-port 8443 --http-port 8081
 #  Переменные окружения HTTPS_PORT/HTTP_PORT/DOMAIN/LETSENCRYPT_EMAIL тоже работают.
@@ -30,11 +34,20 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --force|-f)          FORCE=1; shift ;;
         --domain)            export DOMAIN="$2"; shift 2 ;;
+        --extra-domain)
+            # Флаг можно повторять: имена копятся через запятую.
+            if [[ -n "${EXTRA_DOMAINS:-}" ]]; then
+                export EXTRA_DOMAINS="${EXTRA_DOMAINS},$2"
+            else
+                export EXTRA_DOMAINS="$2"
+            fi
+            shift 2 ;;
+        --no-extra-domains)  export EXTRA_DOMAINS=""; shift ;;
         --email)             export LETSENCRYPT_EMAIL="$2"; shift 2 ;;
         --http-port)         export HTTP_PORT="$2"; shift 2 ;;
         --https-port)        export HTTPS_PORT="$2"; shift 2 ;;
         -h|--help)
-            sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^#//'
+            sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^#//'
             exit 0 ;;
         *)
             echo "Неизвестный аргумент: $1" >&2
@@ -67,7 +80,7 @@ env_file_set() {
 }
 
 # Флаг этого запуска — запоминаем. Флага нет — поднимаем запомненное.
-for var in DOMAIN LETSENCRYPT_EMAIL HTTP_PORT HTTPS_PORT; do
+for var in DOMAIN LETSENCRYPT_EMAIL HTTP_PORT HTTPS_PORT EXTRA_DOMAINS; do
     if [[ -n "${!var:-}" ]]; then
         env_file_set "$var" "${!var}"
     else
@@ -80,6 +93,10 @@ done
 
 if [[ -n "${DOMAIN:-}" ]]; then
     echo "Режим TLS: Let's Encrypt для домена ${DOMAIN}"
+    if [[ -n "${EXTRA_DOMAINS:-}" ]]; then
+        echo "  В тот же сертификат: ${EXTRA_DOMAINS}"
+        echo "  (их server-блоки ожидаются в proxy/extra/*.conf)"
+    fi
     if [[ -z "${LETSENCRYPT_EMAIL:-}" ]]; then
         echo "  (email не задан — сертификат выпустится, но без уведомлений об истечении;"
         echo "   рекомендуется --email you@mail.com)"
@@ -87,6 +104,11 @@ if [[ -n "${DOMAIN:-}" ]]; then
 else
     echo "Режим TLS: самоподписанный сертификат (домен не задан)."
 fi
+
+# Каталог для server-блоков соседей. Создаём заранее: иначе его заведёт
+# docker при монтировании, причём от root, и положить туда файл без sudo
+# уже не выйдет.
+mkdir -p "$REPO_ROOT/proxy/extra"
 
 echo
 echo "=== 1/3 Получение новой версии из GitHub ==="
