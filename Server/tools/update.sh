@@ -30,6 +30,7 @@ cd "$REPO_ROOT"
 # окружение процесса, поэтому экспортируем DOMAIN/EMAIL/порты — так --domain
 # включает режим Let's Encrypt (см. docker-compose.yml).
 FORCE=0
+EXTRA_RESET=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --force|-f)          FORCE=1; shift ;;
@@ -42,7 +43,7 @@ while [[ $# -gt 0 ]]; do
                 export EXTRA_DOMAINS="$2"
             fi
             shift 2 ;;
-        --no-extra-domains)  export EXTRA_DOMAINS=""; shift ;;
+        --no-extra-domains)  EXTRA_RESET=1; export EXTRA_DOMAINS=""; shift ;;
         --email)             export LETSENCRYPT_EMAIL="$2"; shift 2 ;;
         --http-port)         export HTTP_PORT="$2"; shift 2 ;;
         --https-port)        export HTTPS_PORT="$2"; shift 2 ;;
@@ -78,6 +79,29 @@ env_file_set() {
     printf '%s=%s\n' "$key" "$value" >> "$tmp"
     mv "$tmp" "$ENV_FILE"
 }
+
+env_file_unset() {
+    [[ -f "$ENV_FILE" ]] || return 0
+    local tmp="${ENV_FILE}.tmp"
+    grep -v "^$1=" "$ENV_FILE" > "$tmp" || true
+    mv "$tmp" "$ENV_FILE"
+}
+
+# --no-extra-domains разбирается ДО цикла ниже, и это не перестраховка.
+# Флаг даёт пустое значение, а цикл пустые значения не записывает — он
+# считает их «флага не было» и тут же поднимает запомненное из .env. Так
+# --no-extra-domains с самого появления молча не делал ничего: соседний домен
+# оставался в сертификате, и после переезда соседа на другой сервер
+# продление падало на нём каждые 12 часов, пока сертификат MeetUp не
+# истекал целиком.
+#
+# Если вместе с ним передан --extra-domain, побеждает новый список — он
+# непустой и запишется в цикле как обычно.
+if [[ "$EXTRA_RESET" == "1" && -z "${EXTRA_DOMAINS:-}" ]]; then
+    env_file_unset EXTRA_DOMAINS
+    unset EXTRA_DOMAINS
+    echo "Дополнительные домены убраны: сертификат будет перевыпущен только на основной."
+fi
 
 # Флаг этого запуска — запоминаем. Флага нет — поднимаем запомненное.
 for var in DOMAIN LETSENCRYPT_EMAIL HTTP_PORT HTTPS_PORT EXTRA_DOMAINS; do
