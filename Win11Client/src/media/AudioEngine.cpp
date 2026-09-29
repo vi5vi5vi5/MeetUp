@@ -86,7 +86,6 @@ AudioEngine::AudioEngine(SignalingClient* conf, MediaSettings* settings,
         });
     connect(settings, &MediaSettings::volumeChanged, this, &AudioEngine::pushGains);
     connect(settings, &MediaSettings::sensitivityChanged, this, &AudioEngine::pushGains);
-    connect(settings, &MediaSettings::screenVolumeChanged, this, &AudioEngine::pushGains);
     connect(settings, &MediaSettings::noiseSuppressionChanged, this, &AudioEngine::pushDenoise);
     connect(settings, &MediaSettings::autoGainChanged, this, &AudioEngine::pushAutoGain);
     connect(settings, &MediaSettings::echoCancelChanged, this, &AudioEngine::pushEchoCancel);
@@ -240,9 +239,8 @@ void AudioEngine::pushDevices() {
 void AudioEngine::pushGains() {
     const qreal vol = m_settings->volumeGain();
     const qreal sens = m_settings->sensitivityGain();
-    const qreal scr = m_settings->screenVolumeGain();
-    QMetaObject::invokeMethod(m_worker, [this, vol, sens, scr] {
-        m_worker->setGains(vol, sens, scr);
+    QMetaObject::invokeMethod(m_worker, [this, vol, sens] {
+        m_worker->setGains(vol, sens);
         }, Qt::QueuedConnection);
 }
 

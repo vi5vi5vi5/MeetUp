@@ -238,5 +238,7 @@ QByteArray HttpFileServer::mimeFor(const QString &path)
         return "image/jpeg";
     if (path.endsWith(QLatin1String(".svg")))   return "image/svg+xml";
     if (path.endsWith(QLatin1String(".ico")))   return "image/x-icon";
+    // Звуки интерфейса веб-клиента (assets/sounds).
+    if (path.endsWith(QLatin1String(".wav")))   return "audio/wav";
     return "application/octet-stream";
 }

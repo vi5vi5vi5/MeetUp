@@ -86,11 +86,6 @@ class MediaSettings : public QObject {
     // Передавать ли вместе с картинкой звук компьютера. По умолчанию выключено:
     // делиться звуком машины — осознанное решение, а не то, что включается само.
     Q_PROPERTY(bool screenAudio READ screenAudio WRITE setScreenAudio NOTIFY screenAudioChanged)
-    // Громкость ЧУЖОЙ демонстрации (проценты, 100 = как у ведущего). Ручка
-    // приёмная, а не отправляющая: громкость фонограммы у каждого своя — кто-то
-    // слушает музыку, кто-то пытается расслышать за ней разговор. Раньше это
-    // регулировал ведущий, и все слышали одно и то же, что бы им ни хотелось.
-    Q_PROPERTY(int screenVolume READ screenVolume WRITE setScreenVolume NOTIFY screenVolumeChanged)
     // Звуки интерфейса: тумблеры, входящее сообщение, приход и уход участников.
     // По умолчанию включены — это подтверждение действия, а не украшение.
     Q_PROPERTY(bool uiSounds READ uiSounds WRITE setUiSounds NOTIFY uiSoundsChanged)
@@ -164,7 +159,6 @@ public:
     int rxAutoResetMs() const { return m_rxAutoResetMs; }
     void setRxAutoResetMs(int ms);
     bool screenAudio() const { return m_screenAudio; }
-    int screenVolume() const { return m_screenVolume; }
     bool uiSounds() const { return m_uiSounds; }
     bool mirrorSelf() const { return m_mirrorSelf; }
     int perPage() const { return m_perPage; }
@@ -198,7 +192,6 @@ public:
     void setScreenBitrate(const QString& b);
     void setScreenCursor(bool on);
     void setScreenAudio(bool on);
-    void setScreenVolume(int v);
     void setUiSounds(bool on);
     void setMirrorSelf(bool on);
     void setPerPage(int n);
@@ -232,7 +225,6 @@ public:
     // Гейны как множители (0..2): проценты — интерфейсу, движкам — числа.
     qreal volumeGain() const { return m_volume / 100.0; }
     qreal sensitivityGain() const { return m_sensitivity / 100.0; }
-    qreal screenVolumeGain() const { return m_screenVolume / 100.0; }
 
     // AudioEngine сообщает RMS захвата; уведомления QML прорежены до ~10 Гц.
     void reportMicLevel(qreal level);
@@ -263,7 +255,6 @@ signals:
     void txBufferChanged();
     void rxAutoResetMsChanged();
     void screenAudioChanged();
-    void screenVolumeChanged();
     void uiSoundsChanged();
     void mirrorSelfChanged();
     void perPageChanged();
@@ -302,7 +293,6 @@ private:
     bool m_txBuffer = true;
     int m_rxAutoResetMs = 1000;
     bool m_screenAudio = false;
-    int m_screenVolume = 100;
     bool m_uiSounds = true;
     bool m_mirrorSelf = true;
     int m_perPage = 9;

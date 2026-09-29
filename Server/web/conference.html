@@ -677,6 +677,7 @@
                   noise: true, echo: true, agc: true,
                   // Интерфейс
                   mirror: true, perPage: "auto", hideNoVideo: false, showSelf: true,
+                  uiSounds: true,
                   // Режим разработчика: показывает служебное — диагностику и
                   // сброс буфера. Обычной встрече это не нужно, а глазами по
                   // нему всё равно ходят и пытаются понять, зачем он тут.
@@ -688,7 +689,7 @@
     for (const k of ["qCam", "qScreen", "qAudio"])
       if (!Q_LEVELS.includes(s[k])) s[k] = "med";
     if (!PER_PAGE.includes(String(s.perPage))) s.perPage = "auto";
-    for (const k of ["noise", "echo", "agc", "mirror", "hideNoVideo", "showSelf", "devMode"])
+    for (const k of ["noise", "echo", "agc", "mirror", "hideNoVideo", "showSelf", "uiSounds", "devMode"])
       s[k] = !!s[k];
     return s;
   }
@@ -697,6 +698,33 @@
     try { localStorage.setItem(AV_KEY, JSON.stringify({ ...loadAvSettings(), ...patch })); }
     catch (e) { /* приватный режим — настройки живут до перезагрузки */ }
   }
+
+  // Звуки интерфейса — те же десять, что у десктопа, и те же правила
+  // (Win11Client/src/media/UiSounds.cpp). notification — уведомление о чужой
+  // активности: молчит, когда снят звук конференции (человек попросил тишины).
+  // Собственные действия звучат всегда — иначе кнопка микрофона перестаёт
+  // отзываться ровно тогда, когда разговора уже не слышно. gap — наименьший
+  // промежуток между двумя одинаковыми звуками: пятеро, вошедших разом после
+  // падения сервера, дают один звук, а не пять.
+  const SFX = {
+    "toggle-on":  { notification: false, gap: 60 },
+    "toggle-off": { notification: false, gap: 60 },
+    "deafen-on":  { notification: false, gap: 60 },
+    "deafen-off": { notification: false, gap: 60 },
+    "share-on":   { notification: false, gap: 200 },
+    "share-off":  { notification: false, gap: 200 },
+    "room-join":  { notification: false, gap: 1000 },
+    "message":    { notification: true,  gap: 250 },
+    "peer-join":  { notification: true,  gap: 400 },
+    "peer-leave": { notification: true,  gap: 400 },
+  };
+  // Приходы и уходы в большой комнате идут потоком и превращаются в шум: на
+  // десятерых важно, что кто-то пришёл, а не кто именно.
+  const SFX_PEER_LIMIT = 6;
+  // Взвод после входа. join_ok приносит разом участников, чужие демонстрации
+  // и историю чата — без паузы вход встречал бы залпом, и то же повторялось
+  // бы на каждом реконнекте.
+  const SFX_ARM_MS = 1200;
 
   // Выбор устройства вывода работает через AudioContext.setSinkId —
   // есть в Chrome/Edge/Firefox, в Safari пока нет.
@@ -881,6 +909,7 @@
     const [hideNoVideo, setHideNoVideo] = useState(M.pref.hideNoVideo);
     const [showSelf, setShowSelf] = useState(M.pref.showSelf);
     const [devMode, setDevMode] = useState(M.pref.devMode);
+    const [uiSounds, setUiSounds] = useState(M.pref.uiSounds);
     // Живые показатели — тикают только пока открыт раздел «Диагностика».
     const [diag, setDiag] = useState(null);
     // Что браузер умеет декодировать — узнаём один раз, когда открыли
@@ -1043,7 +1072,13 @@
           if (!M.joinedAt) {
             M.joinedAt = Date.now();
             recordVisit(roomCode, msg.room_title);   // история комнат на главной (не реконнект)
+            // Свой вход — единственный звук, которому взвод не нужен: он и
+            // есть то самое событие. Реконнект его не повторяет.
+            sfx("room-join");
           }
+          M.sfxArmed = false;
+          clearTimeout(M.sfxArmTimer);
+          M.sfxArmTimer = setTimeout(() => { M.sfxArmed = true; }, SFX_ARM_MS);
           setMyId(msg.sender_id);
           setReconnecting(false);
           setPhase("live");
@@ -1086,6 +1121,7 @@
             userId: msg.user_id || 0, avatar: msg.avatar || 0,
           }]);
           engine.forceKeyframe();   // новичку нужен опорный кадр, не ждать 3 с
+          peerSfx("peer-join");
           break;
         case "participant_left":
           setPeers(prev => prev.filter(p => p.id !== msg.id));
@@ -1094,8 +1130,9 @@
           dropFromSet(setHasFrame, msg.id);
           dropFromSet(setLockedIds, msg.id);
           dropFromSet(setScreenFrames, msg.id);
-          setScreenId(cur => (cur === msg.id ? null : cur));
+          setScreenIds(cur => cur.filter(id => id !== msg.id));
           setPinnedId(cur => (cur === msg.id ? null : cur));
+          peerSfx("peer-leave");
           break;
         case "pong":
           setPing(Math.max(0, Date.now() - Number(msg.t)));
@@ -1143,6 +1180,11 @@
           const s = stateRef.current;
           const chatVisible = s.isMobile ? (s.panelOpen && s.tab === "chat") : s.tab === "chat";
           if (!self && !chatVisible) setUnread(u => u + 1);
+          // Чат на виду и вкладка в фокусе — сообщение уже прочитано глазами,
+          // и звук был бы дублем. В фоновой вкладке он, наоборот, единственный
+          // способ узнать о сообщении.
+          if (!self && M.sfxArmed && !(chatVisible && !s.theater && document.hasFocus()))
+            sfx("message");
           break;
         }
         case "error":
@@ -1325,6 +1367,9 @@
       // Человек тронул микрофон сам — восстанавливать за него больше нечего.
       if (byUser !== false) M.micBeforeDeafen = false;
       setMic(next);
+      // Микрофон, который дёрнул toggleSound(), молчит: у «не слышу вас» свой
+      // звук, и тумблерный поверх него звучал бы дребезгом.
+      if (byUser !== false) sfx(next ? "toggle-on" : "toggle-off");
       pushState(next, stateRef.current.cam);
     }
 
@@ -1341,6 +1386,8 @@
       const next = !deafened;
       setDeafened(next);
       engine.setDeafened(next);
+      M.deafened = next;
+      sfx(next ? "deafen-on" : "deafen-off");
       if (next) {
         const had = stateRef.current.mic;
         if (had) toggleMic(false);
@@ -1369,6 +1416,9 @@
       }
       setCam(next);
       pushState(s.mic, next);
+      // У камеры звук тот же, что у микрофона: подтверждать нужно
+      // «включилось» и «выключилось», какую кнопку нажали — человек знает.
+      sfx(next ? "toggle-on" : "toggle-off");
     }
 
     // Демонстрация экрана идёт отдельным потоком, камеру не трогает.
@@ -1416,7 +1466,7 @@
       setSharing(false);
       setShareAudio(false);
       // Локально гасим сцену сразу; остальным сервер разошлёт "screen off".
-      setScreenId(cur => (cur === M.myId ? null : cur));
+      setScreenIds(cur => cur.filter(id => id !== M.myId));
       if (notifyServer && M.ws && M.ws.readyState === 1)
         M.ws.send(JSON.stringify({ type: "screen", on: false }));
     }
@@ -1524,6 +1574,24 @@
       } catch (e) {
         // Не дал сменить на лету — применится при следующем захвате.
       }
+    }
+
+    // ================= Звуки интерфейса =================
+
+    function sfx(name) {
+      const spec = SFX[name];
+      if (!spec || !M.pref.uiSounds) return;
+      if (spec.notification && M.deafened) return;
+      const now = Date.now();
+      const last = (M.sfxLast || (M.sfxLast = {}))[name] || 0;
+      if (now - last < spec.gap) return;
+      M.sfxLast[name] = now;
+      engine.playUiSound(name);
+    }
+
+    function peerSfx(name) {
+      if (!M.sfxArmed || (stateRef.current.peerCount || 0) > SFX_PEER_LIMIT) return;
+      sfx(name);
     }
 
     function setPref(key, value, apply) {
@@ -2132,11 +2200,22 @@
     useEffect(() => {
       stateRef.current = { phase, mic, cam, sharing, screenId, screenCount, stageIdx,
                           myId, stageMode, tab, panelOpen,
-                           isMobile, pages, settingsOpen, theater };
+                           isMobile, pages, settingsOpen, theater, peerCount: peers.length };
       // Слушатель клавиш навешан один раз и держал бы первые версии этих
       // функций со старым состоянием — берём их через ref.
       M.keys = { toggleMic, toggleCamera, toggleSound, toggleTheater };
     });
+
+    // Демонстрация — самое крупное изменение сцены, и слышать его стоит
+    // независимо от того, своя она или чужая. Судим по числу показов, а не по
+    // сообщениям сервера: свою остановку страница гасит сама, не дожидаясь его
+    // эха, и звук иначе либо запаздывал бы, либо звучал дважды.
+    useEffect(() => {
+      const prev = M.sfxScreens;
+      M.sfxScreens = screenCount;
+      if (prev != null && screenCount !== prev && M.sfxArmed)
+        sfx(screenCount > prev ? "share-on" : "share-off");
+    }, [screenCount]);
 
     // Демонстрация кончилась (или ведущий сменился на нас) — полноэкранный
     // показ терять смысл: показывать нечего.
@@ -2516,6 +2595,12 @@
               <option value={outId}>Системные по умолчанию</option>}
             {devices.outs.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
           </select>
+          {/* Проверка — тот же звук входа, что и в десктопе: самый внятный из
+              набора и не уведомление, с «кто-то пришёл» его не спутать. Правила
+              sfx() тут не действуют: явную просьбу не отменяют ни выключенные
+              звуки интерфейса, ни снятый звук конференции. */}
+          <Button variant="secondary" size="sm" icon="volume" style={{ marginTop: 8 }}
+                  onClick={() => engine.playUiSound("room-join")}>Проверить динамики</Button>
         </Field>
 
         <Field label={"Громкость воспроизведения · " + volume + "%"} htmlFor="set-volume">
@@ -2724,6 +2809,12 @@
           Закреплённого и того, кто ведёт демонстрацию, эти настройки не
           прячут никогда — иначе сцена осталась бы без хозяина.
         </p>
+
+        <Field label="Звуки">
+          <Toggle on={uiSounds} label="Звуки интерфейса"
+                  sub="Микрофон и камера, сообщение в чате, вход и выход участников. Звучат в те же динамики, что и разговор."
+                  onToggle={() => { const v = !uiSounds; setUiSounds(v); setPref("uiSounds", v); }} />
+        </Field>
       </>;
 
       case "diag": {

@@ -234,10 +234,9 @@ void AudioWorker::setEchoCancel(bool on) {
     }
 }
 
-void AudioWorker::setGains(qreal volume, qreal sensitivity, qreal screenVolume) {
+void AudioWorker::setGains(qreal volume, qreal sensitivity) {
     m_volGain = volume;
     m_sensGain = sensitivity;
-    m_scrVolGain = screenVolume;
 }
 
 void AudioWorker::setOutputMuted(bool muted) { m_outputMuted = muted; }
@@ -732,9 +731,9 @@ QByteArray AudioWorker::mixOneFrame() {
     // второй полосы свои декодеры, свои буферы и своя громкость: фонограмма
     // может заглушать разговор, и убавляет её тот, кому мешает, а не ведущий.
     mixInto(acc, m_peers, 1.0, now, true);
-    // Полоса экрана: общая ручка остаётся множителем всей полосы, а
-    // личная громкость ведущего накладывается поверх — как у голосов.
-    mixInto(acc, m_scrPeers, m_scrVolGain, now, true, true);
+    // Полоса экрана: громкость у каждого ведущего своя (ручка на его сцене),
+    // общего множителя полосы нет.
+    mixInto(acc, m_scrPeers, 1.0, now, true, true);
 
     // Громкость воспроизведения из настроек (0..2) — на итоговый микс.
     // «Общий звук» выключен — выход в ноль, но очереди выше мы уже вычерпали:

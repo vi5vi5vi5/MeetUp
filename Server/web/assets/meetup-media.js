@@ -357,6 +357,10 @@
       deafened: false,
       peerVolume: new Map(),      // id -> множитель громкости участника
       screenPeerVolume: new Map(),// id -> множитель громкости ЕГО демонстрации
+      // Звуки интерфейса: имя -> декодированный AudioBuffer. Просьба сыграть
+      // звук, файл которого ещё грузится, запоминается (имя -> когда
+      // просили) и исполняется по готовности — как у QSoundEffect в десктопе.
+      uiBuffers: null, uiPending: new Map(),
       cipher: null,
       // отправка
       videoChoice: undefined,     // undefined = детект идёт, null = только legacy
@@ -506,6 +510,7 @@
         };
         document.addEventListener("pointerdown", resume);
       }
+      loadUiSounds();
       st.workletsReady = (async () => {
         if (!st.ctx.audioWorklet) return null;
         const mod = new Blob([CAPTURE_WORKLET + "\n" + PLAYER_WORKLET], { type: "application/javascript" });
@@ -514,6 +519,57 @@
         return true;
       })();
       return st.workletsReady;
+    }
+
+    // ---------- Звуки интерфейса ----------
+    //
+    // Файлы те же, что у десктопа (Win11Client/resources/sounds, там же
+    // README о том, как они сделаны). Играют через НАШ AudioContext, поэтому
+    // уходят в выбранные в настройках динамики — туда же, куда и разговор.
+    // Подключены мимо общего узла громкости: уровни сведены в самих файлах, а
+    // «не слышу вас» глушит собеседников, не отклик собственных кнопок (какие
+    // звуки молчат при снятом звуке, решает страница).
+    //
+    // ?v — версия набора. Service worker хранит /assets/ вечно, а сборщик
+    // хэширует только ссылки из разметки; адреса здесь собраны в коде, так
+    // что при замене файлов версию поднимать руками.
+    const UI_SOUNDS = ["toggle-on", "toggle-off", "deafen-on", "deafen-off", "share-on",
+                       "share-off", "room-join", "message", "peer-join", "peer-leave"];
+    const UI_SOUNDS_VER = "1";
+
+    function loadUiSounds() {
+      if (st.uiBuffers || !st.ctx) return;
+      st.uiBuffers = new Map();
+      const ctx = st.ctx;
+      for (const name of UI_SOUNDS) {
+        fetch("assets/sounds/" + name + ".wav?v=" + UI_SOUNDS_VER)
+          .then((r) => { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); })
+          .then((b) => ctx.decodeAudioData(b))
+          .then((buf) => {
+            if (st.ctx !== ctx) return;
+            st.uiBuffers.set(name, buf);
+            const askedAt = st.uiPending.get(name);
+            st.uiPending.delete(name);
+            // Опоздавший больше чем на полторы секунды звук уже ни к чему не
+            // относится — лучше промолчать, чем звякнуть невпопад.
+            if (askedAt != null && Date.now() - askedAt < 1500) playBuffer(buf);
+          })
+          .catch((e) => console.warn("[media] звук интерфейса не загрузился:", name, e));
+      }
+    }
+
+    function playBuffer(buf) {
+      if (!st.ctx || st.ctx.state === "closed") return;
+      const src = st.ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(st.ctx.destination);
+      src.start();
+    }
+
+    function playUiSound(name) {
+      const buf = st.uiBuffers && st.uiBuffers.get(name);
+      if (buf) playBuffer(buf);
+      else st.uiPending.set(name, Date.now());
     }
 
     // ---------- Отправка: микрофон ----------
@@ -1439,7 +1495,7 @@
     }
 
     return {
-      ensureAudio, startMic, stop,
+      ensureAudio, startMic, stop, playUiSound,
       startVideo: (stream) => camSender.start(stream),
       stopVideo: () => camSender.stop(),
       startScreen: (stream) => screenSender.start(stream),

@@ -77,7 +77,11 @@ MediaSettings::MediaSettings(QObject* parent) : QObject(parent) {
     // «выкл» означало бы теперь совсем другое поведение.
     m_rxAutoResetMs = clampAutoReset(s.value("rxAutoResetMs", 1000).toInt());
     m_screenAudio = s.value("screenAudio", false).toBool();
-    m_screenVolume = qBound(0, s.value("screenVolume", 100).toInt(), 200);
+    // Общей громкости демонстрации больше нет: ручку на сцене переделали на
+    // личную громкость ведущего, а старое значение осталось множителем без
+    // единого места в интерфейсе. Кто однажды нажал «выкл» на старой сцене,
+    // слышал тишину навсегда. Подчищаем ключ, чтобы не всплыл снова.
+    s.remove("screenVolume");
     m_uiSounds = s.value("uiSounds", true).toBool();
     m_mirrorSelf = s.value("mirrorSelf", true).toBool();
     m_perPage = s.value("perPage", 9).toInt();
@@ -289,13 +293,6 @@ void MediaSettings::setScreenAudio(bool on) {
     emit screenAudioChanged();
 }
 
-void MediaSettings::setScreenVolume(int v) {
-    v = qBound(0, v, 200);
-    if (m_screenVolume == v) return;
-    m_screenVolume = v;
-    save("screenVolume", v);
-    emit screenVolumeChanged();
-}
 void MediaSettings::setMirrorSelf(bool on) {
     if (m_mirrorSelf == on) return;
     m_mirrorSelf = on;

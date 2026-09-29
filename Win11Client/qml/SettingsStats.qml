@@ -519,8 +519,7 @@ Column {
                    + "/" + AV.screenFps + "к/с"
                    + "/" + (AV.screenBitrate === "auto" ? "битрейт авто"
                                                         : (AV.screenBitrate / 1000) + " Мбит/с")
-                   + ", звук демонстрации " + (AV.screenAudio ? "вкл" : "выкл")
-                   + ", громкость демонстрации " + AV.screenVolume + "%")
+                   + ", звук демонстрации " + (AV.screenAudio ? "вкл" : "выкл"))
         return lines.join("\n")
     }
 }

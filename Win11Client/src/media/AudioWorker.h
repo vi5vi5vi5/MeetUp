@@ -78,7 +78,7 @@ public slots:
     // Эхоподавление: вычитать из микрофона то, что сами сыграли в динамики
     // (см. EchoCanceller.h). Живёт с захватом, переключается на лету.
     void setEchoCancel(bool on);
-    void setGains(qreal volume, qreal sensitivity, qreal screenVolume);
+    void setGains(qreal volume, qreal sensitivity);
     void setOutputMuted(bool muted);
     // Личная громкость участника (множитель 0..2). Только голос: у звука
     // демонстрации своя ручка на сцене, и она про фонограмму, а не про человека.
@@ -172,7 +172,7 @@ private:
     bool m_wantAec = true;              // …и для эхоподавления
     bool m_outputMuted = false;
     int  m_bitrate = 32000;
-    qreal m_volGain = 1.0, m_sensGain = 1.0, m_scrVolGain = 1.0;
+    qreal m_volGain = 1.0, m_sensGain = 1.0;
 
     QAudioSource* m_source = nullptr;   // захват (жив только пока говорим)
     QIODevice* m_mic = nullptr;         // поток сэмплов (принадлежит m_source)
