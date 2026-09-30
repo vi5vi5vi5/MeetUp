@@ -20,6 +20,8 @@
 <meta name="twitter:card" content="summary_large_image">
 <link rel="stylesheet" href="assets/fonts.css">
 <link rel="stylesheet" href="assets/theme.css">
+<!-- В <head>, а не в конце: ставит сохранённую тему до первой отрисовки. -->
+<script src="assets/meetup-common.js?v=4"></script>
 <style>
   html, body { height: 100%; margin: 0; }
   *, *::before, *::after { box-sizing: border-box; }
@@ -137,6 +139,18 @@
     padding: 10px 18px; font-size: var(--text-sm); font-weight: var(--weight-semibold);
     box-shadow: var(--shadow-pop); white-space: nowrap; max-width: calc(100% - 32px);
     overflow: hidden; text-overflow: ellipsis;
+  }
+
+  /* Браузер не дал звуку стартовать без жеста (autoplay-policy) — например,
+     в комнату пришли прямо с главной. Говорим об этом прямо: иначе человек
+     сидит в эфире и никого не слышит, не понимая почему. */
+  .audio-gate {
+    position: absolute; left: 50%; top: 4px; transform: translateX(-50%); z-index: 35;
+    display: inline-flex; align-items: center; gap: 8px; padding: 9px 16px;
+    max-width: calc(100% - 32px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    border: 1px solid transparent; border-radius: var(--radius-pill);
+    background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow-pop);
+    font-family: var(--font-ui); font-weight: 700; font-size: var(--text-sm); cursor: pointer;
   }
 
   /* картинки в чате */
@@ -369,11 +383,18 @@
   /* Предпросмотр камеры. Ширина ограничена: 16:9 во всю колонку съедало бы
      треть раздела и отталкивало вниз всё остальное. */
   .cam-preview {
+    position: relative;
     max-width: 360px; aspect-ratio: 16 / 9; overflow: hidden;
     border-radius: var(--radius-md); border: 1px solid var(--border);
     background: linear-gradient(160deg, var(--tile-from), var(--tile-to));
   }
   .cam-preview video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  /* Камеру не дали — объясняем прямо на чёрном прямоугольнике. */
+  .cam-preview .cam-err {
+    position: absolute; inset: 0; display: grid; place-items: center;
+    padding: 12px 18px; text-align: center;
+    font-size: var(--text-xs); color: var(--text-muted);
+  }
 
   /* Диагностика: плитки с крупным числом — как в десктопном клиенте.
      Показатель, который сейчас ни о чём (камера выключена, никто не вещает),
@@ -587,6 +608,9 @@
     .dock { bottom: calc(20px + var(--safe-b)); }
     .stage-tools { right: calc(10px + var(--safe-r)); bottom: calc(10px + var(--safe-b)); }
     .pager-dots { bottom: 102px; }
+    /* Уведомление на телефоне переносится, а не режется многоточием: иначе
+       подсказка «разрешите доступ к камере» обрывалась бы на полуслове. */
+    .notice { white-space: normal; text-align: center; width: max-content; border-radius: var(--radius-md); }
     .share-pop { right: 16px; top: 64px; }
     .side {
       position: fixed; inset: 0; z-index: 60; border-left: none;
@@ -623,7 +647,6 @@
 <script src="assets/react-dom.js"></script>
 <script src="assets/babel.js"></script>
 <script src="assets/meetup-ds.js?v=4"></script>
-<script src="assets/meetup-common.js?v=4"></script>
 <script src="assets/meetup-media.js?v=4"></script>
 <script type="text/babel">
   const { useState, useRef, useEffect } = React;
@@ -730,10 +753,14 @@
   // есть в Chrome/Edge/Firefox, в Safari пока нет.
   const sinkSupported = !!(window.AudioContext && "setSinkId" in AudioContext.prototype);
 
-  // Демонстрация экрана: на телефонах getDisplayMedia не реализован ни в
-  // одном браузере — кнопку там не показываем вовсе, а не показываем
-  // неработающей.
-  const shareSupported = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+  // Демонстрация экрана: на телефонах и планшетах getDisplayMedia не
+  // работает ни в одном браузере — кнопку там не показываем вовсе, а не
+  // показываем неработающей. Решаем по возможностям устройства, а НЕ по
+  // ширине окна: раньше демонстрация пропадала у компьютера, чьё окно просто
+  // сузили меньше 820 px. «Только касание» — нет ни мыши, ни тачпада.
+  const touchOnly = !!(window.matchMedia && matchMedia("(hover: none) and (pointer: coarse)").matches);
+  const shareSupported = !touchOnly
+    && !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
 
   // Разделы настроек. Порядок и названия — как в десктопном клиенте:
   // человек, знакомый с одним, находит нужное во втором не глядя.
@@ -779,11 +806,110 @@
     catch (e) { /* приватный режим */ }
   }
 
+  // Соединение считаем мёртвым, если от сервера за это время не пришло
+  // НИЧЕГО — ни pong (пинг уходит раз в 4 с), ни медиа, ни сообщений. После
+  // смены Wi-Fi или сна ноутбука сокет может минутами висеть «открытым», хотя
+  // по нему уже ничего не ходит; браузер сам этого не заметит.
+  const PONG_TIMEOUT_MS = 15000;
+
+  // Почему не удалось взять микрофон или камеру — человеческими словами.
+  // Раньше отказ был молчаливым: нажал кнопку, и ничего не произошло.
+  function mediaErrorText(err, kind) {
+    const mic = kind === "mic";
+    const name = err && err.name;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia)
+      return "Камера и микрофон доступны только по защищённому соединению (https).";
+    if (name === "NotAllowedError" || name === "SecurityError")
+      return (mic ? "Доступ к микрофону запрещён." : "Доступ к камере запрещён.")
+        + " Разрешите его в настройках сайта — значок слева от адреса.";
+    if (name === "NotFoundError" || name === "OverconstrainedError")
+      return mic ? "Микрофон не найден — проверьте, что он подключён."
+                 : "Камера не найдена — проверьте, что она подключена.";
+    if (name === "NotReadableError" || name === "AbortError")
+      return mic ? "Микрофон занят другой программой или недоступен системе."
+                 : "Камера занята другой программой — закройте её и попробуйте снова.";
+    return mic ? "Не удалось включить микрофон." : "Не удалось включить камеру.";
+  }
+
+  function fmtElapsed(ms) {
+    const total = Math.max(0, Math.floor(ms / 1000));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const pad = (x) => String(x).padStart(2, "0");
+    return (h > 0 ? h + ":" + pad(m) : pad(m)) + ":" + pad(total % 60);
+  }
+
+  // ---- Мелкие компоненты ----
+  // Живут ЗДЕСЬ, на уровне модуля, а не внутри ConferenceScreen. Компонент,
+  // объявленный внутри другого, на каждой его перерисовке — новая функция, и
+  // React монтирует его заново: выбрасывает старую кнопку и вставляет новую.
+  // Щелчок засчитывается, только если кнопка дожила от нажатия до
+  // отпускания, — а при включённом микрофоне конференция перерисовывалась
+  // десять раз в секунду, и тумблеры в настройках переставали нажиматься.
+
+  // Тумблер: подпись, пояснение и переключатель справа.
+  function Toggle({ on, label, sub, onToggle }) {
+    return (
+      <button type="button" className={"set-toggle" + (on ? " on" : "")}
+              role="switch" aria-checked={on} onClick={onToggle}>
+        <span style={{ minWidth: 0 }}>
+          {label}
+          {sub && <span className="sub">{sub}</span>}
+        </span>
+        <span className="knob" />
+      </button>
+    );
+  }
+
+  const KV = ({ k, v }) => <div className="set-kv"><b>{k}</b><span>{v}</span></div>;
+
+  // Плитка показателя (как в десктопной «Диагностике»): подпись, крупное
+  // значение с единицей и пояснение мелким. idle — показатель не про эту
+  // минуту: гасим, но не прячем.
+  const Metric = ({ cap, val, unit, sub, idle }) => (
+    <div className={"metric" + (idle ? " idle" : "")}>
+      <div className="cap">{cap}</div>
+      <div className="val">{val}{unit ? <i>{unit}</i> : null}</div>
+      {sub ? <div className="sub" title={sub}>{sub}</div> : null}
+    </div>
+  );
+
+  // Индикатор уровня микрофона. Тикает сам и только пока виден (раздел
+  // «Звук»), и двигает полоску напрямую, без состояния React: раньше опрос
+  // жил в самой конференции и перерисовывал её целиком десять раз в секунду.
+  function MicMeter({ engine }) {
+    const fill = useRef(null);
+    useEffect(() => {
+      const t = setInterval(() => {
+        if (fill.current)
+          fill.current.style.width = Math.round(Math.min(1, engine.micLevel() * 3) * 100) + "%";
+      }, 100);
+      return () => clearInterval(t);
+    }, [engine]);
+    return (
+      <div className="mic-meter" aria-hidden="true">
+        <div className="mic-meter-fill" ref={fill} />
+      </div>
+    );
+  }
+
+  // Бейдж «в эфире · 05:32». Секундный тик — его личное дело: раньше таймер
+  // жил в конференции и раз в секунду перерисовывал её всю.
+  function OnAirClock({ since }) {
+    const [, tick] = useState(0);
+    useEffect(() => {
+      const t = setInterval(() => tick(n => n + 1), 1000);
+      return () => clearInterval(t);
+    }, []);
+    return <Badge tone="live" dot>в эфире · {fmtElapsed(since ? Date.now() - since : 0)}</Badge>;
+  }
+
   function ConferenceScreen() {
     const savedName = MeetUp.savedName();
 
     // ---- UI-состояние ----
-    const [theme, setTheme] = useState("dark");
+    // Тема общая для всех страниц и помнится (см. meetup-common.js).
+    const [theme, setTheme] = useState(MeetUp.theme);
     // Стартуем с "connecting": гейт показывается только после того, как
     // /api/me ответил, что живой сессии аккаунта нет (и имени в запасе тоже).
     const [phase, setPhase] = useState("connecting"); // gate|connecting|waiting|live|error
@@ -842,8 +968,14 @@
     const [speaking, setSpeaking] = useState(() => new Set());
     const [shareOpen, setShareOpen] = useState(false);
     const [copied, setCopied] = useState(false);
-    const [elapsed, setElapsed] = useState("00:00");
     const [reconnecting, setReconnecting] = useState(false);
+    // Браузер не дал звуку стартовать без жеста — показываем «Включить звук».
+    const [audioBlocked, setAudioBlocked] = useState(false);
+    // Поток камеры сменился (другое устройство, другое качество). Ничего,
+    // кроме перерисовки, это состояние не значит: <video> своей плитки и
+    // предпросмотра должны получить НОВЫЙ поток — старый к тому моменту уже
+    // остановлен, и без этого сигнала предпросмотр оставался чёрным.
+    const [camGen, setCamGen] = useState(0);
 
     const msgRef = useRef(null);
     const selfVideoRef = useRef(null);
@@ -895,7 +1027,8 @@
     const [outId, setOutId] = useState(M.pref.outId);
     const [volume, setVolume] = useState(M.pref.volume);
     const [sens, setSens] = useState(M.pref.sens);
-    const [micLevel, setMicLevel] = useState(0);
+    // Предпросмотр камеры не получил доступа — почему (текст поверх).
+    const [previewErr, setPreviewErr] = useState("");
     const [quality, setQuality] = useState(
       { cam: M.pref.qCam, screen: M.pref.qScreen, audio: M.pref.qAudio });
     // Обработка голоса — браузерная: она стоит ДО нашего захвата, в worklet
@@ -969,11 +1102,12 @@
             ? where + ": участник не понимает " + info.codec + " — перешли на H.264."
             : where + ": участник не может показать ваше видео (" + info.codec + ").");
         },
+        onAudioState: (state) => setAudioBlocked(state === "suspended" || state === "interrupted"),
       });
     }
     const engine = M.engine;
 
-    useEffect(() => { document.documentElement.setAttribute("data-theme", theme); }, [theme]);
+    useEffect(() => { MeetUp.setTheme(theme); }, [theme]);
     // Портрет сервера: потолок картинки в чате (см. imageLimitB64) и то, что
     // показывается в «О программе». Сюда часто заходят прямо по ссылке, минуя
     // вход и главную, — значит спросить должен и этот экран.
@@ -992,7 +1126,11 @@
       const ws = new WebSocket(MeetUp.wsUrl());
       ws.binaryType = "arraybuffer";
       M.ws = ws;
-      ws.onopen = () => ws.send(JSON.stringify(joinMsg()));
+      ws.onopen = () => {
+        M.lastRxAt = Date.now();
+        M.pingPendingAt = 0;
+        ws.send(JSON.stringify(joinMsg()));
+      };
       ws.onmessage = onWsMessage;
       ws.onclose = onWsClose;
     }
@@ -1024,18 +1162,59 @@
 
     function onWsClose() {
       if (M.manualClose || M.fatal) return;
+      setReconnecting(true);
+      // Сети нет вовсе (браузер это знает) — ждём её, а не жжём попытки:
+      // иначе через сорок секунд без Wi-Fi человек получал бы «соединение
+      // потеряно» и перезагрузку. Сеть вернётся — событие online подключит
+      // сразу (см. reconnectNow).
+      if (navigator.onLine === false) { M.waitOnline = true; return; }
       M.attempts += 1;
       if (M.attempts > 8) {
         fatal("Соединение с сервером потеряно. Проверьте сеть и попробуйте ещё раз.");
         return;
       }
-      setReconnecting(true);
-      setTimeout(() => {
+      clearTimeout(M.reconnectTimer);
+      M.reconnectTimer = setTimeout(() => {
+        M.reconnectTimer = null;
         if (!M.manualClose && !M.fatal) openSocket();
       }, Math.min(M.attempts, 4) * 1500);
     }
 
+    // Сеть вернулась: не ждём очередного витка паузы, подключаемся сейчас.
+    function reconnectNow() {
+      if (M.manualClose || M.fatal) return;
+      const ws = M.ws;
+      if (ws && (ws.readyState === 0 || ws.readyState === 1)) return;   // и так идёт/живо
+      if (!M.waitOnline && !M.reconnectTimer) return;                   // переподключаться не просили
+      M.waitOnline = false;
+      clearTimeout(M.reconnectTimer);
+      M.reconnectTimer = null;
+      openSocket();
+    }
+
+    // Сокет «открыт», но сервер молчит. Закрываем сами и идём обычным путём
+    // переподключения. Обработчики снимаем заранее: close() на мёртвом
+    // соединении ждёт ответа сервера, которого не будет, и onclose пришёл бы
+    // неизвестно когда.
+    function dropDeadSocket() {
+      const ws = M.ws;
+      if (!ws) return;
+      ws.onopen = null; ws.onmessage = null; ws.onclose = null;
+      try { ws.close(); } catch (e) {}
+      onWsClose();
+    }
+
+    // Пинг заодно служит сторожем: pingPendingAt — когда ушёл первый пинг,
+    // на который сервер ещё ничего не ответил (см. сторож в таймере пинга).
+    function sendPing() {
+      if (!M.ws || M.ws.readyState !== 1) return;
+      if (!M.pingPendingAt) M.pingPendingAt = Date.now();
+      M.ws.send(JSON.stringify({ type: "ping", t: Date.now() }));
+    }
+
     function onWsMessage(event) {
+      M.lastRxAt = Date.now();
+      M.pingPendingAt = 0;
       if (typeof event.data === "string") onJson(JSON.parse(event.data));
       else engine.onBinary(event.data);
     }
@@ -1106,8 +1285,7 @@
           engine.requestKeyframe();   // просим у вещающих опорные кадры
           pushState(stateRef.current.mic, stateRef.current.cam);
           // Первый замер пинга сразу, дальше — по таймеру раз в 4 с.
-          if (M.ws && M.ws.readyState === 1)
-            M.ws.send(JSON.stringify({ type: "ping", t: Date.now() }));
+          sendPing();
           // Реконнект посреди своей демонстрации: слот на сервере освободился
           // при обрыве — просим закрепить его за нами снова.
           if (M.displayStream && M.ws && M.ws.readyState === 1)
@@ -1291,6 +1469,9 @@
 
     async function startMedia() {
       await engine.ensureAudio();
+      // Контекст мог родиться заблокированным (в комнату пришли без единого
+      // клика). onstatechange об исходном состоянии не сообщает — спросим сами.
+      setAudioBlocked(engine.audioBlocked());
       engine.setVolume(M.pref.volume / 100);
       engine.setSensitivity(M.pref.sens / 100);
       engine.setQuality("cam", M.pref.qCam);
@@ -1324,15 +1505,34 @@
       }
     }
 
+    function stopTracks(stream) {
+      if (stream) stream.getTracks().forEach(t => t.stop());
+    }
+
+    // Поток камеры сменился — см. camGen.
+    function setCamStream(stream) {
+      M.camStream = stream;
+      setCamGen(g => g + 1);
+    }
+
+    // Пока было открыто окно доступа, конференция могла закончиться
+    // (вышли, «сессия заменена», владелец закрыл комнату). Пришедший после
+    // этого поток никому не нужен — останавливаем, иначе индикатор так и горит.
+    function conferenceOver() { return M.fatal || M.manualClose; }
+
     async function startMic() {
       if (!M.micStream) {
+        let stream;
         try {
-          M.micStream = await grabStream("audio", M.pref.micId);
+          stream = await grabStream("audio", M.pref.micId);
         } catch (e) {
           setMic(false);
           pushState(false, stateRef.current.cam);
+          showNotice(mediaErrorText(e, "mic"));
           return false;
         }
+        if (conferenceOver()) { stopTracks(stream); return false; }
+        M.micStream = stream;
       }
       await engine.startMic(M.micStream);
       return true;
@@ -1340,13 +1540,17 @@
 
     async function startCamera() {
       if (!M.camStream) {
+        let stream;
         try {
-          M.camStream = await grabStream("video", M.pref.camId);
+          stream = await grabStream("video", M.pref.camId);
         } catch (e) {
           setCam(false);
           pushState(stateRef.current.mic, false);
+          showNotice(mediaErrorText(e, "cam"));
           return false;
         }
+        if (conferenceOver()) { stopTracks(stream); return false; }
+        setCamStream(stream);
       }
       engine.startVideo(M.camStream);
       return true;
@@ -1357,10 +1561,16 @@
     // byUser=false — микрофон дёргает не человек, а toggleSound(): тогда мы
     // помним, что вернуть, и не считаем это его собственным решением.
     async function toggleMic(byUser) {
+      // Пока открыто окно доступа, повторное нажатие ничего не начинает.
+      // Раньше оно запускало второй захват, и лишний поток оставался жить:
+      // индикатор горел при «выключенном» устройстве.
+      if (M.micBusy) return;
       const next = !stateRef.current.mic;
       if (next && !M.micStream) {
         // Разрешения не было — пробуем запросить ещё раз.
-        const ok = await startMic();
+        M.micBusy = true;
+        let ok = false;
+        try { ok = await startMic(); } finally { M.micBusy = false; }
         if (!ok) return;
       }
       if (M.micStream) M.micStream.getAudioTracks().forEach(t => { t.enabled = next; });
@@ -1399,23 +1609,25 @@
     }
 
     async function toggleCamera() {
-      const s = stateRef.current;
-      const next = !s.cam;
+      if (M.camBusy) return;   // окно доступа ещё открыто — см. toggleMic
+      const next = !stateRef.current.cam;
       if (next) {
         if (!M.camStream) {
-          const ok = await startCamera();
+          M.camBusy = true;
+          let ok = false;
+          try { ok = await startCamera(); } finally { M.camBusy = false; }
           if (!ok) return;
         } else {
           engine.startVideo(M.camStream);
         }
       } else if (M.camStream) {
         // Останавливаем дорожки, а не просто глушим — гаснет индикатор камеры.
-        M.camStream.getTracks().forEach(t => t.stop());
-        M.camStream = null;
+        stopTracks(M.camStream);
+        setCamStream(null);
         engine.stopVideo();
       }
       setCam(next);
-      pushState(s.mic, next);
+      pushState(stateRef.current.mic, next);
       // У камеры звук тот же, что у микрофона: подтверждать нужно
       // «включилось» и «выключилось», какую кнопку нажали — человек знает.
       sfx(next ? "toggle-on" : "toggle-off");
@@ -1427,10 +1639,14 @@
     // (сообщение "screen" в onJson), свободных слотов нет — придёт screen_busy.
     // Проверять лимит здесь самим нельзя: он у каждого сервера свой.
     async function toggleShare() {
-      const s = stateRef.current;
-      if (s.sharing) { stopSharing(true); return; }
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) return;
+      // Экран уже захвачен — идёт показ или ждём подтверждения сервера.
+      // Второе нажатие в этот момент — «передумал», а не «ещё один экран»:
+      // раньше оно открывало второе окно выбора, и первый захват оставался
+      // жить с плашкой «вы показываете экран» от браузера.
+      if (stateRef.current.sharing || M.displayStream) { stopSharing(true); return; }
+      if (M.shareBusy || !shareSupported) return;   // окно выбора уже открыто
       let stream;
+      M.shareBusy = true;
       try {
         // audio: true — просим ещё и звук показываемого. Chrome и Edge на этом
         // рисуют в своём окне выбора галочку «Поделиться звуком»; Firefox и
@@ -1441,7 +1657,10 @@
         stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
       } catch (e) {
         return;   // пользователь отменил выбор
+      } finally {
+        M.shareBusy = false;
       }
+      if (conferenceOver()) { stopTracks(stream); return; }
       M.displayStream = stream;
       const track = stream.getVideoTracks()[0];
       if (track) track.onended = () => stopSharing(true);   // «Прекратить доступ»
@@ -1520,7 +1739,8 @@
       if (!M.micStream) return;   // микрофон не захвачен — применится при включении
       let stream;
       try { stream = await grabStream("audio", id); } catch (e) { refreshDevices(); return; }
-      M.micStream.getTracks().forEach(t => t.stop());
+      if (!M.micStream || conferenceOver()) { stopTracks(stream); return; }
+      stopTracks(M.micStream);
       M.micStream = stream;
       stream.getAudioTracks().forEach(t => { t.enabled = stateRef.current.mic; });
       await engine.startMic(stream);
@@ -1530,11 +1750,21 @@
       setCamId(id);
       M.pref.camId = id;
       saveAvSettings({ camId: id });
+      recaptureCamera();
+    }
+
+    // Перезахват камеры с текущими настройками (другое устройство, другое
+    // разрешение). Новый поток идёт через setCamStream: своя плитка и
+    // предпросмотр должны переключиться на него — старый к этому моменту
+    // остановлен, и раньше предпросмотр оставался на нём чёрным.
+    async function recaptureCamera() {
       if (!M.camStream) return;   // камера выключена — применится при включении
       let stream;
-      try { stream = await grabStream("video", id); } catch (e) { refreshDevices(); return; }
-      M.camStream.getTracks().forEach(t => t.stop());
-      M.camStream = stream;
+      try { stream = await grabStream("video", M.pref.camId); } catch (e) { refreshDevices(); return; }
+      // Пока ждали, камеру могли выключить — тогда новый поток лишний.
+      if (!M.camStream || conferenceOver()) { stopTracks(stream); return; }
+      stopTracks(M.camStream);
+      setCamStream(stream);
       if (stateRef.current.cam) engine.startVideo(stream);
     }
 
@@ -1658,18 +1888,13 @@
 
     // Качество отправки: битрейт применяет движок на лету; смена качества
     // камеры дополнительно перезахватывает её с новым разрешением.
-    async function selectQuality(kind, level) {
+    function selectQuality(kind, level) {
       setQuality(q => ({ ...q, [kind]: level }));
       const prefKey = kind === "cam" ? "qCam" : kind === "screen" ? "qScreen" : "qAudio";
       M.pref[prefKey] = level;
       saveAvSettings({ [prefKey]: level });
       engine.setQuality(kind, level);
-      if (kind !== "cam" || !M.camStream) return;
-      let stream;
-      try { stream = await grabStream("video", M.pref.camId); } catch (e) { return; }
-      M.camStream.getTracks().forEach(t => t.stop());
-      M.camStream = stream;
-      if (stateRef.current.cam) engine.startVideo(stream);
+      if (kind === "cam") recaptureCamera();
     }
 
     // ================= E2E-шифрование =================
@@ -1727,12 +1952,7 @@
     // эта часть адреса на сервер не отправляется.
     async function copyKeyInvite() {
       if (!M.e2eKey) return;
-      const url = inviteUrl + "#k=" + (await MeetUpMedia.exportKeyB64(M.e2eKey));
-      const done = () => { setCopied(true); setTimeout(() => setCopied(false), 1800); };
-      if (navigator.clipboard && window.isSecureContext)
-        navigator.clipboard.writeText(url).then(done, () => fallbackCopy(url, done));
-      else
-        fallbackCopy(url, done);
+      copyText(inviteUrl + "#k=" + (await MeetUpMedia.exportKeyB64(M.e2eKey)));
     }
 
     // ================= Чат =================
@@ -1899,34 +2119,19 @@
 
     const inviteUrl = location.origin + location.pathname + "?room=" + encodeURIComponent(roomCode);
 
-    function fallbackCopy(text, done) {
-      const ta = document.createElement("textarea");
-      ta.value = text;
-      ta.style.position = "fixed";
-      ta.style.opacity = "0";
-      document.body.appendChild(ta);
-      ta.select();
-      try { document.execCommand("copy"); done(); } catch (e) {}
-      document.body.removeChild(ta);
-    }
-
-    // Общая копия в буфер: clipboard-API в защищённом контексте, иначе
-    // старый приём через скрытое поле (http-развёртывание без TLS).
+    // Одна копия в буфер на всю страницу (ссылка, ссылка с ключом, отчёт
+    // диагностики). «Скопировано» — только когда текст правда в буфере
+    // (см. MeetUp.copyText); не вышло — говорим об этом, а не молчим.
     function copyText(text) {
-      const done = () => { setCopied(true); setTimeout(() => setCopied(false), 1800); };
-      if (navigator.clipboard && window.isSecureContext)
-        navigator.clipboard.writeText(text).then(done, () => fallbackCopy(text, done));
-      else
-        fallbackCopy(text, done);
+      MeetUp.copyText(text).then((ok) => {
+        if (!ok) { showNotice("Не получилось скопировать — выделите текст и скопируйте вручную."); return; }
+        setCopied(true);
+        clearTimeout(M.copiedTimer);
+        M.copiedTimer = setTimeout(() => setCopied(false), 1800);
+      });
     }
 
-    function copyInvite() {
-      const done = () => { setCopied(true); setTimeout(() => setCopied(false), 1800); };
-      if (navigator.clipboard && window.isSecureContext)
-        navigator.clipboard.writeText(inviteUrl).then(done, () => fallbackCopy(inviteUrl, done));
-      else
-        fallbackCopy(inviteUrl, done);
-    }
+    function copyInvite() { copyText(inviteUrl); }
 
     function openShare() {
       setShareOpen(true);
@@ -2005,21 +2210,27 @@
       }, 250);
 
       // Замер пинга: метка времени туда — эхо обратно (см. case "pong").
+      // Он же сторож: первый неотвеченный пинг ушёл давно, а от сервера с тех
+      // пор не пришло ничего — ни pong, ни медиа, — значит сокет мёртв, хоть и
+      // числится открытым. Отсчёт именно от ПИНГА, а не от последнего ответа:
+      // в фоновой вкладке браузер будит таймеры раз в минуту, и «минута без
+      // ответа» там значит лишь, что мы минуту ничего не спрашивали.
       const pingTimer = setInterval(() => {
-        if (M.ws && M.ws.readyState === 1)
-          M.ws.send(JSON.stringify({ type: "ping", t: Date.now() }));
+        const ws = M.ws;
+        if (!ws || ws.readyState !== 1) return;
+        const now = Date.now();
+        if (stateRef.current.phase === "live" && M.pingPendingAt
+            && now - M.pingPendingAt > PONG_TIMEOUT_MS
+            && now - (M.lastRxAt || 0) > PONG_TIMEOUT_MS) {
+          dropDeadSocket();
+          return;
+        }
+        sendPing();
       }, 4000);
 
-      // Таймер «в эфире».
-      const elapsedTimer = setInterval(() => {
-        if (!M.joinedAt) return;
-        const total = Math.floor((Date.now() - M.joinedAt) / 1000);
-        const h = Math.floor(total / 3600);
-        const m = Math.floor((total % 3600) / 60);
-        const sec = total % 60;
-        const pad = (x) => String(x).padStart(2, "0");
-        setElapsed(h > 0 ? h + ":" + pad(m) + ":" + pad(sec) : pad(m) + ":" + pad(sec));
-      }, 1000);
+      // Сеть вернулась — переподключаемся сразу, не дожидаясь паузы.
+      const onOnline = () => reconnectNow();
+      window.addEventListener("online", onOnline);
 
       // Esc закрывает поповеры; стрелки листают страницы плиток
       // (кроме случаев, когда фокус в поле ввода или открыты настройки).
@@ -2034,14 +2245,18 @@
         }
         const tag = (e.target && e.target.tagName) || "";
         if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-        if (stateRef.current.settingsOpen) return;
+        const s = stateRef.current;
+        if (s.settingsOpen) return;
+        // Клавиши — только в самом эфире и без открытых окон поверх. Раньше M
+        // на гейте «Представьтесь» спрашивал доступ к микрофону ещё до входа
+        // в комнату, а под окном громкости участника листали страницы за ним.
+        if (s.phase !== "live" || s.overlay) return;
         // Ctrl/Alt/Cmd — сочетания браузера, не наши: перехватывать их значило
         // бы ломать людям привычные Ctrl+D и Ctrl+F.
         if (e.ctrlKey || e.altKey || e.metaKey) return;
 
         // Смотрим на ФИЗИЧЕСКУЮ клавишу (e.code), а не на введённый символ:
         // иначе в русской раскладке «ь» вместо «m» ничего бы не работало.
-        const s = stateRef.current;
         if (e.code === "KeyM") { e.preventDefault(); M.keys.toggleMic(true); return; }
         if (e.code === "KeyV") { e.preventDefault(); M.keys.toggleCamera(); return; }
         if (e.code === "KeyD") { e.preventDefault(); M.keys.toggleSound(); return; }
@@ -2052,15 +2267,18 @@
           return;
         }
         // В режиме сцены стрелки листают демонстрации, а не страницы плиток.
+        // Листаем от ПОКАЗАННОЙ страницы, а не от сохранённой: после ухода
+        // участников сохранённая бывает за краем, и первое нажатие «назад»
+        // раньше ничего не меняло на экране.
         if (s.stageMode) {
           if (s.screenCount > 1) {
-            if (e.key === "ArrowLeft") setStagePage(p => Math.max(0, p - 1));
-            if (e.key === "ArrowRight") setStagePage(p => Math.min(s.screenCount - 1, p + 1));
+            if (e.key === "ArrowLeft") setStagePage(Math.max(0, s.stageIdx - 1));
+            if (e.key === "ArrowRight") setStagePage(Math.min(s.screenCount - 1, s.stageIdx + 1));
           }
           return;
         }
-        if (e.key === "ArrowLeft") setPage(p => Math.max(0, p - 1));
-        if (e.key === "ArrowRight") setPage(p => Math.min(stateRef.current.pages - 1, p + 1));
+        if (e.key === "ArrowLeft") setPage(Math.max(0, s.curPage - 1));
+        if (e.key === "ArrowRight") setPage(Math.min(s.pages - 1, s.curPage + 1));
       };
       window.addEventListener("keydown", onKey);
 
@@ -2074,8 +2292,9 @@
         clearInterval(staleTimer);
         clearInterval(speakTimer);
         clearInterval(pingTimer);
-        clearInterval(elapsedTimer);
         clearTimeout(M.noticeTimer);
+        clearTimeout(M.reconnectTimer);
+        window.removeEventListener("online", onOnline);
         window.removeEventListener("keydown", onKey);
         if (navigator.mediaDevices && navigator.mediaDevices.removeEventListener)
           navigator.mediaDevices.removeEventListener("devicechange", onDevChange);
@@ -2174,6 +2393,10 @@
     }
     function holdStart(t) {
       holdCancel();
+      // Новое касание — новая история. Android после долгого нажатия не
+      // присылает click вовсе, и флаг прошлого жеста раньше доживал до
+      // следующего тапа и проглатывал его: плитка не закреплялась.
+      M.holdFired = false;
       holdRef.current = setTimeout(() => {
         holdRef.current = null;
         M.holdFired = true;   // чтобы отпускание пальца не закрепило плитку
@@ -2200,7 +2423,9 @@
     useEffect(() => {
       stateRef.current = { phase, mic, cam, sharing, screenId, screenCount, stageIdx,
                           myId, stageMode, tab, panelOpen,
-                           isMobile, pages, settingsOpen, theater, peerCount: peers.length };
+                           isMobile, pages, curPage, settingsOpen, theater, peerCount: peers.length,
+                           // Открыто окно поверх конференции — клавишам там делать нечего.
+                           overlay: !!peerVol || shareOpen || !!lightbox };
       // Слушатель клавиш навешан один раз и держал бы первые версии этих
       // функций со старым состоянием — берём их через ref.
       M.keys = { toggleMic, toggleCamera, toggleSound, toggleTheater };
@@ -2294,13 +2519,18 @@
 
       let alive = true;
       let temp = null;
+      setPreviewErr("");
       (async () => {
         let stream = M.camStream;
         if (!stream) {
           try { stream = temp = await grabStream("video", M.pref.camId); }
-          catch (e) { return; }               // не дали доступ — просто нет картинки
+          catch (e) {
+            // Не дали доступ — картинки нет, но и молча чернеть нельзя.
+            if (alive) setPreviewErr(mediaErrorText(e, "cam"));
+            return;
+          }
         }
-        if (!alive) { if (temp) temp.getTracks().forEach(t => t.stop()); return; }
+        if (!alive) { stopTracks(temp); return; }
         el.srcObject = stream;
         const pr = el.play();
         if (pr && pr.catch) pr.catch(() => {});
@@ -2310,9 +2540,11 @@
         alive = false;
         if (el) el.srcObject = null;
         // Гасим только свой временный поток: общий принадлежит конференции.
-        if (temp) temp.getTracks().forEach(t => t.stop());
+        stopTracks(temp);
       };
-    }, [settingsOpen, section, devMode, camId, quality.cam]);
+      // camGen: поток камеры сменился (другое устройство или качество) —
+      // предпросмотр должен переехать на новый, старый уже остановлен.
+    }, [settingsOpen, section, devMode, camId, quality.cam, camGen]);
 
     // Отклик сервера — при каждом заходе в «О программе»: он меняется, и
     // число из прошлого захода рассказывало бы про прошлый раз.
@@ -2330,13 +2562,6 @@
       engine.decodeOk().then(list => { if (alive) setDecodeOk(list); });
       return () => { alive = false; };
     }, [settingsOpen, section, decodeOk]);
-
-    // Индикатор уровня микрофона — обновляется только при открытых настройках.
-    useEffect(() => {
-      if (!settingsOpen) return;
-      const t = setInterval(() => setMicLevel(engine.micLevel()), 100);
-      return () => clearInterval(t);
-    }, [settingsOpen]);
 
     // До трёх участников на широком экране — «дизайнерская» раскладка
     // (своя плитка крупнее); дальше — равномерная сетка страницами.
@@ -2462,8 +2687,9 @@
       const dx = e.changedTouches[0].clientX - touchX.current;
       touchX.current = null;
       if (Math.abs(dx) < 60) return;
-      if (dx < 0) setPage(p => Math.min(pages - 1, p + 1));
-      else setPage(p => Math.max(0, p - 1));
+      // От показанной страницы, а не от сохранённой (см. стрелки ниже).
+      if (dx < 0) setPage(Math.min(pages - 1, curPage + 1));
+      else setPage(Math.max(0, curPage - 1));
     }
 
     function tabStyle(k) {
@@ -2515,32 +2741,7 @@
       setOnSection(false);
     }
 
-    // Тумблер: подпись, пояснение и переключатель справа.
-    function Toggle({ on, label, sub, onToggle }) {
-      return (
-        <button type="button" className={"set-toggle" + (on ? " on" : "")}
-                role="switch" aria-checked={on} onClick={onToggle}>
-          <span style={{ minWidth: 0 }}>
-            {label}
-            {sub && <span className="sub">{sub}</span>}
-          </span>
-          <span className="knob" />
-        </button>
-      );
-    }
-
-    const KV = ({ k, v }) => <div className="set-kv"><b>{k}</b><span>{v}</span></div>;
-
-    // Плитка показателя (как в десктопной «Диагностике»): подпись, крупное
-    // значение с единицей и пояснение мелким. idle — показатель не про эту
-    // минуту: гасим, но не прячем.
-    const Metric = ({ cap, val, unit, sub, idle }) => (
-      <div className={"metric" + (idle ? " idle" : "")}>
-        <div className="cap">{cap}</div>
-        <div className="val">{val}{unit ? <i>{unit}</i> : null}</div>
-        {sub ? <div className="sub" title={sub}>{sub}</div> : null}
-      </div>
-    );
+    // Toggle, KV и Metric живут на уровне модуля — почему, см. там.
 
     // Отчёт для «скопировать»: то же, что видно в разделе, одним текстом —
     // его удобно приложить к жалобе «у меня всё тормозит».
@@ -2581,10 +2782,7 @@
               <option value={micId}>Системный по умолчанию</option>}
             {devices.mics.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
           </select>
-          <div className="mic-meter" aria-hidden="true">
-            <div className="mic-meter-fill"
-                 style={{ width: Math.round(Math.min(1, micLevel * 3) * 100) + "%" }} />
-          </div>
+          <MicMeter engine={engine} />
         </Field>
 
         <Field label="Динамики" htmlFor="set-out"
@@ -2664,6 +2862,7 @@
           <div className="cam-preview">
             <video ref={previewRef} autoPlay muted playsInline
                    className={mirror ? "mirror" : undefined} />
+            {previewErr && <div className="cam-err">{previewErr}</div>}
           </div>
         </Field>
 
@@ -2700,7 +2899,9 @@
 
         <Field label="Что решает браузер">
           <div>
-            <KV k="Демонстрация экрана" v={shareSupported ? "доступна" : "этот браузер не умеет"} />
+            <KV k="Демонстрация экрана" v={shareSupported ? "доступна"
+                                              : touchOnly ? "на телефоне и планшете недоступна"
+                                              : "этот браузер не умеет"} />
             <KV k="Что показывать" v="Выбирается в системном окне при запуске" />
             <KV k="Со звуком" v="По галочке «Поделиться звуком» в том же окне" />
           </div>
@@ -3008,8 +3209,7 @@
               {roomTitle || <>Комната <span style={{ color: "var(--accent-ink)" }}>#{roomCode.slice(0, 6)}</span></>}
             </h1>
             <span style={{ flex: 1 }} />
-            {phase === "live" && !reconnecting &&
-              <Badge tone="live" dot>в эфире · {elapsed}</Badge>}
+            {phase === "live" && !reconnecting && <OnAirClock since={M.joinedAt} />}
             {reconnecting &&
               <Badge tone="danger" dot>переподключение…</Badge>}
             {phase === "connecting" && !reconnecting &&
@@ -3029,6 +3229,13 @@
           <div className="gridwrap"
                onTouchStart={pages > 1 ? onTouchStart : undefined}
                onTouchEnd={pages > 1 ? onTouchEnd : undefined}>
+            {/* Клик по самой плашке снимает блокировку (resumeAudio внутри
+                жеста), как и любой другой клик по странице. */}
+            {audioBlocked && phase === "live" &&
+              <button className="audio-gate" onClick={() => engine.resumeAudio()}>
+                <Icon name="volume-off" size={16} />
+                Браузер приглушил звук — нажмите, чтобы слышать участников
+              </button>}
             {stageMode ? <>
               <div className="film">
                 {tiles.map((t, i) => renderTile(t, i, true))}
@@ -3071,12 +3278,12 @@
                   {screenCount > 1 && <>
                     <button className="stage-nav l" disabled={stageIdx === 0}
                             aria-label="Предыдущая демонстрация"
-                            onClick={(e) => { e.stopPropagation(); setStagePage(p => Math.max(0, p - 1)); }}>
+                            onClick={(e) => { e.stopPropagation(); setStagePage(Math.max(0, stageIdx - 1)); }}>
                       <Icon name="arrow-right" size={20} style={{ transform: "scaleX(-1)" }} />
                     </button>
                     <button className="stage-nav r" disabled={stageIdx >= screenCount - 1}
                             aria-label="Следующая демонстрация"
-                            onClick={(e) => { e.stopPropagation(); setStagePage(p => Math.min(screenCount - 1, p + 1)); }}>
+                            onClick={(e) => { e.stopPropagation(); setStagePage(Math.min(screenCount - 1, stageIdx + 1)); }}>
                       <Icon name="arrow-right" size={20} />
                     </button>
                   </>}
@@ -3127,12 +3334,15 @@
             )}
 
             {pages > 1 && <>
+              {/* Листаем от ПОКАЗАННОЙ страницы (curPage), а не от сохранённой:
+                  после ухода участников сохранённая бывает за краем, и первое
+                  нажатие «назад» раньше ничего не меняло на экране. */}
               <IconButton icon="arrow-right" label="Предыдущая страница" disabled={curPage === 0}
-                          onClick={() => setPage(p => Math.max(0, p - 1))}
+                          onClick={() => setPage(Math.max(0, curPage - 1))}
                           style={{ position: "absolute", left: 34, top: "50%",
                                    transform: "translateY(-50%) rotate(180deg)", zIndex: 30 }} />
               <IconButton icon="arrow-right" label="Следующая страница" disabled={curPage === pages - 1}
-                          onClick={() => setPage(p => Math.min(pages - 1, p + 1))}
+                          onClick={() => setPage(Math.min(pages - 1, curPage + 1))}
                           style={{ position: "absolute", right: 34, top: "50%",
                                    transform: "translateY(-50%)", zIndex: 30 }} />
               <div className="pager-dots">
@@ -3159,8 +3369,10 @@
                           label={deafened ? "Включить звук конференции" : "Не слышать участников"}
                           onClick={toggleSound} />
               {/* getDisplayMedia на телефонах не работает ни в одном браузере —
-                  кнопку там не показываем вовсе, а не показываем неработающей. */}
-              {!isMobile &&
+                  кнопку там не показываем вовсе, а не показываем неработающей.
+                  Решает shareSupported (возможности устройства), а не ширина
+                  окна: узкое окно на компьютере демонстрацию не теряет. */}
+              {shareSupported &&
                 <IconButton size={dockSize} icon="screen" variant={sharing ? "active" : "neutral"}
                             label="Демонстрация экрана" onClick={toggleShare} />}
               <IconButton size={dockSize} icon="settings"
@@ -3329,7 +3541,9 @@
                   </div>
                   <IconButton icon="x" size="sm" label="Закрыть" onClick={closeSettings} />
                 </div>
-                <div className="set-page">{renderSection()}</div>
+                {/* key: у каждого раздела свой прокручиваемый блок. Общий помнил
+                    прокрутку, и «О программе» открывалась с середины. */}
+                <div className="set-page" key={curSection.id}>{renderSection()}</div>
               </div>
             </div>
           </div>

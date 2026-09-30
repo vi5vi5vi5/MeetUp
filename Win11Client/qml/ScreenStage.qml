@@ -340,6 +340,7 @@ Item {
         // остальным интерфейсом в полноэкранном показе — они такая же «обвязка»,
         // как кнопка развернуть.
         component StageArrow: Rectangle {
+            id: arrow
             property bool flip: false
             property bool disabled: false
             signal tapped()
@@ -359,9 +360,16 @@ Item {
                 name: "arrow-right"
                 size: 18
                 color: Theme.dark ? "#ffffff" : Theme.text
-                // Левую стрелку зеркалим: своей в наборе нет, а рисовать
-                // почти такую же ради разворота незачем.
-                transform: Scale { origin.x: 9; xScale: parent.parent.flip ? -1 : 1 }
+                // Левую стрелку разворачиваем: своей в наборе нет, а рисовать
+                // почти такую же ради разворота незачем. Так же сделаны стрелки
+                // страниц сетки (rotation: 180 в ConferenceScreen).
+                //
+                // Признак — строго через id кнопки. Раньше здесь стояло
+                // Scale { xScale: parent.parent.flip … }: внутри Scale слово
+                // parent означает не иконку, а родителя самой кнопки, так что
+                // parent.parent уходил мимо и flip был undefined — обе стрелки
+                // смотрели вправо.
+                rotation: arrow.flip ? 180 : 0
             }
             HoverHandler { id: arrowHover; cursorShape: Qt.PointingHandCursor }
             TapHandler { onTapped: if (!parent.disabled) parent.tapped() }

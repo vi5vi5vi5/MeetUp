@@ -1,5 +1,6 @@
 "use strict";
-// Общие помощники страниц MeetUp: адрес WebSocket, HTTP API, имя пользователя.
+// Общие помощники страниц MeetUp: адрес WebSocket, HTTP API, имя пользователя,
+// тема и буфер обмена. Подключается в <head> (см. «Тема» ниже).
 (function () {
   var WS_PORT = 9000; // при https WS идёт через nginx (/ws) — порт не нужен
 
@@ -67,6 +68,52 @@
       });
     }
     return configPromise;
+  }
+
+  // --- Тема ------------------------------------------------------------------
+  // Одна на все страницы. Раньше её помнила только главная: включил светлую,
+  // зашёл в комнату — снова тёмная. Этот файл подключается в <head>, поэтому
+  // атрибут ставится ДО первой отрисовки и страница не мигает тёмным фоном.
+  var THEME_KEY = "meetup.theme";
+  function theme() {
+    try { return localStorage.getItem(THEME_KEY) === "light" ? "light" : "dark"; }
+    catch (e) { return "dark"; }
+  }
+  function setTheme(t) {
+    t = t === "light" ? "light" : "dark";
+    document.documentElement.setAttribute("data-theme", t);
+    try { localStorage.setItem(THEME_KEY, t); } catch (e) { /* приватный режим */ }
+  }
+  document.documentElement.setAttribute("data-theme", theme());
+
+  // --- Буфер обмена ----------------------------------------------------------
+  // Promise<bool>: true — текст действительно в буфере. Clipboard API есть
+  // только в защищённом контексте, поэтому по http (и когда браузер отказал)
+  // идём старым путём через скрытое поле. Галочку «скопировано» страница
+  // показывает только по true: раньше она горела и тогда, когда в буфер не
+  // попало ничего.
+  function copyText(text) {
+    function viaTextarea() {
+      var prev = document.activeElement;
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.top = "0";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = false;
+      try { ok = document.execCommand("copy"); } catch (e) {}
+      document.body.removeChild(ta);
+      if (prev && prev.focus) prev.focus();
+      return ok;
+    }
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text)
+        .then(function () { return true; }, function () { return viaTextarea(); });
+    }
+    return Promise.resolve(viaTextarea());
   }
 
   // Имя пользователя между страницами (лобби -> конференция).
@@ -140,6 +187,9 @@
     serverConfigNow: serverConfigNow,
     savedName: savedName,
     saveName: saveName,
+    theme: theme,
+    setTheme: setTheme,
+    copyText: copyText,
     authLogin: authLogin,
     authRegister: authRegister,
     authLogout: authLogout,

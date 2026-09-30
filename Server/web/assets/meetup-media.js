@@ -167,8 +167,10 @@
   // Меряем во ВРЕМЕНИ, а не в кадрах: «десять кадров» на 5 к/с — это две
   // секунды, а на 60 — одна шестая, и порог в кадрах означал бы разное на
   // разных полосах. Метка времени у нас сквозная (стенные часы отправителя),
-  // поэтому разница «что скормили декодеру» минус «что он выдал» — это ровно
-  // столько миллисекунд, на сколько картинка отстала.
+  // поэтому разница «что скормили декодеру последним» минус «самое старое,
+  // что лежит в нём неразобранным» — это ровно столько миллисекунд, на
+  // сколько картинка отстала. Пауза в потоке отставанием не считается: пока
+  // кадров нет, очередь пуста (см. decodeVideo).
   //
   // 900 мс: ниже 500 бывает всплеск от одного опорного кадра, который
   // рассасывается сам, а на секунде отставание уже мешает разговору. Ждать
@@ -342,7 +344,8 @@
 
   function create(opts) {
     // opts: send(buf), buffered()->число, micOn()->bool,
-    //       onSelfSpeaking(), onSpeaking(id), onFrameActivity(id), onLocked(id, bool)
+    //       onSelfSpeaking(), onSpeaking(id), onFrameActivity(id), onLocked(id, bool),
+    //       onAudioState(state) — AudioContext сменил состояние (running/suspended/…)
     const st = {
       quality: { cam: "med", screen: "med", audio: "med" },
       // Множитель битрейта под состояние сети: 1 — пресет целиком, ниже —
@@ -459,6 +462,23 @@
 
     function masterLevel() { return st.deafened ? 0 : st.volume; }
 
+    // События, которые браузер считает жестом пользователя и после которых
+    // разрешает запустить звук.
+    const RESUME_EVENTS = ["pointerdown", "keydown", "touchend"];
+
+    // Звук стоит не по нашей воле: браузер ещё не видел жеста (suspended)
+    // или iOS прервал его (interrupted).
+    function audioBlocked() {
+      return !!st.ctx && (st.ctx.state === "suspended" || st.ctx.state === "interrupted");
+    }
+
+    function resumeAudio() {
+      if (!audioBlocked()) return;
+      st.resumeAt = performance.now();
+      const p = st.ctx.resume();
+      if (p && p.catch) p.catch(() => {});
+    }
+
     // Узел громкости конкретного участника: его голос идёт через него, а не
     // прямо в общий. Личная громкость нужна ровно там, где общая не помогает:
     // один говорит шёпотом, другой кричит.
@@ -502,14 +522,17 @@
       st.screenGain = st.ctx.createGain();
       st.screenGain.gain.value = st.screenVolume;
       st.screenGain.connect(st.masterGain);
-      if (st.ctx.state === "suspended") {
-        // Autoplay-policy: без жеста звук не стартует (например, после F5).
-        const resume = () => {
-          st.ctx.resume();
-          document.removeEventListener("pointerdown", resume);
-        };
-        document.addEventListener("pointerdown", resume);
-      }
+      // Autoplay-policy: без жеста звук не стартует — например, когда в
+      // комнату пришли прямо с главной или обновили страницу. Снимаем
+      // блокировку первым же действием человека: клик, клавиша, касание.
+      // Раньше слушали только pointerdown, и тот, кто начинал с клавиатуры,
+      // так никого и не слышал. Слушатели остаются на всю жизнь контекста:
+      // iOS может «прервать» звук посреди разговора (звонок), и вернуть его
+      // нужно тем же способом.
+      for (const ev of RESUME_EVENTS) document.addEventListener(ev, resumeAudio, true);
+      st.ctx.onstatechange = () => {
+        if (opts.onAudioState && st.ctx) opts.onAudioState(st.ctx.state);
+      };
       loadUiSounds();
       st.workletsReady = (async () => {
         if (!st.ctx.audioWorklet) return null;
@@ -559,7 +582,13 @@
     }
 
     function playBuffer(buf) {
+      // Пока звук заблокирован, источник встал бы в очередь и сыграл потом —
+      // все накопившиеся звоночки разом, в момент первого клика. Отклик
+      // кнопки, опоздавший на минуту, хуже тишины. Исключение — клик,
+      // который прямо сейчас снимает блокировку (resume асинхронный): его
+      // собственный звук опоздает на миллисекунды, и он нужен.
       if (!st.ctx || st.ctx.state === "closed") return;
+      if (st.ctx.state !== "running" && !(performance.now() - (st.resumeAt || -1e9) < 1000)) return;
       const src = st.ctx.createBufferSource();
       src.buffer = buf;
       src.connect(st.ctx.destination);
@@ -780,12 +809,15 @@
 
         st.rate[kind] = next;
         // Меняем битрейт на живом энкодере, без пересоздания: состояние
-        // потока сохраняется, а следующий кадр делаем опорным — новый битрейт
-        // должен вступить в силу с картинки, а не с середины серии дельт.
+        // потока сохраняется. Опорный кадр при этом НЕ заказываем. Раньше
+        // заказывали — и под затором (а pace шагает раз в секунду) каждую
+        // секунду уходил самый тяжёлый кадр ровно тогда, когда канал и так
+        // забит. Для приёмника это не нужно: что бы энкодер ни сделал внутри
+        // configure, его выход остаётся разбираемым потоком.
         if (s.venc && s.venc.state === "configured" && s.w) {
           const choice = choiceFor(screen);
           try {
-            if (choice) { s.venc.configure(videoCfg(choice, s.w, s.h, screen)); s.keyNext = true; }
+            if (choice) s.venc.configure(videoCfg(choice, s.w, s.h, screen));
           } catch (e) {
             resetEncoder();   // не принял — пересоздадим со следующим кадром
           }
@@ -1056,9 +1088,10 @@
         p = { chains: { a: Promise.resolve(), v: Promise.resolve(),
                         s: Promise.resolve(), sa: Promise.resolve() },
               // inTs — метка последнего кадра, отданного декодеру, outTs —
-              // последнего, который он выдал. Разница и есть отставание.
-              cam: { dec: null, codec: 0, awaitKey: true, inTs: 0, outTs: 0 },
-              scr: { dec: null, codec: 0, awaitKey: true, inTs: 0, outTs: 0 },
+              // последнего, который он выдал; pending — метки кадров, что
+              // сейчас внутри декодера. Отставание — inTs минус pending[0].
+              cam: { dec: null, codec: 0, awaitKey: true, inTs: 0, outTs: 0, pending: [] },
+              scr: { dec: null, codec: 0, awaitKey: true, inTs: 0, outTs: 0, pending: [] },
               // Голос и звук демонстрации приходят от одного отправителя, но
               // это два независимых потока Opus: у декодера состояние, и в
               // один их складывать нельзя.
@@ -1134,7 +1167,7 @@
       sub.dec = null;
       sub.codec = 0;
       sub.awaitKey = true;
-      sub.inTs = 0; sub.outTs = 0;
+      sub.inTs = 0; sub.outTs = 0; sub.pending.length = 0;
       st.resets[isScreen ? "s" : "v"]++;
       requestKeyframe();
       if (opts.onBufferReset)
@@ -1195,13 +1228,19 @@
         sub.dec = new VideoDecoder({
           output: (frame) => {
             sub.outTs = frame.timestamp;      // чем декодер отчитался
+            // Этот кадр и всё, что отдали раньше него, из декодера вышло.
+            // Метка кадра — ровно та, что была у отданного чанка, поэтому
+            // ищем точным совпадением (часы отправителя могут и прыгнуть).
+            const i = sub.pending.indexOf(frame.timestamp);
+            if (i >= 0) sub.pending.splice(0, i + 1);
             paintFrame(peer, sinks, isScreen, sender, frame);
           },
-          error: () => { sub.dec = null; sub.awaitKey = true; requestKeyframe(); },
+          error: () => { sub.dec = null; sub.pending.length = 0; sub.awaitKey = true; requestKeyframe(); },
         });
         try { sub.dec.configure({ codec, optimizeForLatency: true }); }
         catch (e) { sub.dec = null; complainCodec(codecId, isScreen); return; }
         sub.codec = codecId;
+        sub.pending.length = 0;
         sub.awaitKey = true;
       }
       // Кодек приёма — для диагностики. Раньше там показывался наш кодек
@@ -1220,7 +1259,15 @@
       // наполняется быстрее, чем разгребается, — поэтому сбрасываем и
       // прыгаем на живой край. Одно замирание до опорного кадра лучше, чем
       // секунды отставания, о которых человек даже не догадывается.
-      const lag = sub.outTs ? Number(ts) - sub.outTs : 0;
+      //
+      // Меряем именно ОЧЕРЕДЬ внутри декодера: метка пришедшего кадра минус
+      // метка самого старого кадра, который декодер получил, но ещё не выдал
+      // (sub.pending). Раньше вычиталась метка последнего ВЫДАННОГО кадра — и
+      // любая пауза в потоке (камеру выключили на минуту, телефон уходил в
+      // фон, демонстрацию свернули) выглядела как минутное отставание: буфер
+      // «сбрасывался», опорный кадр выбрасывался, всплывало ложное
+      // уведомление. После паузы очередь пуста — и отставание честно ноль.
+      const lag = sub.pending.length ? Number(ts) - sub.pending[0] : 0;
       const queued = sub.dec.decodeQueueSize;
       if (lag > DECODE_LAG_MS || queued > DECODE_QUEUE_MAX) {
         resetLane(sub, isScreen, lag, queued);
@@ -1231,9 +1278,14 @@
       try {
         sub.dec.decode(new EncodedVideoChunk({
           type: isKey ? "key" : "delta", timestamp: Number(ts), data: body }));
+        sub.pending.push(Number(ts));
+        // Страховка от кадров, которые декодер проглотил без выдачи: очередь
+        // меток не должна расти без предела.
+        if (sub.pending.length > 240) sub.pending.shift();
       } catch (e) {
         try { sub.dec.close(); } catch (e2) {}
         sub.dec = null;
+        sub.pending.length = 0;
         sub.awaitKey = true;
         requestKeyframe();
       }
@@ -1491,11 +1543,18 @@
       clearPeers();
       if (st.aenc) { try { st.aenc.close(); } catch (e) {} st.aenc = null; }
       if (st.micSrc) { try { st.micSrc.disconnect(); } catch (e) {} }
-      if (st.ctx) { const p = st.ctx.close(); if (p && p.catch) p.catch(() => {}); }
+      for (const ev of RESUME_EVENTS) document.removeEventListener(ev, resumeAudio, true);
+      if (st.ctx) {
+        st.ctx.onstatechange = null;
+        const p = st.ctx.close(); if (p && p.catch) p.catch(() => {});
+      }
     }
 
     return {
       ensureAudio, startMic, stop, playUiSound,
+      // Заблокирован ли звук браузером (страница показывает «Включить звук»)
+      // и попытка снять блокировку — годится только внутри жеста человека.
+      audioBlocked, resumeAudio,
       startVideo: (stream) => camSender.start(stream),
       stopVideo: () => camSender.stop(),
       startScreen: (stream) => screenSender.start(stream),
@@ -1650,8 +1709,8 @@
           // один поток, и именно он портит впечатление.
           let lagCam = 0, lagScr = 0;
           st.peers.forEach((p) => {
-            if (p.cam.outTs && p.cam.inTs) lagCam = Math.max(lagCam, p.cam.inTs - p.cam.outTs);
-            if (p.scr.outTs && p.scr.inTs) lagScr = Math.max(lagScr, p.scr.inTs - p.scr.outTs);
+            if (p.cam.pending.length) lagCam = Math.max(lagCam, p.cam.inTs - p.cam.pending[0]);
+            if (p.scr.pending.length) lagScr = Math.max(lagScr, p.scr.inTs - p.scr.pending[0]);
           });
           return { camDrop: share(m.drop.v), scrDrop: share(m.drop.s),
                    rxCam: fresh(st.rxInfo.v), rxScreen: fresh(st.rxInfo.s),

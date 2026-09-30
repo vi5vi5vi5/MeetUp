@@ -20,6 +20,8 @@
 <meta name="twitter:card" content="summary_large_image">
 <link rel="stylesheet" href="assets/fonts.css">
 <link rel="stylesheet" href="assets/theme.css">
+<!-- В <head>, а не в конце: ставит сохранённую тему до первой отрисовки. -->
+<script src="assets/meetup-common.js?v=4"></script>
 <style>
   html, body { height: 100%; margin: 0; }
   *, *::before, *::after { box-sizing: border-box; }
@@ -113,7 +115,6 @@
 <script src="assets/react-dom.js"></script>
 <script src="assets/babel.js"></script>
 <script src="assets/meetup-ds.js?v=4"></script>
-<script src="assets/meetup-common.js?v=4"></script>
 <script type="text/babel">
   const { useState, useEffect } = React;
   const { Card, Button, Input, Field, IconButton } = window.MeetUpDesignSystem_2584b5;
@@ -141,7 +142,8 @@
   }
 
   function LoginScreen() {
-    const [theme, setTheme] = useState("dark");
+    // Тема общая для всех страниц и помнится (см. meetup-common.js).
+    const [theme, setTheme] = useState(MeetUp.theme);
     const [login, setLogin] = useState("");
     const [pass, setPass] = useState("");
     const [err, setErr] = useState("");
@@ -149,7 +151,7 @@
     const [hero] = useState(pickHeroPhrase);
 
     useEffect(() => {
-      document.documentElement.setAttribute("data-theme", theme);
+      MeetUp.setTheme(theme);
     }, [theme]);
     const toggle = () => setTheme(t => (t === "dark" ? "light" : "dark"));
 
@@ -208,7 +210,8 @@
             <div className="hero">
               <h1 className="hero-title">{hero}</h1>
               <p className="hero-sub">
-                Войдите в аккаунт, чтобы продолжить встречи, историю комнат и контакты.
+                Войдите в аккаунт — вас ждут ваше имя, аватарка и личные комнаты
+                с постоянными ссылками.
               </p>
               <div className="hero-meta">
                 <span className="hero-dot" />
@@ -220,9 +223,9 @@
 
             <div className="cardwrap">
               <Card elevated width="100%">
-                <Field label="Логин или email" htmlFor="login">
+                <Field label="Логин" htmlFor="login">
                   <Input id="login" value={login} autoComplete="username" maxLength={64}
-                         placeholder="anna@meetup.dev"
+                         placeholder="anna"
                          onChange={(e) => { setLogin(e.target.value); setErr(""); }} />
                 </Field>
 

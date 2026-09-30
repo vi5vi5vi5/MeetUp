@@ -17,6 +17,8 @@
 <meta name="twitter:card" content="summary_large_image">
 <link rel="stylesheet" href="assets/fonts.css">
 <link rel="stylesheet" href="assets/theme.css">
+<!-- В <head>, а не в конце: ставит сохранённую тему до первой отрисовки. -->
+<script src="assets/meetup-common.js?v=4"></script>
 <style>
   html, body { height: 100%; margin: 0; }
   *, *::before, *::after { box-sizing: border-box; }
@@ -219,7 +221,6 @@
 <script src="assets/react-dom.js"></script>
 <script src="assets/babel.js"></script>
 <script src="assets/meetup-ds.js?v=4"></script>
-<script src="assets/meetup-common.js?v=4"></script>
 <script type="text/babel">
   const { useState, useRef, useEffect } = React;
   const { Card, Button, IconButton, Icon, Badge, Input, Field } = window.MeetUpDesignSystem_2584b5;
@@ -227,7 +228,6 @@
   // Аватарка хранится на сервере (POST/DELETE /api/me/avatar, файл один на
   // пользователя). Личная комната — тоже на сервере (/api/me/room); старый
   // локальный черновик используется один раз — чтобы заполнить форму создания.
-  const THEME_KEY = "meetup.theme";
   const ROOM_KEY = "meetup.room.draft";
   function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
   function lsSet(k, v) {
@@ -488,13 +488,22 @@
     );
   }
 
-  function LinkRow({ code }) {
+  // Галочка — только когда ссылка правда в буфере (см. MeetUp.copyText).
+  function useCopy() {
     const [copied, setCopied] = useState(false);
-    function copy() {
-      try { navigator.clipboard && navigator.clipboard.writeText(roomLinkFull(code)); } catch (e) {}
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1400);
+    function copy(text) {
+      MeetUp.copyText(text).then(ok => {
+        if (!ok) return;
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1400);
+      });
     }
+    return [copied, copy];
+  }
+
+  function LinkRow({ code }) {
+    const [copied, copyText] = useCopy();
+    const copy = () => copyText(roomLinkFull(code));
     return (
       <div className="hu-link">
         <span className="hu-link-text" title={roomLinkText(code)}>{roomLinkText(code)}</span>
@@ -603,12 +612,8 @@
 
   // Одна ссылка-приглашение: строка с копированием, статусом и действиями.
   function AliasRow({ a, onToggle, onDelete }) {
-    const [copied, setCopied] = useState(false);
-    function copy() {
-      try { navigator.clipboard && navigator.clipboard.writeText(roomLinkFull(a.code)); } catch (e) {}
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1400);
-    }
+    const [copied, copyText] = useCopy();
+    const copy = () => copyText(roomLinkFull(a.code));
     return (
       <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "8px 10px",
                     opacity: a.enabled ? 1 : .55 }}>
@@ -963,7 +968,7 @@
 
   function HomeScreen() {
     const [user, setUser] = useState(null);
-    const [theme, setTheme] = useState(lsGet(THEME_KEY) === "light" ? "light" : "dark");
+    const [theme, setTheme] = useState(MeetUp.theme);
     const [rooms, setRooms] = useState([]);   // личные комнаты с сервера
     const [profileOpen, setProfileOpen] = useState(false);
     const [createOpen, setCreateOpen] = useState(false);
@@ -976,10 +981,8 @@
     const [srvCfg, setSrvCfg] = useState(() => MeetUp.serverConfigNow());
     const maxAliases = srvCfg.max_aliases_per_room || 5;
 
-    useEffect(() => {
-      document.documentElement.setAttribute("data-theme", theme);
-      lsSet(THEME_KEY, theme);
-    }, [theme]);
+    // Тема общая для всех страниц (см. meetup-common.js).
+    useEffect(() => { MeetUp.setTheme(theme); }, [theme]);
     useEffect(() => { MeetUp.serverConfig().then(setSrvCfg); }, []);
     const toggleTheme = () => setTheme(t => (t === "dark" ? "light" : "dark"));
 

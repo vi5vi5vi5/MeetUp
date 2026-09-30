@@ -17,6 +17,8 @@
 <meta name="twitter:card" content="summary_large_image">
 <link rel="stylesheet" href="assets/fonts.css">
 <link rel="stylesheet" href="assets/theme.css">
+<!-- В <head>, а не в конце: ставит сохранённую тему до первой отрисовки. -->
+<script src="assets/meetup-common.js?v=4"></script>
 <style>
   html, body { height: 100%; margin: 0; }
   *, *::before, *::after { box-sizing: border-box; }
@@ -97,7 +99,6 @@
 <script src="assets/react-dom.js"></script>
 <script src="assets/babel.js"></script>
 <script src="assets/meetup-ds.js?v=4"></script>
-<script src="assets/meetup-common.js?v=4"></script>
 <script type="text/babel">
   const { useState, useEffect } = React;
   const { Card, Button, Input, Field, IconButton } = window.MeetUpDesignSystem_2584b5;
@@ -112,7 +113,8 @@
   };
 
   function RegisterScreen() {
-    const [theme, setTheme] = useState("dark");
+    // Тема общая для всех страниц и помнится (см. meetup-common.js).
+    const [theme, setTheme] = useState(MeetUp.theme);
     const [login, setLogin] = useState("");
     const [name, setName] = useState("");
     const [pass, setPass] = useState("");
@@ -128,7 +130,7 @@
     const closed = cfg.registration === false;
 
     useEffect(() => {
-      document.documentElement.setAttribute("data-theme", theme);
+      MeetUp.setTheme(theme);
     }, [theme]);
     const toggle = () => setTheme(t => (t === "dark" ? "light" : "dark"));
 
