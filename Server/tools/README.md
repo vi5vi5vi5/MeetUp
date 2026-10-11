@@ -12,7 +12,7 @@
 | Группа | Файлы | Где запускают | Зачем |
 |---|---|---|---|
 | **Локальная разработка** | `build.ps1`, `run.ps1` | Windows-машина разработчика (нужен Qt6) | Собрать и погонять сервер у себя |
-| **Боевой деплой** | `update.sh`, `update.ps1` | Сервер с Docker (домен `meetup.linkpc.net`) | Подтянуть код из GitHub и пересобрать в контейнерах |
+| **Боевой деплой** | `update.sh`, `update.ps1` | Сервер с Docker (домен `meetup.fferry.ru`) | Подтянуть код из GitHub и пересобрать в контейнерах |
 
 > Почему пути в примерах вида `tools\build.ps1`: скрипты запускают **из корня
 > репозитория**, а лежат они в `tools/`. Внутри каждый сам находит корень
@@ -94,7 +94,7 @@ Windows. Поднимают связку из [`docker-compose.yml`](../docker-c
 | Режим | Когда | Как включить |
 |---|---|---|
 | **Самоподписанный** (по умолчанию) | Домена нет, вход по IP | ничего не передавать |
-| **Let's Encrypt** | Есть домен (`meetup.linkpc.net`) | передать домен (+ email) |
+| **Let's Encrypt** | Есть домен (`meetup.fferry.ru`) | передать домен (+ email) |
 
 В режиме Let's Encrypt порт HTTP (80) переопределять **нельзя**: ACME
 HTTP-01-challenge всегда стучится на 80 — по нему центр сертификации проверяет,
@@ -111,7 +111,7 @@ HTTP-01-challenge всегда стучится на 80 — по нему цен
 ./tools/update.sh --force
 
 # боевой режим: Let's Encrypt для домена
-./tools/update.sh --domain meetup.linkpc.net --email admin@example.com
+./tools/update.sh --domain meetup.fferry.ru --email admin@example.com
 
 # другие порты хоста (только в самоподписанном режиме)
 HTTPS_PORT=8443 HTTP_PORT=8081 ./tools/update.sh
@@ -137,7 +137,7 @@ powershell -ExecutionPolicy Bypass -File tools\update.ps1
 powershell -ExecutionPolicy Bypass -File tools\update.ps1 -Force
 
 # Let's Encrypt для домена
-powershell -ExecutionPolicy Bypass -File tools\update.ps1 -Domain meetup.linkpc.net -Email admin@example.com
+powershell -ExecutionPolicy Bypass -File tools\update.ps1 -Domain meetup.fferry.ru -Email admin@example.com
 
 # другие порты хоста (самоподписанный режим)
 powershell -ExecutionPolicy Bypass -File tools\update.ps1 -HttpsPort 8443 -HttpPort 8081
@@ -163,7 +163,7 @@ powershell -ExecutionPolicy Bypass -File tools\update.ps1 -HttpsPort 8443 -HttpP
 | Собрать локально (Windows) | `tools\build.ps1` |
 | Запустить локально | `tools\run.ps1` |
 | Обновить прод (по IP) | `./tools/update.sh` |
-| Обновить прод (домен + Let's Encrypt) | `./tools/update.sh --domain meetup.linkpc.net --email …` |
+| Обновить прод (домен + Let's Encrypt) | `./tools/update.sh --domain meetup.fferry.ru --email …` |
 
 Смотри также: [`../proxy/README.md`](../proxy/README.md) (TLS, nginx,
 автопродление сертификата), [`../README.md`](../README.md) (сборка и

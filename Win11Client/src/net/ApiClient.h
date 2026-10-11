@@ -29,7 +29,7 @@ public:
 
 	QString sessionToken() const; // "" если не залогинен
 
-	// База вида "https://meetup.linkpc.net" — для сборки абсолютных URL (аватарки).
+	// База вида "https://meetup.fferry.ru" — для сборки абсолютных URL (аватарки).
 	QString baseUrl() const { return m_base; }
 
 	// Сменить сервер (нормализованный URL без хвостового «/»). Сохраняется в
@@ -41,5 +41,5 @@ private:
 
 	QNetworkAccessManager m_nam;          // «движок»; живёт вместе с ApiClient
 	SessionCookieJar* m_jar = nullptr;
-	QString m_base = "https://meetup.linkpc.net";  // прод-сервер (Let's Encrypt)
+	QString m_base = "https://meetup.fferry.ru";  // прод-сервер (Let's Encrypt)
 };

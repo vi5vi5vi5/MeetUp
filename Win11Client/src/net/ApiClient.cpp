@@ -67,7 +67,7 @@ QNetworkReply* ApiClient::del(const QString& path) {
 // nginx пересылает туда всё с wss://host.com/ws
 // тут проверка на то, надо трафик кидать на wss://host/ws или на  ws://host:9000
 QString ApiClient::wsUrl() const {
-    QUrl u(m_base);                       // m_base = "https://meetup.linkpc.net"
+    QUrl u(m_base);                       // m_base = "https://meetup.fferry.ru"
     const bool tls = (u.scheme() == "https");
     // Кириллический домен (мит-ап.рф) обязан уехать в сокет в punycode
     // (xn--…): DNS, TLS SNI, заголовок Host и сверка сертификата — всё ASCII.

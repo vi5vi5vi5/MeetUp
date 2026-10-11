@@ -13,7 +13,7 @@ class SysBridge : public QObject {
 public:
     explicit SysBridge(ApiClient* api, QObject* parent = nullptr);
 
-    QString host() const;                                    // "meetup.linkpc.net"
+    QString host() const;                                    // "meetup.fferry.ru"
     QString serverAddress() const;                           // как показывать в поле ввода
     // Хост любого адреса «для глаз» (без схемы и пути) — для текстов про
     // смену сервера: hostOf("https://мит-ап.рф") -> "мит-ап.рф".
@@ -21,7 +21,7 @@ public:
     Q_INVOKABLE void copyText(const QString& text);          // в буфер обмена
     Q_INVOKABLE QString pasteText() const;                   // …и обратно
     Q_INVOKABLE QString roomLink(const QString& code) const; // полная ссылка на комнату
-    // Сменить сервер: "meetup.linkpc.net" -> https://…; "http://host" — как есть;
+    // Сменить сервер: "meetup.fferry.ru" -> https://…; "http://host" — как есть;
     // пусто — вернуть прод по умолчанию. Сохраняется между запусками.
     Q_INVOKABLE void setServer(const QString& input);
 

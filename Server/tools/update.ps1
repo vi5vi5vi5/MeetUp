@@ -6,7 +6,7 @@
 #  Переопределить порты хоста:
 #    powershell -ExecutionPolicy Bypass -File tools\update.ps1 -HttpsPort 8443 -HttpPort 8081
 #  С доменом и Let's Encrypt (HttpPort переопределять нельзя):
-#    powershell -ExecutionPolicy Bypass -File tools\update.ps1 -Domain meetup.linkpc.net -Email you@mail.com
+#    powershell -ExecutionPolicy Bypass -File tools\update.ps1 -Domain meetup.fferry.ru -Email you@mail.com
 #
 #  Домен, почта и порты ЗАПОМИНАЮТСЯ в файле .env рядом с docker-compose.yml:
 #  указали -Domain один раз — дальше хватает запуска без единого флага.

@@ -20,7 +20,7 @@ nginx-прокси, который делает приложение досту�
   `10-gen-cert.sh` генерирует его при первом старте, браузер один раз предупредит.
 - **С доменом** — Let's Encrypt по HTTP-01 с автопродлением:
   ```bash
-  DOMAIN=meetup.linkpc.net LETSENCRYPT_EMAIL=you@mail.com docker compose up -d --build
+  DOMAIN=meetup.fferry.ru LETSENCRYPT_EMAIL=you@mail.com docker compose up -d --build
   ```
 
 Как это устроено: nginx.conf ссылается на стабильные пути `certs/live/{fullchain,privkey}.pem`

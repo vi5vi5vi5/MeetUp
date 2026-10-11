@@ -3,7 +3,7 @@ import QtQuick
 
 // Placeholder data for the M0 UI shell. Replaced by live server data in M1.
 QtObject {
-    property string serverAddress: "meetup.linkpc.net"
+    property string serverAddress: "meetup.fferry.ru"
     property string roomTitle: "Комната Игоря"
     property string roomCode: "aX7Kp2Rf9Lm3Qz8Vn4Bt6Yw"
     property string selfName: "Вы"

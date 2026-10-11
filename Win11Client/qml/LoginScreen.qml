@@ -101,7 +101,7 @@ AuthScaffold {
             AppInput {
                 id: serverInput
                 width: parent.width - 48
-                placeholderText: "meetup.linkpc.net"
+                placeholderText: "meetup.fferry.ru"
                 // Не биндинг: первый же символ, набранный руками, рвёт его
                 // насовсем, и поле переставало отражать реальный адрес.
                 // Подставляем сами — при рождении и когда адрес сменился

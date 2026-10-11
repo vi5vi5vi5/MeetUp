@@ -4,7 +4,7 @@
 #include <QClipboard>
 #include <QUrl>
 
-static const char* kDefaultBase = "https://meetup.linkpc.net";
+static const char* kDefaultBase = "https://meetup.fferry.ru";
 
 SysBridge::SysBridge(ApiClient* api, QObject* parent)
     : QObject(parent), m_api(api) {}

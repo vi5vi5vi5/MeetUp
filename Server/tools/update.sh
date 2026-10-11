@@ -6,7 +6,7 @@
 #    ./update.sh --force             пересобрать и перезапустить в любом случае
 #  Выбор режима TLS:
 #    ./update.sh                              самоподписанный сертификат (по умолчанию)
-#    ./update.sh --domain meetup.linkpc.net --email you@mail.com   Let's Encrypt
+#    ./update.sh --domain meetup.fferry.ru --email you@mail.com   Let's Encrypt
 #
 #  Соседний сервис на этом же сервере (например Ferry) — добавить его имя
 #  в тот же сертификат; его server-блок кладётся в proxy/extra/:
