@@ -9,6 +9,7 @@
 #include <QPair>
 
 class AuthService;
+class LinkPreviewService;
 class PersonalRoomService;
 class RoomRegistry;
 struct HttpRequest;
@@ -41,7 +42,7 @@ public:
     HttpApi(std::shared_ptr<AuthService> auth,
             std::shared_ptr<PersonalRoomService> personalRooms,
             RoomRegistry *rooms, const QString &dataDir,
-            const ServerConfig &config);
+            const ServerConfig &config, LinkPreviewService *previews = nullptr);
 
     // false — путь не из /api, пусть обрабатывает статика. true — маршрут
     // взят в работу и respond будет позван (возможно, уже позван).
@@ -68,6 +69,11 @@ private:
     // Без авторизации — клиент читает это ДО входа, чтобы не рисовать кнопки,
     // которые всё равно ответят отказом.
     ApiResponse handleConfig() const;
+
+    // Предпросмотр ссылки из чата: GET /api/unfurl?url=… и картинка к нему
+    // GET /api/unfurl/image/<id>. Без авторизации — в комнате бывают гости.
+    void handleUnfurl(const HttpRequest &req, const Respond &respond);
+    ApiResponse handleUnfurlImage(const QString &id);
 
     // Личные комнаты владельца: /api/me/rooms (GET — список, POST — создать).
     ApiResponse handleMyRooms(const HttpRequest &req);
@@ -110,6 +116,7 @@ private:
     RoomRegistry *m_rooms;   // не владеет (общий с ConferenceServer)
     QString m_dataDir;       // персистентные данные (БД, аватарки)
     const ServerConfig &m_config;   // не владеет: живёт в main дольше нас
+    LinkPreviewService *m_previews; // не владеет; nullptr — предпросмотра нет
 
     // Аватарка ужимается клиентом до 256px JPEG (~10–40 КБ); потолок
     // декодированного файла — защита от заливки гигантов.

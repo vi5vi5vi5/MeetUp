@@ -16,8 +16,9 @@ import MeetUp
 //     момент, ради которого оно существует;
 //   * не в панели задач и не в Alt+Tab (Tool) — это часть звонка, а не
 //     отдельная программа;
-//   * держит пропорции кадра при растягивании, липнет к краям экрана и
-//     скругляется как окно Windows 11 (всё это — PipHelper, на C++).
+//   * держит пропорции кадра при растягивании и скругляется как окно
+//     Windows 11 (PipHelper, на C++). Двигается свободно — без прилипания к
+//     краям: окно оставляют где угодно, хоть на стыке двух мониторов.
 //
 // Кадры приходят по приоритетной привязке (Media.attachPip): пока окно
 // открыто, плитка в главном окне показывает заглушку, и картинка рисуется
@@ -106,22 +107,24 @@ Window {
         var y = win.isScreen ? store.scrY : store.camY
         var known = win.isScreen ? store.scrKnown : store.camKnown
         // Монитор, на котором окно стояло в прошлый раз, могли отключить —
-        // тогда место прошлого раза не годится, встаём в угол заново.
+        // тогда место прошлого раза не годится, встаём в угол заново. Если
+        // середина окна на каком-то экране есть, ставим ровно туда же, где
+        // оставили, — даже наполовину за краем: так человек его и бросил.
         var wa = known ? PipHelper.workAreaAt(x + w / 2, y + h / 2)
                        : Qt.rect(0, 0, 0, 0)
         if (wa.width <= 0) {
             wa = PipHelper.workArea(win.hostWindow)
-            w = Math.min(w, wa.width - 32)
-            h = Math.min(h, wa.height - 32)
+            w = Math.max(win.minimumWidth, Math.min(w, wa.width - 32))
+            h = Math.max(win.minimumHeight, Math.min(h, wa.height - 32))
             x = wa.x + wa.width - w - 16
             y = wa.y + wa.height - h - 16
+            // Второе и третье окно — выше первого, а не поверх него.
+            y = Math.max(wa.y, y - win.cascade * (h + 12))
+        } else if (win.cascade > 0) {
+            // Место запомнено, но там уже стоит первое окно — чуть в сторону.
+            x += win.cascade * 28
+            y += win.cascade * 28
         }
-        w = Math.max(win.minimumWidth, Math.min(w, wa.width))
-        h = Math.max(win.minimumHeight, Math.min(h, wa.height))
-        // Второе и третье окно — выше первого, а не поверх него.
-        y -= win.cascade * (h + 12)
-        x = Math.max(wa.x, Math.min(x, wa.x + wa.width - w))
-        y = Math.max(wa.y, Math.min(y, wa.y + wa.height - h))
         win.x = x
         win.y = y
         win.width = w
@@ -285,8 +288,8 @@ Window {
 
         // ---- перетаскивание и жесты по кадру ----
         // Двигает окно системный цикл перемещения (startSystemMove): курсор,
-        // плавность и Esc — как у любого окна Windows, а магнит к краям
-        // добавляет PipHelper. Кнопки и ползунок у этого жеста не отнимаются:
+        // плавность, переезд между мониторами и Esc — как у любого окна
+        // Windows. Кнопки и ползунок у этого жеста не отнимаются:
         // TakeOverForbidden — то, что уже взяли органы управления, остаётся им.
         DragHandler {
             target: null

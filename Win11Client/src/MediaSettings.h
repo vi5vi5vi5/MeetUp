@@ -107,6 +107,12 @@ class MediaSettings : public QObject {
     // возвращается, когда MeetUp развернули. По умолчанию выключено: окно,
     // которое появляется само, — сюрприз, и включать его человек должен сам.
     Q_PROPERTY(bool autoPip READ autoPip WRITE setAutoPip NOTIFY autoPipChanged)
+    // Предпросмотр ссылок в чате. linkPreviewsE2E — то же в комнате со
+    // сквозным шифрованием: чтобы показать карточку, сервер должен узнать
+    // адрес ссылки, а там он его иначе не видит. Поэтому по умолчанию — нет.
+    Q_PROPERTY(bool linkPreviews READ linkPreviews WRITE setLinkPreviews NOTIFY linkPreviewsChanged)
+    Q_PROPERTY(bool linkPreviewsE2E READ linkPreviewsE2E WRITE setLinkPreviewsE2E
+               NOTIFY linkPreviewsE2EChanged)
     // Горячие клавиши (M8): текст бинда в собственном формате — "RCtrl",
     // "RCtrl+RShift", "Ctrl+D", "F9" (разбор и правила в src/HotkeySpec.h).
     // Пустая строка — клавиша не назначена. Слушают GlobalHotkeys и настройки.
@@ -170,6 +176,8 @@ public:
     bool showSelf() const { return m_showSelf; }
     bool hideNoVideo() const { return m_hideNoVideo; }
     bool autoPip() const { return m_autoPip; }
+    bool linkPreviews() const { return m_linkPreviews; }
+    bool linkPreviewsE2E() const { return m_linkPreviewsE2E; }
     QString keyMic() const { return m_keyMic; }
     QString keySound() const { return m_keySound; }
     QString keyCam() const { return m_keyCam; }
@@ -203,6 +211,8 @@ public:
     void setPerPage(int n);
     void setShowSelf(bool on);
     void setAutoPip(bool on);
+    void setLinkPreviews(bool on);
+    void setLinkPreviewsE2E(bool on);
     void setHideNoVideo(bool on);
     void setKeyMic(const QString& s);
     void setKeySound(const QString& s);
@@ -268,6 +278,8 @@ signals:
     void showSelfChanged();
     void hideNoVideoChanged();
     void autoPipChanged();
+    void linkPreviewsChanged();
+    void linkPreviewsE2EChanged();
     void keyMicChanged();
     void keySoundChanged();
     void keyCamChanged();
@@ -307,6 +319,8 @@ private:
     bool m_showSelf = true;
     bool m_hideNoVideo = false;
     bool m_autoPip = false;
+    bool m_linkPreviews = true;
+    bool m_linkPreviewsE2E = false;
     QString m_keyMic, m_keySound, m_keyCam;
     QString m_keyShare, m_keyFull, m_keyLeave;
     bool m_pushToTalk = false;

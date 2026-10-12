@@ -32,6 +32,38 @@ Item {
     // подписи может не быть вовсе.
     readonly property bool _hasText: root.locked || root.text !== ""
 
+    // Предпросмотр ссылки: только первой в сообщении (у мессенджеров так же —
+    // три карточки подряд под одной репликой превращают ленту в витрину).
+    // Спрашивать сервер можно, если он это умеет, человек не выключил, и
+    // комната не под сквозным шифрованием — там сервер адреса ссылок иначе не
+    // видит, и показывать их ему без разрешения нельзя.
+    readonly property bool _previewsOn: Server.linkPreviews && AV.linkPreviews
+                                        && (!Crypto.active || AV.linkPreviewsE2E)
+    readonly property string previewUrl: root.locked ? "" : root._firstUrl(root.text)
+
+    // Адрес без хвостовой пунктуации: «example.com/a.» — конец предложения,
+    // а не часть адреса. Те же правила, что при подсветке ссылок ниже.
+    function _trimUrl(m) {
+        let url = m
+        while (url.length > 0) {
+            const last = url.charAt(url.length - 1)
+            if (".,;:!?»".indexOf(last) >= 0
+                || (last === ")" && url.indexOf("(") < 0)) {
+                url = url.slice(0, -1)
+                continue
+            }
+            break
+        }
+        return url
+    }
+    function _firstUrl(raw) {
+        const m = String(raw).match(/(?:https?:\/\/|www\.)[^\s<>"']+/i)
+        if (!m) return ""
+        const url = root._trimUrl(m[0])
+        if (url.length === 0) return ""
+        return /^www\./i.test(url) ? "https://" + url : url
+    }
+
     implicitHeight: col.implicitHeight
     // width supplied by the containing list
 
@@ -53,17 +85,8 @@ Item {
             // забираем себе, только если её внутри адреса не открывали:
             // «(см. example.com/a)» и «example.com/wiki/Foo_(bar)» — разные
             // случаи, и оба встречаются.
-            let url = m, tail = ""
-            while (url.length > 0) {
-                const last = url.charAt(url.length - 1)
-                if (".,;:!?»".indexOf(last) >= 0
-                    || (last === ")" && url.indexOf("(") < 0)) {
-                    tail = last + tail
-                    url = url.slice(0, -1)
-                    continue
-                }
-                break
-            }
+            const url = root._trimUrl(m)
+            const tail = m.slice(url.length)
             if (url.length === 0) return m
             const href = /^www\./i.test(url) ? "https://" + url : url
             return "<a href=\"" + href + "\" style=\"color:" + col + "\">"
@@ -265,6 +288,14 @@ Item {
                                                         : Qt.IBeamCursor
                 }
             }
+        }
+
+        // Предпросмотр первой ссылки — под пузырём, на ширину самого широкого
+        // пузыря. Пока ответа нет, его нет и в раскладке (высота ноль).
+        LinkPreviewCard {
+            x: root.self ? parent.width - width : 0
+            width: Math.min(root.width * 0.82, 320)
+            url: root._previewsOn ? root.previewUrl : ""
         }
     }
 }

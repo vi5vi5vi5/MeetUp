@@ -17,6 +17,7 @@
 #include "network/HttpApi.h"
 #include "network/HttpFileServer.h"
 #include "services/AuthService.h"
+#include "services/LinkPreviewService.h"
 #include "services/PersonalRoomService.h"
 
 #ifndef WEB_ROOT_DEFAULT
@@ -133,7 +134,10 @@ int main(int argc, char *argv[])
         personalRooms, roomAliases,
         RoomLimits{cfg.codeMinLen, cfg.maxAliasesPerRoom, cfg.maxPersonalPerUser});
 
-    HttpApi api(auth, rooms, &registry, dataDir, cfg);
+    // Предпросмотр ссылок из чата: сервер ходит по ссылкам вместо клиентов
+    // (см. services/LinkPreviewService.h — там же, почему именно сервер).
+    LinkPreviewService previews(cfg.chatLinkPreviews);
+    HttpApi api(auth, rooms, &registry, dataDir, cfg, &previews);
     ConferenceServer conference(wsPort, &registry, auth, rooms, cfg);
     HttpFileServer http(httpPort, webRoot, &api, cfg.webEnabled);
 

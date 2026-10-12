@@ -115,6 +115,7 @@ qt_add_executable(Win11Client
     src/net/LinkController.cpp
     src/net/UpdateChecker.cpp
     src/net/ServerInfoController.cpp
+    src/net/LinkPreviews.cpp
     src/Cli.cpp
     src/media/AudioEngine.cpp
     src/media/AudioWorker.cpp
@@ -179,6 +180,7 @@ qt_add_qml_module(Win11Client
         qml/LockPlate.qml
         qml/PeerVolumePopup.qml
         qml/ChatMessage.qml
+        qml/LinkPreviewCard.qml
         qml/ControlDock.qml
         qml/SettingsModal.qml
         qml/SettingsAudio.qml

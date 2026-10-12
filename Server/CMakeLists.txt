@@ -51,6 +51,7 @@ add_executable(MeetUpServer
     # services/ — бизнес-логика
     services/AuthService.h     services/AuthService.cpp
     services/PersonalRoomService.h services/PersonalRoomService.cpp
+    services/LinkPreviewService.h  services/LinkPreviewService.cpp
 
     # core/ — модель времени выполнения: сессии, комнаты, реестр комнат
     core/ClientSession.h       core/ClientSession.cpp

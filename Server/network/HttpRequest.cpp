@@ -3,6 +3,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QUrl>
+#include <QUrlQuery>
 
 QByteArray HttpRequest::cookie(const QByteArray &name) const
 {
@@ -19,6 +20,11 @@ QByteArray HttpRequest::cookieValue(const QByteArray &cookieHeader, const QByteA
             return p.mid(eq + 1);
     }
     return {};
+}
+
+QString HttpRequest::queryItem(const QString &name) const
+{
+    return QUrlQuery(query).queryItemValue(name, QUrl::FullyDecoded);
 }
 
 QJsonObject HttpRequest::jsonBody(bool *ok) const
@@ -79,8 +85,10 @@ HttpRequestParser::State HttpRequestParser::parseHead(int headEnd)
 
     QByteArray target = parts.at(1);
     const int query = target.indexOf('?');
-    if (query >= 0)
+    if (query >= 0) {
+        m_req.query = QString::fromLatin1(target.mid(query + 1));
         target = target.left(query);
+    }
     m_req.path = QUrl::fromPercentEncoding(target);
     if (m_req.path.isEmpty() || !m_req.path.startsWith(QLatin1Char('/')))
         return fail(400);

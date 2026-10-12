@@ -33,10 +33,6 @@ constexpr UINT_PTR kSubclassId = 0x50495031;   // 'PIP1'
 constexpr int kMinW = 240;
 constexpr int kMinH = 135;
 
-// Магнит: окно ближе этого к краю рабочей области прилипает к отступу.
-constexpr int kSnapPx = 20;
-constexpr int kMarginPx = 16;
-
 qreal scaleOf(HWND hwnd) {
     const UINT dpi = GetDpiForWindow(hwnd);
     return dpi ? dpi / 96.0 : 1.0;
@@ -228,32 +224,6 @@ bool PipHelper::handleMessage(quintptr hwndKey, unsigned message, quintptr wPara
         case WMSZ_BOTTOMRIGHT: r.right = r.left + w;  r.bottom = r.top + h;  break;
         default: break;
         }
-        *result = TRUE;
-        return true;
-    }
-
-    case WM_MOVING: {
-        // Магнит. Окно «картинки в картинке» почти всегда живёт в углу экрана,
-        // и попасть в угол с точностью до пикселя мышью незачем: ближе 20 px к
-        // краю — встаёт ровно на отступ. Дальше — едет свободно, и за край его
-        // вытолкнуть тоже можно (магнит не держит, если тянуть дальше).
-        RECT& r = *reinterpret_cast<RECT*>(lParam);
-        HMONITOR mon = MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST);
-        MONITORINFO mi{};
-        mi.cbSize = sizeof(mi);
-        if (!GetMonitorInfoW(mon, &mi)) return false;
-        const RECT wa = mi.rcWork;
-        const qreal k = scaleOf(hwnd);
-        const int snap = int(std::lround(kSnapPx * k));
-        const int margin = int(std::lround(kMarginPx * k));
-        const int w = r.right - r.left;
-        const int h = r.bottom - r.top;
-        const auto nearEdge = [snap](LONG a, LONG b) { return std::abs(a - b) <= snap; };
-
-        if (nearEdge(r.left, wa.left + margin))          { r.left = wa.left + margin;     r.right = r.left + w; }
-        else if (nearEdge(r.right, wa.right - margin))   { r.right = wa.right - margin;   r.left = r.right - w; }
-        if (nearEdge(r.top, wa.top + margin))            { r.top = wa.top + margin;       r.bottom = r.top + h; }
-        else if (nearEdge(r.bottom, wa.bottom - margin)) { r.bottom = wa.bottom - margin; r.top = r.bottom - h; }
         *result = TRUE;
         return true;
     }

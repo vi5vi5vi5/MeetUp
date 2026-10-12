@@ -28,6 +28,9 @@ void ServerInfoController::reset() {
     m_chatImageMaxKb = 440;
     m_maxPersonalRooms = 1;
     m_maxScreenShares = 1;
+    // В отличие от остальных — умолчание «нет»: старый сервер ручки не знает,
+    // и спрашивать его о каждой ссылке значило бы сыпать ему 404.
+    m_linkPreviews = false;
     m_logsNames = false;
     m_versionCommit.clear();
     m_versionModified = false;
@@ -82,6 +85,7 @@ void ServerInfoController::refresh() {
         m_chatImageMaxKb = intAt("chat_image_max_kb", m_chatImageMaxKb);
         m_maxPersonalRooms = intAt("max_personal_rooms", m_maxPersonalRooms);
         m_maxScreenShares = intAt("max_screen_shares", m_maxScreenShares);
+        m_linkPreviews   = boolAt("link_previews", m_linkPreviews);
         m_logsNames      = boolAt("logs_names", m_logsNames);
 
         const QJsonObject ver = o.value("version").toObject();

@@ -29,6 +29,9 @@ class ServerInfoController : public QObject {
     Q_PROPERTY(int     chatImageMaxKb READ chatImageMaxKb NOTIFY changed)
     Q_PROPERTY(int     maxPersonalRooms READ maxPersonalRooms NOTIFY changed)
     Q_PROPERTY(int     maxScreenShares  READ maxScreenShares  NOTIFY changed)
+    // Сервер умеет предпросмотр ссылок (GET /api/unfurl). Старый — нет:
+    // тогда карточек не рисуем и не спрашиваем.
+    Q_PROPERTY(bool    linkPreviews   READ linkPreviews   NOTIFY changed)
     // Ведёт ли сервер журнал с именами, кодами комнат и логинами.
     Q_PROPERTY(bool    logsNames      READ logsNames      NOTIFY changed)
     // Сколько миллисекунд шёл ответ на сам этот запрос; -1 — не спрашивали
@@ -57,6 +60,7 @@ public:
     int chatImageMaxKb() const { return m_chatImageMaxKb; }
     int maxPersonalRooms() const { return m_maxPersonalRooms; }
     int maxScreenShares() const { return m_maxScreenShares; }
+    bool linkPreviews() const { return m_linkPreviews; }
     bool logsNames() const { return m_logsNames; }
     int pingMs() const { return m_pingMs; }
     bool reachable() const { return m_reachable; }
@@ -85,6 +89,7 @@ private:
     int m_chatImageMaxKb = 440;
     int m_maxPersonalRooms = 1;
     int m_maxScreenShares = 1;
+    bool m_linkPreviews = false;
     bool m_logsNames = false;
     int m_pingMs = -1;
     bool m_reachable = false;

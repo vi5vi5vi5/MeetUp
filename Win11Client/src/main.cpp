@@ -15,6 +15,7 @@
 #include "net/LinkController.h"
 #include "net/UpdateChecker.h"
 #include "net/ServerInfoController.h"
+#include "net/LinkPreviews.h"
 #include "SysBridge.h"
 #include "Cli.h"
 #include "HistoryStore.h"
@@ -107,6 +108,8 @@ int main(int argc, char *argv[])
     // Что разрешено на этом сервере: экраны спрашивают у него, какие кнопки
     // рисовать. Спрашивает сам при создании и после смены адреса сервера.
     ServerInfoController server(&api);
+    // Предпросмотр ссылок чата — через сервер (см. net/LinkPreviews.h).
+    LinkPreviews previews(&api);
     // Клиентская проверка пароля обязана совпадать с серверной, иначе форма
     // отвергнет пароль, который сервер принял бы (и наоборот).
     QObject::connect(&server, &ServerInfoController::changed, &auth,
@@ -145,6 +148,7 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("Cli", &cli);
     // Портрет сервера (имя, что разрешено, версия сборки) — Server.
     engine.rootContext()->setContextProperty("Server", &server);
+    engine.rootContext()->setContextProperty("Previews", &previews);
 
     
 

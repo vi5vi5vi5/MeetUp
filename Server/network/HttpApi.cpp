@@ -4,6 +4,7 @@
 #include <QDir>
 #include <QFile>
 #include <QJsonArray>
+#include <QRegularExpression>
 #include <QSaveFile>
 
 #include "config/Log.h"
@@ -13,6 +14,7 @@
 #include "core/RoomRegistry.h"
 #include "network/HttpRequest.h"
 #include "services/AuthService.h"
+#include "services/LinkPreviewService.h"
 #include "services/PersonalRoomService.h"
 
 namespace {
@@ -22,9 +24,9 @@ const QByteArray kSessionCookieName = QByteArrayLiteral("meetup_session");
 HttpApi::HttpApi(std::shared_ptr<AuthService> auth,
                  std::shared_ptr<PersonalRoomService> personalRooms,
                  RoomRegistry *rooms, const QString &dataDir,
-                 const ServerConfig &config)
+                 const ServerConfig &config, LinkPreviewService *previews)
     : m_auth(std::move(auth)), m_personalRooms(std::move(personalRooms)), m_rooms(rooms),
-      m_dataDir(dataDir), m_config(config)
+      m_dataDir(dataDir), m_config(config), m_previews(previews)
 {
 }
 
@@ -38,6 +40,17 @@ bool HttpApi::route(const HttpRequest &req, const Respond &respond)
 
     if (p == QLatin1String("/api/config")) {
         respond(m == "GET" ? handleConfig() : err(405, QStringLiteral("method_not_allowed")));
+        return true;
+    }
+
+    if (p == QLatin1String("/api/unfurl")) {
+        if (m == "GET") handleUnfurl(req, respond);
+        else respond(err(405, QStringLiteral("method_not_allowed")));
+        return true;
+    }
+    if (p.startsWith(QLatin1String("/api/unfurl/image/"))) {
+        respond(m == "GET" ? handleUnfurlImage(p.mid(int(qstrlen("/api/unfurl/image/"))))
+                           : err(405, QStringLiteral("method_not_allowed")));
         return true;
     }
 
@@ -166,10 +179,65 @@ ApiResponse HttpApi::handleConfig() const
         {"max_personal_rooms", m_config.maxPersonalPerUser},
         {"max_screen_shares", m_config.maxScreenShares},
         {"chat_image_max_kb", m_config.chatImageMaxKb},
+        // Есть ли предпросмотр ссылок (GET /api/unfurl). Старый сервер поля
+        // не знает — клиент тогда карточек не рисует и не спрашивает.
+        {"link_previews", m_previews != nullptr && m_previews->enabled()},
     };
     if (!m_config.publicUrl.isEmpty())
         j.insert(QStringLiteral("public_url"), m_config.publicUrl);
     return ApiResponse{200, j, {}};
+}
+
+// ---------- Предпросмотр ссылок ----------
+
+void HttpApi::handleUnfurl(const HttpRequest &req, const Respond &respond)
+{
+    if (m_previews == nullptr || !m_previews->enabled()) {
+        respond(err(404, QStringLiteral("disabled")));
+        return;
+    }
+    const QString url = req.queryItem(QStringLiteral("url"));
+    if (url.isEmpty()) {
+        respond(err(400, QStringLiteral("invalid_url")));
+        return;
+    }
+    m_previews->preview(url, [respond](const LinkPreviewResult &res) {
+        if (!res.ok) {
+            respond(err(statusForError(res.error), res.error));
+            return;
+        }
+        const LinkPreview &p = res.preview;
+        QJsonObject j{
+            {"url", p.url},
+            {"site", p.site},
+            {"title", p.title},
+            {"description", p.description},
+        };
+        // Картинка — со своего адреса, не с чужого: иначе клиент сам пошёл бы
+        // на сайт и выдал ему адрес участника, ради чего всё и затевалось.
+        if (!p.imageId.isEmpty())
+            j.insert(QStringLiteral("image"), QStringLiteral("/api/unfurl/image/") + p.imageId);
+        respond(ApiResponse{200, j, {}});
+    });
+}
+
+ApiResponse HttpApi::handleUnfurlImage(const QString &id)
+{
+    static const QRegularExpression rxId(QStringLiteral("^[0-9a-f]{24}$"));
+    QByteArray data, mime;
+    if (m_previews == nullptr || !rxId.match(id).hasMatch() || !m_previews->image(id, &data, &mime))
+        return err(404, QStringLiteral("no_image"));
+    ApiResponse resp;
+    resp.contentType = mime;
+    resp.rawBody = data;
+    // Ключ — хеш адреса картинки, содержимое под ним не меняется; час — пока
+    // она живёт в кэше сервера.
+    resp.cacheControl = QByteArrayLiteral("public, max-age=3600");
+    // Тип проверен при скачивании (только jpeg/png/gif/webp), но браузер не
+    // должен угадывать его сам: угаданный text/html — это чужая страница на
+    // нашем адресе.
+    resp.headers.append({QByteArrayLiteral("X-Content-Type-Options"), QByteArrayLiteral("nosniff")});
+    return resp;
 }
 
 // ---------- Аккаунты ----------
@@ -748,8 +816,19 @@ int HttpApi::statusForError(const QString &code)
         return 409;
     if (code == QLatin1String("wrong_credentials") || code == QLatin1String("no_session"))
         return 401;
-    if (code == QLatin1String("no_room") || code == QLatin1String("no_alias"))
+    if (code == QLatin1String("no_room") || code == QLatin1String("no_alias")
+        || code == QLatin1String("no_preview") || code == QLatin1String("disabled"))
         return 404;
+    // Предпросмотр ссылок: адрес «не наружу» — запрет, сайт не ответил —
+    // ошибка шлюза, не страница — «не могу обработать», лимит — «занято».
+    if (code == QLatin1String("forbidden_address"))
+        return 403;
+    if (code == QLatin1String("unreachable"))
+        return 502;
+    if (code == QLatin1String("not_html"))
+        return 422;
+    if (code == QLatin1String("busy"))
+        return 503;
     return 400;
 }
 

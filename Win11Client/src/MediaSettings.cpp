@@ -89,6 +89,8 @@ MediaSettings::MediaSettings(QObject* parent) : QObject(parent) {
     m_showSelf = s.value("showSelf", true).toBool();
     m_hideNoVideo = s.value("hideNoVideo", false).toBool();
     m_autoPip = s.value("autoPip", false).toBool();
+    m_linkPreviews = s.value("linkPreviews", true).toBool();
+    m_linkPreviewsE2E = s.value("linkPreviewsE2E", false).toBool();
     // Через normalize — в файле может лежать текст QKeySequence от прежней
     // версии ("Ctrl+D", "Num+5"); что переносится, то переносится, остальное
     // молча очищается и назначается заново.
@@ -292,6 +294,20 @@ void MediaSettings::setScreenAudio(bool on) {
     m_screenAudio = on;
     save("screenAudio", on);
     emit screenAudioChanged();
+}
+
+void MediaSettings::setLinkPreviews(bool on) {
+    if (m_linkPreviews == on) return;
+    m_linkPreviews = on;
+    save("linkPreviews", on);
+    emit linkPreviewsChanged();
+}
+
+void MediaSettings::setLinkPreviewsE2E(bool on) {
+    if (m_linkPreviewsE2E == on) return;
+    m_linkPreviewsE2E = on;
+    save("linkPreviewsE2E", on);
+    emit linkPreviewsE2EChanged();
 }
 
 void MediaSettings::setAutoPip(bool on) {

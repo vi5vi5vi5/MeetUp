@@ -130,6 +130,13 @@ const char *kSample = R"conf(# MeetUp — настройки сервера.
 # Потолок картинки в чате, КБ.
 #image_max_kb = 440
 
+# Предпросмотр ссылок: сервер сам открывает ссылку из чата и показывает
+# участникам заголовок, описание и картинку страницы. Сам — чтобы адреса
+# участников не увидел тот, кто прислал ссылку, и чтобы работало в браузере.
+# Ходит только на публичные адреса, ничего не пишет на диск и в журнал.
+# false — карточек нет, ссылки остаются ссылками.
+#link_previews = true
+
 [log]
 # Что писать в журнал (docker logs):
 #   off     — молчание, включая ошибки
@@ -349,6 +356,9 @@ ServerConfig ServerConfig::load(const QString &dataDir)
     if (const auto v = ini.take("chat", "image_max_kb"))
         cfg.chatImageMaxKb = parseInt(*v, cfg.chatImageMaxKb, 1, 100000,
                                       "chat.image_max_kb", &cfg.warnings);
+    if (const auto v = ini.take("chat", "link_previews"))
+        cfg.chatLinkPreviews = parseBool(*v, cfg.chatLinkPreviews,
+                                         "chat.link_previews", &cfg.warnings);
 
     if (const auto v = ini.take("log", "level")) {
         bool ok = false;

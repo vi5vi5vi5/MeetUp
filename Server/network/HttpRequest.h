@@ -7,15 +7,19 @@
 class QJsonObject;
 
 // Разобранный HTTP-запрос: метод, путь, заголовки, тело.
-// Ровно то, что нужно API и статике; ничего лишнего (query пока не разбираем).
+// Ровно то, что нужно API и статике; ничего лишнего.
 struct HttpRequest
 {
     QByteArray method;                       // "GET", "POST", ...
     QString path;                            // декодированный путь без query: "/api/me"
+    QString query;                           // строка после «?», как пришла (percent-encoded)
     QHash<QByteArray, QByteArray> headers;   // имена приведены к нижнему регистру
     QByteArray body;
 
     QByteArray header(const QByteArray &nameLower) const { return headers.value(nameLower); }
+
+    // Параметр из строки запроса, раскодированный; пусто — нет такого.
+    QString queryItem(const QString &name) const;
 
     // Значение куки по имени из заголовка "Cookie: a=1; b=2".
     QByteArray cookie(const QByteArray &name) const;

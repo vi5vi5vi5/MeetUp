@@ -159,6 +159,33 @@
     cursor: zoom-in; object-fit: contain;
   }
   .chat-img-stub { opacity: .75; font-style: italic; }
+
+  /* ссылки в чате и их предпросмотр */
+  .chat-link { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+  .chat-msg:not(.self) .chat-link { color: var(--accent-ink); }
+  .chat-preview {
+    display: flex; flex-direction: column; width: min(82%, 320px); margin-top: 3px;
+    border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden;
+    background: var(--surface-2); color: var(--text); text-decoration: none;
+    transition: var(--transition);
+  }
+  .chat-preview:hover { border-color: var(--border-strong); background: var(--surface-3); }
+  /* Место под картинку — сразу, по пропорции og:image (1200×630): пузырь не
+     прыгает, когда она приезжает. */
+  .chat-preview-img { display: block; aspect-ratio: 1200 / 630; background: var(--surface-3); }
+  .chat-preview-img img { display: block; width: 100%; height: 100%; object-fit: cover; }
+  .chat-preview-body { display: flex; flex-direction: column; gap: 3px; padding: 9px 12px 11px; min-width: 0; }
+  .chat-preview-site {
+    display: inline-flex; align-items: center; gap: 6px; min-width: 0;
+    font-size: var(--text-2xs); font-weight: 600; color: var(--text-faint);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .chat-preview-title, .chat-preview-desc {
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden; overflow-wrap: anywhere;
+  }
+  .chat-preview-title { font-size: var(--text-sm); font-weight: 700; line-height: var(--leading-snug); }
+  .chat-preview-desc { font-size: var(--text-xs); color: var(--text-muted); line-height: var(--leading-snug); }
   .lightbox {
     position: fixed; inset: 0; z-index: 120; display: grid; place-items: center;
     padding: 24px; cursor: zoom-out;
@@ -334,6 +361,8 @@
     font-weight: 600; cursor: pointer; text-align: left; transition: var(--transition);
   }
   .set-toggle:hover { border-color: var(--border-strong); }
+  .set-toggle:disabled { opacity: .62; cursor: not-allowed; }
+  .set-toggle:disabled:hover { border-color: var(--border); }
   .set-toggle .knob {
     margin-left: auto; flex: none; width: 38px; height: 22px; border-radius: var(--radius-pill);
     background: var(--surface-3); border: 1px solid var(--border); position: relative;
@@ -701,6 +730,10 @@
                   // Интерфейс
                   mirror: true, perPage: "auto", hideNoVideo: false, showSelf: true,
                   uiSounds: true,
+                  // Предпросмотр ссылок в чате; в комнате с E2E — отдельное
+                  // согласие (сервер узнал бы адрес ссылки, которого иначе
+                  // не видит).
+                  linkPreviews: true, linkPreviewsE2E: false,
                   // Режим разработчика: показывает служебное — диагностику и
                   // сброс буфера. Обычной встрече это не нужно, а глазами по
                   // нему всё равно ходят и пытаются понять, зачем он тут.
@@ -712,7 +745,8 @@
     for (const k of ["qCam", "qScreen", "qAudio"])
       if (!Q_LEVELS.includes(s[k])) s[k] = "med";
     if (!PER_PAGE.includes(String(s.perPage))) s.perPage = "auto";
-    for (const k of ["noise", "echo", "agc", "mirror", "hideNoVideo", "showSelf", "uiSounds", "devMode"])
+    for (const k of ["noise", "echo", "agc", "mirror", "hideNoVideo", "showSelf", "uiSounds", "devMode",
+                     "linkPreviews", "linkPreviewsE2E"])
       s[k] = !!s[k];
     return s;
   }
@@ -848,10 +882,10 @@
   // десять раз в секунду, и тумблеры в настройках переставали нажиматься.
 
   // Тумблер: подпись, пояснение и переключатель справа.
-  function Toggle({ on, label, sub, onToggle }) {
+  function Toggle({ on, label, sub, onToggle, disabled }) {
     return (
       <button type="button" className={"set-toggle" + (on ? " on" : "")}
-              role="switch" aria-checked={on} onClick={onToggle}>
+              role="switch" aria-checked={on} onClick={onToggle} disabled={!!disabled}>
         <span style={{ minWidth: 0 }}>
           {label}
           {sub && <span className="sub">{sub}</span>}
@@ -862,6 +896,118 @@
   }
 
   const KV = ({ k, v }) => <div className="set-kv"><b>{k}</b><span>{v}</span></div>;
+
+  // ================= Ссылки в чате =================
+  // Адреса в тексте — ссылками, как в десктопе: те же правила, что отрезают
+  // от адреса хвостовую пунктуацию («example.com/a.» — конец предложения).
+  // React сам экранирует текст, поэтому разметка из чужого сообщения
+  // разметкой не станет.
+  const URL_RX = /(?:https?:\/\/|www\.)[^\s<>"']+/gi;
+  function trimUrl(m) {
+    let url = m;
+    while (url.length > 0) {
+      const last = url.charAt(url.length - 1);
+      if (".,;:!?»".indexOf(last) >= 0 || (last === ")" && url.indexOf("(") < 0)) {
+        url = url.slice(0, -1);
+        continue;
+      }
+      break;
+    }
+    return url;
+  }
+  const hrefOf = (url) => (/^www\./i.test(url) ? "https://" + url : url);
+
+  // Первая ссылка сообщения — под предпросмотр (одна карточка на реплику).
+  function firstUrl(text) {
+    for (const m of String(text || "").matchAll(URL_RX)) {
+      const url = trimUrl(m[0]);
+      if (url) return hrefOf(url);
+    }
+    return "";
+  }
+
+  function Linkified({ text }) {
+    const s = String(text || "");
+    const out = [];
+    let last = 0;
+    for (const m of s.matchAll(URL_RX)) {
+      const url = trimUrl(m[0]);
+      if (!url) continue;
+      if (m.index > last) out.push(s.slice(last, m.index));
+      out.push(<a key={m.index} className="chat-link" href={hrefOf(url)}
+                  target="_blank" rel="noopener noreferrer nofollow">{url}</a>);
+      last = m.index + url.length;
+    }
+    if (last < s.length) out.push(s.slice(last));
+    return <>{out}</>;
+  }
+
+  // Предпросмотр делает сервер (GET /api/unfurl): браузер чужую страницу не
+  // прочтёт (CORS), а ходи по ссылке каждый участник сам — тот, кто её прислал,
+  // узнал бы все их адреса. Картинка — тоже с нашего сервера.
+  //
+  // Часть после «#» на сервер не уходит: там бывают ключи (#k= у приглашения с
+  // ключом E2E, ключ тома Ferry), а странице она не нужна.
+  //
+  // Кэш — на модуле, не в компоненте: одну ссылку видят сразу несколько
+  // сообщений и перерисовки, а спросить сервер нужно один раз.
+  const previewCache = new Map();       // адрес без # -> {state, ...}
+  const previewWaiters = new Map();     // адрес без # -> Set(setState)
+  function previewKey(url) {
+    try { const u = new URL(url); u.hash = ""; return u.href; } catch (e) { return ""; }
+  }
+  function loadPreview(key) {
+    if (previewCache.has(key)) return previewCache.get(key);
+    previewCache.set(key, { state: "loading" });
+    fetch("/api/unfurl?url=" + encodeURIComponent(key), { credentials: "same-origin" })
+      .then(r => (r.ok ? r.json() : (r.status === 503 ? "busy" : null)))
+      .catch(() => null)
+      .then(j => {
+        const v = j && typeof j === "object" && (j.title || j.image)
+          ? { state: "ready", site: String(j.site || ""), title: String(j.title || ""),
+              description: String(j.description || ""),
+              // только с нашего сервера: путь, а не чужой адрес
+              image: typeof j.image === "string" && j.image.startsWith("/") ? j.image : "" }
+          : { state: "none" };
+        previewCache.set(key, v);
+        // «Занято» — временно: через минуту сервер ответит иначе.
+        if (j === "busy") setTimeout(() => previewCache.delete(key), 60000);
+        const waiters = previewWaiters.get(key);
+        previewWaiters.delete(key);
+        if (waiters) waiters.forEach(fn => fn(v));
+      });
+    return previewCache.get(key);
+  }
+
+  function LinkPreview({ url }) {
+    const key = previewKey(url);
+    const [info, setInfo] = useState(() => (key ? loadPreview(key) : { state: "none" }));
+    const [imgOk, setImgOk] = useState(true);
+    useEffect(() => {
+      if (!key) { setInfo({ state: "none" }); return; }
+      const cur = loadPreview(key);
+      setInfo(cur);
+      if (cur.state !== "loading") return;
+      if (!previewWaiters.has(key)) previewWaiters.set(key, new Set());
+      const set = previewWaiters.get(key);
+      set.add(setInfo);
+      return () => set.delete(setInfo);
+    }, [key]);
+    if (info.state !== "ready") return null;
+    return (
+      <a className="chat-preview" href={url} target="_blank" rel="noopener noreferrer nofollow">
+        {info.image && imgOk &&
+          <span className="chat-preview-img">
+            <img src={info.image} alt="" loading="lazy" onError={() => setImgOk(false)} />
+          </span>}
+        <span className="chat-preview-body">
+          <span className="chat-preview-site"><Icon name="link" size={11} />{info.site}</span>
+          {info.title && <span className="chat-preview-title">{info.title}</span>}
+          {info.description && <span className="chat-preview-desc">{info.description}</span>}
+        </span>
+      </a>
+    );
+  }
 
   // Плитка показателя (как в десктопной «Диагностике»): подпись, крупное
   // значение с единицей и пояснение мелким. idle — показатель не про эту
@@ -1043,6 +1189,8 @@
     const [showSelf, setShowSelf] = useState(M.pref.showSelf);
     const [devMode, setDevMode] = useState(M.pref.devMode);
     const [uiSounds, setUiSounds] = useState(M.pref.uiSounds);
+    const [linkPreviews, setLinkPreviews] = useState(M.pref.linkPreviews);
+    const [linkPreviewsE2E, setLinkPreviewsE2E] = useState(M.pref.linkPreviewsE2E);
     // Живые показатели — тикают только пока открыт раздел «Диагностика».
     const [diag, setDiag] = useState(null);
     // Что браузер умеет декодировать — узнаём один раз, когда открыли
@@ -1113,6 +1261,9 @@
     // вход и главную, — значит спросить должен и этот экран.
     const [srvCfg, setSrvCfg] = useState(() => MeetUp.serverConfigNow());
     useEffect(() => { MeetUp.serverConfig().then(setSrvCfg); }, []);
+    // Карточки ссылок: сервер умеет, человек не выключил, и комната не под
+    // E2E (или человек разрешил и там — см. раздел «Интерфейс»).
+    const previewsOn = !!srvCfg.link_previews && linkPreviews && (!e2eOn || linkPreviewsE2E);
     // Отклик меряем, когда человек открыл «О программе», и каждый раз заново:
     // число из прошлого захода — это уже не про сейчас.
     const [srvPing, setSrvPing] = useState(-1);
@@ -2716,10 +2867,13 @@
           : m.imageDropped
             ? <span className="chat-img-stub">Изображение больше недоступно</span>
             : null;
-      if (!img) return m.text;
+      // Зашифрованное чужим ключом — подпись-заглушка, а не текст: ссылок в
+      // ней нет и быть не может.
+      const body = m.locked ? m.text : <Linkified text={m.text} />;
+      if (!img) return body;
       return <>
         {img}
-        {m.text ? <span style={{ display: "block", marginTop: 6 }}>{m.text}</span> : null}
+        {m.text ? <span style={{ display: "block", marginTop: 6 }}>{body}</span> : null}
       </>;
     }
 
@@ -3010,6 +3164,21 @@
           Закреплённого и того, кто ведёт демонстрацию, эти настройки не
           прячут никогда — иначе сцена осталась бы без хозяина.
         </p>
+
+        <Field label="Ссылки в чате">
+          <div style={{ display: "grid", gap: 8 }}>
+            <Toggle on={linkPreviews && !!srvCfg.link_previews} label="Предпросмотр ссылок"
+                    disabled={!srvCfg.link_previews}
+                    sub={srvCfg.link_previews
+                      ? "Заголовок, описание и картинка страницы. Страницу открывает сервер MeetUp, а не ваш браузер — сайт не узнает ваш адрес"
+                      : "Этот сервер предпросмотр не делает — ссылки остаются ссылками"}
+                    onToggle={() => { const v = !linkPreviews; setLinkPreviews(v); setPref("linkPreviews", v); }} />
+            <Toggle on={linkPreviewsE2E} label="…и в зашифрованных комнатах"
+                    disabled={!srvCfg.link_previews || !linkPreviews}
+                    sub="Серверу придётся узнать адрес ссылки, а переписку под E2E он иначе не видит. Ключи из ссылок (всё после «#») не уходят никогда"
+                    onToggle={() => { const v = !linkPreviewsE2E; setLinkPreviewsE2E(v); setPref("linkPreviewsE2E", v); }} />
+          </div>
+        </Field>
 
         <Field label="Звуки">
           <Toggle on={uiSounds} label="Звуки интерфейса"
@@ -3480,6 +3649,8 @@
                            title={m.time}>
                         {msgContent(m)}
                       </div>
+                      {previewsOn && !m.locked && firstUrl(m.text) &&
+                        <LinkPreview url={firstUrl(m.text)} />}
                     </div>
                   ))}
                 </div>

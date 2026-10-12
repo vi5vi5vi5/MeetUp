@@ -82,4 +82,33 @@ Column {
         checked: AV.autoPip
         onToggled: function (v) { AV.autoPip = v }
     }
+
+    Rectangle { width: parent.width; height: 1; color: Theme.border }
+
+    // Предпросмотр делает сервер (см. LinkPreviews.h); здесь — только
+    // согласие человека. Сервер, который этого не умеет, тумблер не включит.
+    Column {
+        width: parent.width
+        spacing: 14
+
+        SettingSwitch {
+            label: "Предпросмотр ссылок в чате"
+            description: Server.linkPreviews
+                ? "Под сообщением со ссылкой — заголовок, описание и картинка страницы. "
+                  + "Страницу открывает сервер MeetUp, а не ваш компьютер: сайт не узнает ваш адрес."
+                : "Этот сервер предпросмотр не делает — ссылки в чате остаются ссылками."
+            checked: AV.linkPreviews && Server.linkPreviews
+            enabled: Server.linkPreviews
+            onToggled: function (v) { AV.linkPreviews = v }
+        }
+        SettingSwitch {
+            label: "…и в зашифрованных комнатах"
+            description: "Чтобы показать карточку, сервер должен узнать адрес ссылки, а в комнате "
+                       + "со сквозным шифрованием переписку он иначе не видит. Поэтому там по "
+                       + "умолчанию выключено. Ключи из ссылок (всё после «#») не уходят никогда."
+            checked: AV.linkPreviewsE2E
+            enabled: Server.linkPreviews && AV.linkPreviews
+            onToggled: function (v) { AV.linkPreviewsE2E = v }
+        }
+    }
 }
