@@ -88,6 +88,7 @@ MediaSettings::MediaSettings(QObject* parent) : QObject(parent) {
     if (m_perPage != 6 && m_perPage != 9 && m_perPage != 12) m_perPage = 9;
     m_showSelf = s.value("showSelf", true).toBool();
     m_hideNoVideo = s.value("hideNoVideo", false).toBool();
+    m_autoPip = s.value("autoPip", false).toBool();
     // Через normalize — в файле может лежать текст QKeySequence от прежней
     // версии ("Ctrl+D", "Num+5"); что переносится, то переносится, остальное
     // молча очищается и назначается заново.
@@ -291,6 +292,13 @@ void MediaSettings::setScreenAudio(bool on) {
     m_screenAudio = on;
     save("screenAudio", on);
     emit screenAudioChanged();
+}
+
+void MediaSettings::setAutoPip(bool on) {
+    if (m_autoPip == on) return;
+    m_autoPip = on;
+    save("autoPip", on);
+    emit autoPipChanged();
 }
 
 void MediaSettings::setMirrorSelf(bool on) {

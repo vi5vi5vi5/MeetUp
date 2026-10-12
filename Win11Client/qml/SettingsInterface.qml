@@ -69,4 +69,17 @@ Column {
             onToggled: function (v) { AV.hideNoVideo = v }
         }
     }
+
+    Rectangle { width: parent.width; height: 1; color: Theme.border }
+
+    // «Картинка в картинке» руками выносится кнопкой на плитке или на
+    // демонстрации; здесь — только то, что окно умеет делать само.
+    SettingSwitch {
+        width: parent.width
+        label: "Выносить демонстрацию при сворачивании"
+        description: "Свернули MeetUp, пока кто-то показывает экран, — показ останется "
+                   + "поверх всех окон в маленьком окне. Развернули — вернулся на место."
+        checked: AV.autoPip
+        onToggled: function (v) { AV.autoPip = v }
+    }
 }

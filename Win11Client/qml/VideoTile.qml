@@ -24,15 +24,25 @@ Item {
     property bool locked: false
     // Мы убавили его до нуля личной ручкой громкости (см. PeerVolumePopup).
     property bool mutedByMe: false
+    // Камера участника вынесена в отдельное окно («картинка в картинке»).
+    // Привязка плитки к кадрам при этом не трогается — кадры просто идут в
+    // окно (Media.attachPip), а здесь вместо застывшего кадра заглушка.
+    property bool poppedOut: false
 
     signal clicked()             // клик по плитке — закрепить/отпустить
     // Правая кнопка — личная громкость этого участника. Точка в координатах
     // сцены: карточку показывают у курсора, а плитка своего места на экране
     // не знает.
     signal volumeRequested(point scenePos)
+    signal popOutRequested()     // вынести в отдельное окно
+    signal popInRequested()      // вернуть из окна сюда
 
-    // Видео рисуем, когда камера включена и кадры реально приходят.
-    readonly property bool videoShown: cam && live
+    // Видео рисуем, когда камера включена и кадры реально приходят — и не
+    // вынесены в отдельное окно.
+    readonly property bool videoShown: cam && live && !poppedOut
+    // Выносить есть что: чужая включённая камера. Своё лицо в окне поверх
+    // всех никому не нужно, а пустую аватарку — тем более.
+    readonly property bool canPopOut: !isSelf && pid && cam && !poppedOut && width >= 140
 
     readonly property string _initials: {
         var parts = String(name).trim().split(/\s+/).filter(function (s) { return s.length > 0 })
@@ -57,6 +67,7 @@ Item {
         // Faint watermark initials (only while there is neither video nor photo).
         Text {
             visible: root.cam && !root.videoShown && root.avatar === "" && !root.locked
+                     && !root.poppedOut
             anchors.centerIn: parent
             text: root._initials
             color: Qt.rgba(1, 1, 1, 0.10)
@@ -70,6 +81,7 @@ Item {
         // аватарку разом): замок и инициалы в одной точке спорят друг с другом.
         Avatar {
             visible: !root.videoShown && !(root.cam && root.avatar === "") && !root.locked
+                     && !root.poppedOut
             anchors.centerIn: parent
             name: root.name
             source: root.avatar
@@ -118,8 +130,16 @@ Item {
         // нечего, а застывший последний кадр был бы прямым враньём. Рамка и
         // чип с именем остаются сверху — кто это, знать по-прежнему полезно.
         LockPlate {
-            visible: root.locked
+            visible: root.locked && !root.poppedOut
             anchors.fill: parent
+        }
+
+        // Видео в отдельном окне — сказать об этом и дать вернуть.
+        PoppedPlate {
+            visible: root.poppedOut
+            anchors.fill: parent
+            title: "Видео в отдельном окне"
+            onReturnRequested: root.popInRequested()
         }
 
         // Рамка и подсветка «говорит» — поверх видео, иначе их не видно.
@@ -219,6 +239,21 @@ Item {
                 }
             }
         }
+
+        // «Вынести в отдельное окно» — по наведению, в углу плитки. Нажатие
+        // забирает кнопка (MouseArea), до закрепления плитки оно не доходит.
+        PipButton {
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: 8
+            size: 30
+            icon: "pip"
+            tip: "Открыть в отдельном окне"
+            opacity: root.canPopOut && tileHover.hovered ? 1 : 0
+            visible: opacity > 0.01
+            Behavior on opacity { NumberAnimation { duration: Theme.durFast } }
+            onClicked: root.popOutRequested()
+        }
     }
 
     // Номер привязки и id запоминаем при рождении: Component.onDestruction в
@@ -249,7 +284,7 @@ Item {
         else Media.detach(_pid, _tok)
     }
 
-    HoverHandler { cursorShape: Qt.PointingHandCursor }
+    HoverHandler { id: tileHover; cursorShape: Qt.PointingHandCursor }
     // gesturePolicy обязателен. По умолчанию TapHandler берёт ПАССИВНЫЙ захват:
     // он продолжает слышать отпускание даже после того, как нажатие съел кто-то
     // сверху. Из-за этого клики по модалке настроек доходили до плитки под ней,

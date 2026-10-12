@@ -18,6 +18,10 @@ Item {
     // Поток ведущего не открывается нашим ключом (см. LockPlate).
     property bool locked: false
     property bool expanded: false   // сцена развёрнута на весь экран
+    // Эта демонстрация вынесена в отдельное окно («картинка в картинке»):
+    // кадры идут туда, здесь — заглушка с возвратом. Привязка сцены к кадрам
+    // при этом не трогается (см. VideoEngine::attachPip).
+    property bool poppedOut: false
 
     // Какая это демонстрация из скольких. Одна — ни стрелок, ни счётчика:
     // экран выглядит ровно как раньше.
@@ -50,6 +54,8 @@ Item {
     // Листание демонстраций. Сцена не знает, кто ведущие, — просит экран.
     signal prevRequested()
     signal nextRequested()
+    signal popOutRequested()
+    signal popInRequested()
 
     // ---- Полноэкранный показ: интерфейс уходит вместе с курсором ----
     // В развёрнутом показе смотрят чужой экран, а не наши кнопки: единственный
@@ -108,7 +114,7 @@ Item {
         Item {
             id: mediaBox
             anchors.fill: parent
-            visible: root.live
+            visible: root.live && !root.poppedOut
             layer.enabled: true
             layer.effect: MultiEffect {
                 maskEnabled: true
@@ -145,16 +151,25 @@ Item {
         // гасла — и вместо причины человек читал «Демонстрация начинается…»,
         // хотя она уже идёт и начаться для него не может.
         LockPlate {
-            visible: root.locked
+            visible: root.locked && !root.poppedOut
             anchors.fill: parent
             actionable: true
             onKeyRequested: root.keyRequested()
         }
 
+        PoppedPlate {
+            visible: root.poppedOut
+            anchors.fill: parent
+            title: "Демонстрация открыта в отдельном окне"
+            hint: "Окно поверх всех: двигайте и растягивайте его как удобно, "
+                + "двойной щелчок по нему — во весь экран, хоть на втором мониторе."
+            onReturnRequested: root.popInRequested()
+        }
+
         // Пока кадров нет: ведущий уже закреплён, но опорный кадр ещё в пути.
         // Под заслонкой это сообщение бессмысленно — там ждать нечего.
         Text {
-            visible: !root.live && !root.locked
+            visible: !root.live && !root.locked && !root.poppedOut
             anchors.centerIn: parent
             text: "Демонстрация начинается…"
             color: Theme.textMuted
@@ -178,7 +193,7 @@ Item {
             // visible, а не только opacity: прозрачная кнопка всё ещё ловила бы
             // мышь и подменяла курсор, который мы только что погасили.
             opacity: root.chromeShown ? 1 : 0
-            visible: opacity > 0
+            visible: opacity > 0 && !root.poppedOut
             Behavior on opacity { NumberAnimation { duration: Theme.durMed } }
         }
 
@@ -186,9 +201,48 @@ Item {
         // замечают, глядя на картинку, а не в настройки. Только в режиме
         // разработчика (обычной встрече хватает авто-сброса) и только у ЧУЖОЙ
         // демонстрации — свою мы не принимаем, сбрасывать нечего.
+        // «Вынести в отдельное окно» — чужую демонстрацию: смотреть её поверх
+        // своей работы (или на втором мониторе во весь экран), не держа
+        // MeetUp на переднем плане. Свою выносить незачем — её видно и так.
+        IconButton {
+            id: popBtn
+            anchors.right: expandBtn.left
+            anchors.top: parent.top
+            anchors.topMargin: 12
+            anchors.rightMargin: 8
+            size: "sm"
+            icon: "pip"
+            variant: "neutral"
+            onClicked: root.popOutRequested()
+
+            opacity: root.chromeShown ? 1 : 0
+            visible: !root.isSelf && !root.poppedOut && opacity > 0
+            Behavior on opacity { NumberAnimation { duration: Theme.durMed } }
+
+            HoverHandler { id: popHover }
+            ToolTip {
+                visible: popHover.hovered
+                delay: 400
+                x: (popBtn.width - width) / 2
+                y: popBtn.height + 6
+                contentItem: Text {
+                    text: "Открыть в отдельном окне"
+                    color: Theme.text
+                    font.family: Theme.uiFont
+                    font.pixelSize: Theme.textXs
+                }
+                background: Rectangle {
+                    radius: Theme.radiusXs
+                    color: Theme.surface3
+                    border.width: 1
+                    border.color: Theme.borderStrong
+                }
+            }
+        }
+
         IconButton {
             id: resetBtn
-            anchors.right: expandBtn.left
+            anchors.right: popBtn.visible ? popBtn.left : expandBtn.left
             anchors.top: parent.top
             anchors.topMargin: 12
             anchors.rightMargin: 8
@@ -198,7 +252,7 @@ Item {
             onClicked: root.resetRequested()
 
             opacity: root.chromeShown ? 1 : 0
-            visible: !root.isSelf && AV.devMode && opacity > 0
+            visible: !root.isSelf && AV.devMode && !root.poppedOut && opacity > 0
             Behavior on opacity { NumberAnimation { duration: Theme.durMed } }
 
             // Значок «пульс» сам за себя не говорит — подсказка обязательна.
@@ -224,7 +278,7 @@ Item {
         }
         TapHandler {
             gesturePolicy: TapHandler.ReleaseWithinBounds
-            onDoubleTapped: root.expandRequested()
+            onDoubleTapped: if (!root.poppedOut) root.expandRequested()
             // Щелчок без движения — тоже признак жизни: интерфейс должен
             // вернуться, даже если мышь при этом не сдвинулась ни на пиксель.
             onSingleTapped: root.wake()
@@ -244,7 +298,8 @@ Item {
             anchors.topMargin: 8
             // Своя демонстрация звучит у нас и так — регулировать нечего.
             // Чужая без звука тоже: ручка, которая ничем не управляет, врёт.
-            visible: !root.isSelf && Audio.screenAudioLive && opacity > 0
+            // Вынесенная в окно — ручка живёт там, рядом с картинкой.
+            visible: !root.isSelf && Audio.screenAudioLive && !root.poppedOut && opacity > 0
             opacity: root.chromeShown ? 1 : 0
             Behavior on opacity { NumberAnimation { duration: Theme.durMed } }
 

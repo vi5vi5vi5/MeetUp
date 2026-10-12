@@ -167,6 +167,70 @@ Item {
         peerVolume.popup(id, who, root.mapFromItem(null, scenePos))
     }
 
+    // ---- Картинка в картинке ----
+    // Вынесенные в отдельные окна камеры и демонстрации. Два представления
+    // одного и того же: ListModel — для Instantiator (добавление окна не
+    // пересоздаёт уже открытые), pipKeys — для привязок плиток и сцен
+    // («вынесен ли вот этот»): массив переприсваивается целиком, и привязки
+    // пересчитываются сами.
+    ListModel { id: pipModel }
+    property var pipKeys: []
+
+    function pipKey(kind, pid) { return kind + ":" + pid }
+    function isPopped(kind, pid) { return root.pipKeys.indexOf(root.pipKey(kind, pid)) >= 0 }
+
+    function personById(id) {
+        var a = Conf.participants
+        for (var i = 0; i < a.length; ++i)
+            if (a[i].id === id) return a[i]
+        return null
+    }
+
+    // auto — окно открыл не человек, а сворачивание главного окна (AV.autoPip):
+    // такое закрывается само, когда MeetUp развернули обратно.
+    function pipOpen(kind, pid, auto) {
+        if (!pid || root.isPopped(kind, pid)) return
+        // Полноэкранный показ демонстрации, которую выносят, остался бы
+        // во весь экран с заглушкой вместо картинки.
+        if (kind === "screen" && root.theater) root.toggleTheater()
+        // Сначала окно, потом пометка: окно берёт кадры приоритетной
+        // привязкой, и плитка в этот момент уже никому не мешает.
+        pipModel.append({ pkey: root.pipKey(kind, pid), pkind: kind, ppid: pid,
+                          pauto: !!auto, pcascade: pipModel.count })
+        root.pipKeys = root.pipKeys.concat([root.pipKey(kind, pid)])
+    }
+    function pipClose(kind, pid) {
+        var key = root.pipKey(kind, pid)
+        root.pipKeys = root.pipKeys.filter(function (k) { return k !== key })
+        for (var i = 0; i < pipModel.count; ++i) {
+            if (pipModel.get(i).pkey === key) { pipModel.remove(i); return }
+        }
+    }
+    // Окно, которое человек подвинул или развернул, — уже его: развернув
+    // MeetUp, он его не потеряет, даже если открылось оно само.
+    function pipAdopt(key) {
+        for (var i = 0; i < pipModel.count; ++i)
+            if (pipModel.get(i).pkey === key) pipModel.setProperty(i, "pauto", false)
+    }
+    function pipCloseAuto() {
+        for (var i = pipModel.count - 1; i >= 0; --i) {
+            var e = pipModel.get(i)
+            if (e.pauto) root.pipClose(e.pkind, e.ppid)
+        }
+    }
+    // Чужая демонстрация на сцене — та, что вынесется сама при сворачивании.
+    function autoPipScreen() {
+        if (!AV.autoPip || !root.inRoom || !root.screenActive || root.stageSelf) return
+        root.pipOpen("screen", root.stageSid, true)
+    }
+
+    readonly property bool _minimized: Window.window
+        ? Window.window.visibility === Window.Minimized : false
+    on_MinimizedChanged: {
+        if (_minimized) root.autoPipScreen()
+        else root.pipCloseAuto()
+    }
+
     // Режим сцены: демонстрация экрана либо закреплённый участник. Демонстрация
     // старше — пока она идёт, крупно показываем именно её (как у веба).
     readonly property bool stageMode: screenActive || pinnedId !== null
@@ -256,6 +320,8 @@ Item {
                 // или кто-то начал показывать — смотреть он хочет на это, а не
                 // на страницу, где остался стоять.
                 root.stagePage = root.screenCount - 1
+                // Окно свёрнуто — показ начался мимо глаз: выносим сразу.
+                if (root._minimized) root.autoPipScreen()
             } else if (root.theater) {
                 root.toggleTheater()
             }
@@ -827,6 +893,9 @@ Item {
                     onVolumeRequested: function (pos) {
                         root.openPeerVolume(modelData.id, modelData.name, pos)
                     }
+                    poppedOut: root.isPopped("cam", modelData.id)
+                    onPopOutRequested: root.pipOpen("cam", modelData.id, false)
+                    onPopInRequested: root.pipClose("cam", modelData.id)
                 }
             }
         }
@@ -890,6 +959,9 @@ Item {
                             onVolumeRequested: function (pos) {
                                 root.openPeerVolume(modelData.id, modelData.name, pos)
                             }
+                            poppedOut: root.isPopped("cam", modelData.id)
+                            onPopOutRequested: root.pipOpen("cam", modelData.id, false)
+                            onPopInRequested: root.pipClose("cam", modelData.id)
                         }
                     }
                 }
@@ -925,6 +997,9 @@ Item {
                         Media.flushReceive()
                         root.notify("Буфер сброшен — ждём опорный кадр.")
                     }
+                    poppedOut: root.isPopped("screen", root.stageSid)
+                    onPopOutRequested: root.pipOpen("screen", root.stageSid, false)
+                    onPopInRequested: root.pipClose("screen", root.stageSid)
                 }
             }
 
@@ -944,6 +1019,9 @@ Item {
                     onVolumeRequested: function (pos) {
                         root.openPeerVolume(modelData.id, modelData.name, pos)
                     }
+                    poppedOut: root.isPopped("cam", modelData.id)
+                    onPopOutRequested: root.pipOpen("cam", modelData.id, false)
+                    onPopInRequested: root.pipClose("cam", modelData.id)
                 }
             }
         }
@@ -1287,7 +1365,58 @@ Item {
     }
 
     // Личная громкость участника — открывается правой кнопкой по его плитке.
-    PeerVolumePopup { id: peerVolume }
+    PeerVolumePopup {
+        id: peerVolume
+        canPopOut: {
+            var p = root.personById(peerVolume.pid)
+            return p !== null && p.cam && !root.isPopped("cam", peerVolume.pid)
+        }
+        onPopOutRequested: function (id) { root.pipOpen("cam", id, false) }
+    }
+
+    // Окна «картинка в картинке». Instantiator, а не Repeater: окна — не
+    // элементы сцены, а самостоятельные Window. Уходим из звонка — экран
+    // разрушается, и окна закрываются вместе с ним.
+    Instantiator {
+        model: pipModel
+        delegate: PipWindow {
+            required property string pkey
+            required property string pkind
+            required property var ppid
+            required property bool pauto
+            required property int pcascade
+            readonly property var person: root.personById(ppid)
+
+            kind: pkind
+            pid: ppid
+            cascade: pcascade
+            hostWindow: root.Window.window
+            name: person ? person.name : ""
+            avatar: person ? (person.avatarUrl || "") : ""
+            cam: person ? person.cam : false
+            mic: person ? person.mic : true
+            speaking: Conf.speakingIds.indexOf(ppid) >= 0
+            // Демонстрация кончилась, человек вышел — окно прощается и
+            // закрывается само (см. PipWindow.ended).
+            ended: pkind === "screen" ? root.screenIds.indexOf(ppid) < 0 : person === null
+            micOn: root.micOn
+            soundOn: !Audio.outputMuted
+
+            onReturnRequested: root.pipClose(pkind, ppid)
+            onTouched: root.pipAdopt(pkey)
+            onMicToggleRequested: root.toggleMic()
+            onSoundToggleRequested: root.toggleSound()
+            onShowMainRequested: PipHelper.bringToFront(root.Window.window)
+            onKeyRequested: {
+                PipHelper.bringToFront(root.Window.window)
+                root.openCrypto()
+            }
+            onResetRequested: {
+                Media.flushReceive()
+                root.notify("Буфер сброшен — ждём опорный кадр.")
+            }
+        }
+    }
 
     // Поповер «поделиться ссылкой» — под кнопкой копирования в шапке, у
     // правого края сцены (в шапке она крайняя справа перед темой).

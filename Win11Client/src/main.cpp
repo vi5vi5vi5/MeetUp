@@ -21,6 +21,7 @@
 #include "MediaSettings.h"
 #include "ScreenSources.h"
 #include "GlobalHotkeys.h"
+#include "PipHelper.h"
 
 #include "media/AudioEngine.h"
 #include "media/VideoEngine.h"
@@ -91,6 +92,9 @@ int main(int argc, char *argv[])
     MediaSettings av;                      // устройства/громкость/качество (QSettings)
     ScreenSources screens;                 // мониторы и окна для демонстрации
     GlobalHotkeys hotkeys(&av);            // системные бинды (работают вне фокуса)
+    // Нативная обвязка окон «картинка в картинке». Объявлена до движка QML:
+    // окна живут в нём и должны уйти раньше хелпера.
+    PipHelper pip;
     MediaStats stats(&conf);               // счётчики для раздела «Диагностика»
     AudioEngine audio(&conf, &av, &screens, &stats, &cipher);
     // audio даёт часы звука (синхронизация губ) и «замки» голосовой полосы
@@ -131,6 +135,7 @@ int main(int argc, char *argv[])
     // Числа для раздела «Диагностика» — Stats.
     engine.rootContext()->setContextProperty("Stats", &stats);
     engine.rootContext()->setContextProperty("Hotkeys", &hotkeys);
+    engine.rootContext()->setContextProperty("PipHelper", &pip);
     // Сквозное шифрование: фраза-ключ, ссылка с ключом — Crypto.
     engine.rootContext()->setContextProperty("Crypto", &crypto);
     // Звуки интерфейса — Sfx.play("toggle-on") и далее по каталогу.

@@ -19,14 +19,18 @@ Item {
     property bool live: false
     // Поток участника не открывается нашим ключом (см. LockPlate).
     property bool locked: false
+    // Камера вынесена в отдельное окно (см. VideoTile.poppedOut).
+    property bool poppedOut: false
 
     signal clicked()
     // Правая кнопка — личная громкость участника (см. VideoTile).
     signal volumeRequested(point scenePos)
     // «Ввести ключ» с заслонки — настройки открывает экран (см. ScreenStage).
     signal keyRequested()
+    signal popOutRequested()
+    signal popInRequested()
 
-    readonly property bool videoShown: cam && live
+    readonly property bool videoShown: cam && live && !poppedOut
 
     Rectangle {
         id: box
@@ -72,7 +76,7 @@ Item {
         Avatar {
             // Под заслонкой аватарки нет (как у веба): замок и лицо в одной
             // точке спорят друг с другом, а заслонка и так полупрозрачная.
-            visible: !root.videoShown && root.avatar !== "" && !root.locked
+            visible: !root.videoShown && root.avatar !== "" && !root.locked && !root.poppedOut
             anchors.centerIn: parent
             name: root.name
             source: root.avatar
@@ -81,7 +85,7 @@ Item {
         Text {
             // Под заслонкой это сообщение только путало бы: камера тут ни при
             // чём, и «подключаем» ничего не подключит.
-            visible: !root.videoShown && root.avatar === "" && !root.locked
+            visible: !root.videoShown && root.avatar === "" && !root.locked && !root.poppedOut
             anchors.centerIn: parent
             text: root.cam && !root.isSelf ? "Подключаем камеру…" : "Камера выключена"
             color: Theme.textMuted
@@ -91,10 +95,33 @@ Item {
         }
 
         LockPlate {
-            visible: root.locked
+            visible: root.locked && !root.poppedOut
             anchors.fill: parent
             actionable: true
             onKeyRequested: root.keyRequested()
+        }
+
+        PoppedPlate {
+            visible: root.poppedOut
+            anchors.fill: parent
+            title: (root.name || "Участник") + " — в отдельном окне"
+            hint: "Окно поверх всех: двигайте и растягивайте его как удобно, "
+                + "двойной щелчок — во весь экран."
+            onReturnRequested: root.popInRequested()
+        }
+
+        // «Вынести в отдельное окно» — по наведению, в углу сцены.
+        PipButton {
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: 12
+            icon: "pip"
+            tip: "Открыть в отдельном окне"
+            opacity: !root.isSelf && root.pid && root.cam && !root.poppedOut
+                     && stageHover.hovered ? 1 : 0
+            visible: opacity > 0.01
+            Behavior on opacity { NumberAnimation { duration: Theme.durFast } }
+            onClicked: root.popOutRequested()
         }
 
         // Рамка — поверх видео (дети рисуются над отрисовкой самого Rectangle).
@@ -127,7 +154,10 @@ Item {
                 }
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
-                    text: (root.isSelf ? "Вы" : root.name) + " — нажмите, чтобы вернуть"
+                    // Видео в отдельном окне — подсказка про закрепление здесь
+                    // спорила бы с кнопкой «Вернуть сюда» посередине сцены.
+                    text: (root.isSelf ? "Вы" : root.name)
+                          + (root.poppedOut ? "" : " — нажмите, чтобы вернуть")
                     color: Theme.dark ? "#ffffff" : Theme.text
                     font.family: Theme.uiFont
                     font.pixelSize: Theme.textXs
@@ -158,7 +188,7 @@ Item {
         else Media.detach(_pid, _tok)
     }
 
-    HoverHandler { cursorShape: Qt.PointingHandCursor }
+    HoverHandler { id: stageHover; cursorShape: Qt.PointingHandCursor }
     // Исключительный захват — см. VideoTile: без него клики по модалке
     // настроек доходили бы до сцены под ней.
     TapHandler {

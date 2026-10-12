@@ -388,6 +388,10 @@ VideoEngine::~VideoEngine() {
 
 // ---------- связь с плитками ----------
 
+QVideoSink* VideoEngine::Peer::target() const {
+    return pipSink ? pipSink.data() : sink;
+}
+
 // Плитка родилась. Если декодер жив и поток за время пересадки не рвался —
 // просто переставляем приёмник: ни чёрного кадра, ни лишнего KEYFRAME_REQ.
 // Состояние «картинка идёт» новая плитка спрашивает сама (isLive), потому что
@@ -422,6 +426,9 @@ void VideoEngine::detach(qint64 id, int token) {
     if (token != it->token) return;    // привязку уже перехватила новая плитка
     it->sink = nullptr;
     it->token = 0;
+    // Участник вынесен в отдельное окно — кадры по-прежнему нужны, и
+    // придержанное ещё есть куда рисовать.
+    if (it->pipSink) return;
     it->holdQ.clear();                 // рисовать больше некуда
     tellWanted(false, quint32(id), false);
 }
@@ -496,11 +503,39 @@ void VideoEngine::detachScreen(qint64 id, int token) {
     if (token != it->token) return;
     it->sink = nullptr;
     it->token = 0;
+    if (it->pipSink) return;           // см. detach: демонстрация в отдельном окне
     // Придержанное — в мусор, как и у камеры (см. detach). Без этой строки
     // кадры оставались висеть после того, как сцену свернули: рисовать их уже
     // некуда, а держат они больше всех — до 64 МБ на участника.
     it->holdQ.clear();
     tellWanted(true, quint32(id), false);
+}
+
+// Окно «картинка в картинке». Поток не перезапускается: тот же декодер, те же
+// кадры — меняется только то, куда их рисовать. Если поток в этот момент
+// прерван и ждёт опорного кадра, окно честно начнёт с заглушки (см. attach).
+int VideoEngine::attachPip(qint64 id, bool screen, QVideoSink* sink) {
+    Peer& p = (screen ? m_screenPeers : m_peers)[quint32(id)];
+    p.pipSink = sink;
+    p.pipToken = ++m_attachSeq;
+    if (p.awaitKey) p.active = false;
+    tellWanted(screen, quint32(id), true);
+    return p.pipToken;
+}
+
+// Окно закрыли — кадры возвращаются плитке, если она есть. Плитки может и не
+// быть (участник на другой странице сетки): тогда кадры больше не нужны, и
+// воркер, как при уходе плитки, перестанет их декодировать.
+void VideoEngine::detachPip(qint64 id, bool screen, int token) {
+    QHash<quint32, Peer>& peers = screen ? m_screenPeers : m_peers;
+    auto it = peers.find(quint32(id));
+    if (it == peers.end()) return;
+    if (token != it->pipToken) return;
+    it->pipSink.clear();
+    it->pipToken = 0;
+    if (it->sink) return;
+    it->holdQ.clear();
+    tellWanted(screen, quint32(id), false);
 }
 
 int VideoEngine::attachScreenPreview(QVideoSink* sink) {
@@ -534,7 +569,7 @@ void VideoEngine::resetPeers() {
             p.active = false;
             emit videoChanged(qint64(it.key()), false);
         }
-        if (p.sink) tellWanted(false, it.key(), true);   // сброс стёр и «нужен»
+        if (p.target()) tellWanted(false, it.key(), true);   // сброс стёр и «нужен»
     }
     for (auto it = m_screenPeers.begin(); it != m_screenPeers.end(); ++it) {
         Peer& p = it.value();
@@ -547,7 +582,7 @@ void VideoEngine::resetPeers() {
             p.active = false;
             emit screenVideoChanged(qint64(it.key()), false);
         }
-        if (p.sink) tellWanted(true, it.key(), true);
+        if (p.target()) tellWanted(true, it.key(), true);
     }
     m_stats->noteRxOff(false);
     m_stats->noteRxOff(true);
@@ -869,7 +904,7 @@ void VideoEngine::complainCodec(quint8 band, quint8 codec) {
 void VideoEngine::onDecoded(QHash<quint32, Peer>& peers, quint32 sender,
                             const QVideoFrame& vf, qint64 tsMs, bool screen) {
     Peer& p = peers[sender];
-    if (!p.sink) return;               // плитка исчезла, пока кадр ехал
+    if (!p.target()) return;           // плитка исчезла, пока кадр ехал
 
     // Синхронизация со звуком: он доходит до ушей позже картинки (джиттер-буфер
     // плюс буфер звуковой карты), поэтому кадр, обогнавший свой звук,
@@ -929,8 +964,11 @@ void VideoEngine::onDecoded(QHash<quint32, Peer>& peers, quint32 sender,
 }
 
 void VideoEngine::paint(Peer& p, quint32 sender, const QVideoFrame& vf, bool screen) {
-    if (!p.sink) return;
-    p.sink->setVideoFrame(vf);
+    // Одно место отрисовки: окно «картинки в картинке», если участник вынесен,
+    // иначе плитка. Второй копии кадра нет нигде.
+    QVideoSink* const target = p.target();
+    if (!target) return;
+    target->setVideoFrame(vf);
     m_stats->noteRxFrame(sender);
 
     p.lastFrameAt = QDateTime::currentMSecsSinceEpoch();

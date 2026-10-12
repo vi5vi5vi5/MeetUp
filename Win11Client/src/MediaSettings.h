@@ -102,6 +102,11 @@ class MediaSettings : public QObject {
     Q_PROPERTY(int perPage READ perPage WRITE setPerPage NOTIFY perPageChanged)
     Q_PROPERTY(bool showSelf READ showSelf WRITE setShowSelf NOTIFY showSelfChanged)
     Q_PROPERTY(bool hideNoVideo READ hideNoVideo WRITE setHideNoVideo NOTIFY hideNoVideoChanged)
+    // «Картинка в картинке» сама: свернули MeetUp, пока идёт чужая
+    // демонстрация, — она выносится в отдельное окно поверх всех и
+    // возвращается, когда MeetUp развернули. По умолчанию выключено: окно,
+    // которое появляется само, — сюрприз, и включать его человек должен сам.
+    Q_PROPERTY(bool autoPip READ autoPip WRITE setAutoPip NOTIFY autoPipChanged)
     // Горячие клавиши (M8): текст бинда в собственном формате — "RCtrl",
     // "RCtrl+RShift", "Ctrl+D", "F9" (разбор и правила в src/HotkeySpec.h).
     // Пустая строка — клавиша не назначена. Слушают GlobalHotkeys и настройки.
@@ -164,6 +169,7 @@ public:
     int perPage() const { return m_perPage; }
     bool showSelf() const { return m_showSelf; }
     bool hideNoVideo() const { return m_hideNoVideo; }
+    bool autoPip() const { return m_autoPip; }
     QString keyMic() const { return m_keyMic; }
     QString keySound() const { return m_keySound; }
     QString keyCam() const { return m_keyCam; }
@@ -196,6 +202,7 @@ public:
     void setMirrorSelf(bool on);
     void setPerPage(int n);
     void setShowSelf(bool on);
+    void setAutoPip(bool on);
     void setHideNoVideo(bool on);
     void setKeyMic(const QString& s);
     void setKeySound(const QString& s);
@@ -260,6 +267,7 @@ signals:
     void perPageChanged();
     void showSelfChanged();
     void hideNoVideoChanged();
+    void autoPipChanged();
     void keyMicChanged();
     void keySoundChanged();
     void keyCamChanged();
@@ -298,6 +306,7 @@ private:
     int m_perPage = 9;
     bool m_showSelf = true;
     bool m_hideNoVideo = false;
+    bool m_autoPip = false;
     QString m_keyMic, m_keySound, m_keyCam;
     QString m_keyShare, m_keyFull, m_keyLeave;
     bool m_pushToTalk = false;

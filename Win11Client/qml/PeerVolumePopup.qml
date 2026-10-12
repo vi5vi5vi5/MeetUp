@@ -16,6 +16,10 @@ Item {
     property string name: ""
     // Куда ставить карточку — точка щелчка в координатах этого слоя.
     property point anchorPoint: Qt.point(0, 0)
+    // Камеру этого участника можно вынести в отдельное окно: она включена и
+    // ещё не вынесена. Решает экран — он знает и то, и другое.
+    property bool canPopOut: false
+    signal popOutRequested(var id)
 
     anchors.fill: parent
     visible: open
@@ -125,6 +129,34 @@ Item {
                 color: Theme.textFaint
                 font.family: Theme.uiFont
                 font.pixelSize: Theme.text2xs
+            }
+
+            // «Картинка в картинке» — отсюда же: карточку открывают на
+            // конкретном человеке, и это второе, что с ним обычно хотят сделать.
+            Rectangle {
+                visible: root.canPopOut
+                width: parent.width
+                height: 1
+                color: Theme.border
+            }
+            Row {
+                visible: root.canPopOut
+                spacing: 8
+                AppIcon {
+                    anchors.verticalCenter: parent.verticalCenter
+                    name: "pip"
+                    size: 14
+                    color: Theme.accentInk
+                }
+                TextLink {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Открыть камеру в отдельном окне"
+                    font.weight: Font.DemiBold
+                    onClicked: {
+                        root.open = false
+                        root.popOutRequested(root.pid)
+                    }
+                }
             }
         }
     }

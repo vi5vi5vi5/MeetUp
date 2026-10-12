@@ -102,6 +102,7 @@ qt_add_executable(Win11Client
     src/MediaSettings.cpp
     src/ScreenSources.cpp
     src/GlobalHotkeys.cpp
+    src/PipHelper.cpp
     src/HotkeySpec.cpp
     src/net/ApiClient.cpp
     src/net/AuthController.cpp
@@ -191,6 +192,10 @@ qt_add_qml_module(Win11Client
         qml/ScreenPickerModal.qml
         qml/ScreenStage.qml
         qml/PinnedStage.qml
+        qml/PipButton.qml
+        qml/PipVolume.qml
+        qml/PoppedPlate.qml
+        qml/PipWindow.qml
         qml/LoginScreen.qml
         qml/RegisterScreen.qml
         qml/AnonLobbyScreen.qml
@@ -230,6 +235,9 @@ qt_add_qml_module(Win11Client
         resources/icons/activity.svg
         resources/icons/layout.svg
         resources/icons/info.svg
+        resources/icons/pip.svg
+        resources/icons/pip-return.svg
+        resources/icons/app-window.svg
         # Знак: две готовые заготовки под тему (см. BrandMark.qml).
         resources/brand/meetup-mark-light.svg
         resources/brand/meetup-mark-dark.svg
@@ -295,8 +303,10 @@ if(WIN32)
     # windowsapp/d3d11/dxgi — Windows.Graphics.Capture: свой захват экрана и
     # окон (см. src/media/ScreenCapturer.cpp). Всё это части Windows SDK,
     # внешних зависимостей захват не добавляет вовсе.
+    # comctl32 — SetWindowSubclass для окон «картинка в картинке» (PipHelper):
+    # WM_SIZING и WM_MOVING до нативного фильтра Qt не доходят.
     target_link_libraries(Win11Client PRIVATE dwmapi user32 gdi32 mmdevapi ole32 bcrypt
-                                              windowsapp d3d11 dxgi)
+                                              windowsapp d3d11 dxgi comctl32)
 endif()
 
 # FFmpeg из vcpkg не даёт CMake-целей — только переменные Find-модуля.
