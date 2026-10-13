@@ -39,6 +39,7 @@ Item {
         { icon: "lock",     title: "Шифрование",   sub: "Сквозное шифрование медиа и переписки",         page: "SettingsCrypto.qml", call: true },
         { icon: "keyboard", title: "Управление",   sub: "Глобальные клавиши — работают и вне окна",      page: "SettingsKeys.qml" },
         { icon: "layout",   title: "Интерфейс",    sub: "Тема, сетка участников и уведомления",          page: "SettingsInterface.qml" },
+        { icon: "paperclip", title: "Файлы",       sub: "Ferry: куда класть принятое и раздавать ли его", page: "SettingsFerry.qml" },
         { icon: "activity", title: "Диагностика",  sub: "Живые показатели соединения и кодеков",         page: "SettingsStats.qml", dev: true, call: true },
         { icon: "info",     title: "О программе",  sub: "Версия, сервер и журналы",                      page: "SettingsAbout.qml" }
     ]

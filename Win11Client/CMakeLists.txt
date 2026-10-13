@@ -95,6 +95,82 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8)
     endif()
 endif()
 
+# ---- Ferry: передача файлов в чате -----------------------------------------
+# Ядро Ferry (github.com/vi5vi5vi5/Ferry): чанки, манифест, ссылка, BLAKE3,
+# JSON — тот же код, что у его CLI и релея, без копий. Качает
+# scripts/fetch-deps.ps1 по прибитому коммиту; FERRY_DIR можно направить на
+# свой checkout Ferry, чтобы править оба проекта разом.
+#
+# Шифрование Ferry держит отдельной целью на OpenSSL (ferry-crypto) — её мы НЕ
+# собираем: тот же core/Crypto.h реализован на CNG (src/ferry/FerryCrypto.cpp),
+# как и сквозное шифрование конференции, и OpenSSL в дистрибутив не едет.
+# EXCLUDE_FROM_ALL ровно поэтому: из каталога ядра собирается только то, на что
+# сошлются цели ниже.
+set(FERRY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ferry CACHE PATH
+    "Ferry source tree (core/, Cli/) - fetched by scripts/fetch-deps.ps1")
+add_subdirectory(${FERRY_DIR}/core ${CMAKE_CURRENT_BINARY_DIR}/ferry EXCLUDE_FROM_ALL)
+# Ferry пишется на C++20 (так его собирают CLI и релей); заголовки ядра при
+# этом обходятся C++17, и код клиента их включает как есть.
+set_target_properties(ferry-core PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+# Исходники Ferry — UTF-8 без BOM. Без /utf-8 русская MSVC читает их как
+# cp1251, и строки с кириллицей (пароль, тестовые векторы) едут мимо.
+if(MSVC)
+    target_compile_options(ferry-core PRIVATE /utf-8)
+endif()
+
+# Argon2id для раздач по паролю — эталонная реализация из CLI Ferry, без
+# потоков (как у него самого): параметры протокола фиксированы, p = 1.
+set(FERRY_ARGON2_DIR ${FERRY_DIR}/Cli/third_party/argon2)
+add_library(ferry-argon2 STATIC
+    ${FERRY_ARGON2_DIR}/src/argon2.c
+    ${FERRY_ARGON2_DIR}/src/core.c
+    ${FERRY_ARGON2_DIR}/src/encoding.c
+    ${FERRY_ARGON2_DIR}/src/ref.c
+    ${FERRY_ARGON2_DIR}/src/blake2/blake2b.c
+)
+target_include_directories(ferry-argon2 PUBLIC ${FERRY_ARGON2_DIR}/include)
+target_compile_definitions(ferry-argon2 PRIVATE ARGON2_NO_THREADS)
+set_target_properties(ferry-argon2 PROPERTIES AUTOMOC OFF)
+
+# Всё, что клиенту нужно от Ferry сверх ядра: шифрование на CNG и пароль
+# (выравнивание фразы — Cli/Password.cpp как есть, расходиться с браузером
+# и CLI ему нельзя ни на байт).
+add_library(ferry-cng STATIC
+    src/ferry/FerryCrypto.cpp
+    ${FERRY_DIR}/Cli/Password.cpp
+)
+target_link_libraries(ferry-cng PUBLIC ferry-core ferry-argon2 bcrypt)
+set_target_properties(ferry-cng PROPERTIES AUTOMOC OFF CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(MSVC)
+    target_compile_options(ferry-cng PRIVATE /utf-8)
+endif()
+
+# Проверки шифрования на CNG — вне обычной сборки, по требованию:
+#   cmake --build out/build/release --target ferry-core-test ferry-cng-test
+# ferry-core-test — самотесты ядра Ferry как есть, но против нашего
+# FerryCrypto.cpp вместо OpenSSL; ferry-cng-test — ответы, снятые с OpenSSL.
+add_executable(ferry-core-test EXCLUDE_FROM_ALL ${FERRY_DIR}/tests/CoreTests.cpp)
+target_link_libraries(ferry-core-test PRIVATE ferry-cng)
+target_compile_definitions(ferry-core-test PRIVATE FERRY_TEST_PASSWORD)
+add_executable(ferry-cng-test EXCLUDE_FROM_ALL tests/FerryCngTest.cpp)
+target_link_libraries(ferry-cng-test PRIVATE ferry-cng)
+foreach(t ferry-core-test ferry-cng-test)
+    set_target_properties(${t} PROPERTIES AUTOMOC OFF CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    if(MSVC)
+        target_compile_options(${t} PRIVATE /utf-8)
+    endif()
+endforeach()
+
+# Стенд приёма без интерфейса: тот же движок, что у карточки в чате, — для
+# проверки против настоящего релея и CLI Ferry (см. tests/FerryRecvTool.cpp).
+add_executable(ferry-recv-tool EXCLUDE_FROM_ALL
+    tests/FerryRecvTool.cpp
+    src/ferry/FerryVolume.cpp
+    src/ferry/FerryDisk.cpp
+    src/ferry/FerryReceiver.cpp
+)
+target_link_libraries(ferry-recv-tool PRIVATE ferry-cng Qt6::Core Qt6::Network Qt6::WebSockets)
+
 qt_add_executable(Win11Client
     src/main.cpp
     src/SysBridge.cpp
@@ -133,6 +209,11 @@ qt_add_executable(Win11Client
     src/media/UiSounds.cpp
     src/crypto/E2eCipher.cpp
     src/crypto/E2eController.cpp
+    src/ferry/FerryVolume.cpp
+    src/ferry/FerryDisk.cpp
+    src/ferry/FerryReceiver.cpp
+    src/ferry/FerryTransfer.cpp
+    src/ferry/FerryHub.cpp
     # Значок приложения. В qrc он НЕ нужен: ресурс Windows и ресурс Qt — разные
     # механизмы, класть .ico в оба означало бы носить его дважды.
     resources/app.rc
@@ -141,6 +222,7 @@ qt_add_executable(Win11Client
 # The Theme and MockData QML files are exposed to every screen as singletons.
 set_source_files_properties(qml/Theme.qml    PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 set_source_files_properties(qml/MockData.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
+set_source_files_properties(qml/FerryStyle.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 
 qt_add_qml_module(Win11Client
     URI MeetUp
@@ -181,6 +263,9 @@ qt_add_qml_module(Win11Client
         qml/PeerVolumePopup.qml
         qml/ChatMessage.qml
         qml/LinkPreviewCard.qml
+        qml/FerryStyle.qml
+        qml/FerryScene.qml
+        qml/FerryCard.qml
         qml/ControlDock.qml
         qml/SettingsModal.qml
         qml/SettingsAudio.qml
@@ -189,6 +274,7 @@ qt_add_qml_module(Win11Client
         qml/SettingsCrypto.qml
         qml/SettingsKeys.qml
         qml/SettingsInterface.qml
+        qml/SettingsFerry.qml
         qml/SettingsStats.qml
         qml/SettingsAbout.qml
         qml/ScreenPickerModal.qml
@@ -207,6 +293,26 @@ qt_add_qml_module(Win11Client
         resources/fonts/Unbounded.ttf
         resources/fonts/Manrope.ttf
         resources/fonts/SpaceGrotesk.ttf
+        # IBM Plex — язык карточки Ferry (OFL, текст лицензии рядом).
+        resources/fonts/IBMPlexSans.ttf
+        resources/fonts/IBMPlexMono-Regular.ttf
+        resources/fonts/IBMPlexMono-Medium.ttf
+        resources/fonts/IBMPlexMono-SemiBold.ttf
+        # Сцены карточки Ferry — с досок макета, см. FerryScene.qml.
+        resources/ferry/boat.svg
+        resources/ferry/boat-seal.svg
+        resources/ferry/boat-wait.svg
+        resources/ferry/boat-home.svg
+        resources/ferry/boat-seed.svg
+        resources/ferry/boat-ghost.svg
+        resources/ferry/pier-left.svg
+        resources/ferry/pier-right.svg
+        resources/ferry/pier-cargo.svg
+        resources/ferry/pier-empty.svg
+        resources/ferry/lighthouse.svg
+        resources/ferry/buoy.svg
+        resources/ferry/sun.svg
+        resources/ferry/wave.svg
         resources/icons/mic.svg
         resources/icons/mic-off.svg
         resources/icons/video.svg
@@ -293,6 +399,7 @@ target_link_libraries(Win11Client PRIVATE
     Qt6::GuiPrivate
     Opus::opus
     rnnoise
+    ferry-cng
 )
 
 if(WIN32)

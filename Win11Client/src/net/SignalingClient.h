@@ -62,6 +62,8 @@ public:
     void reReadMessages();
     QString errorText() const { return m_errorText; }
     QString roomTitle() const { return m_roomTitle; }
+    // Имя, под которым мы в комнате. Ferry показывает его отправителю тома.
+    QString myName() const { return m_name; }
     bool reconnecting() const { return m_reconnecting; }
     QVariantList participants() const { return m_participants; }
     QAbstractListModel* messages();

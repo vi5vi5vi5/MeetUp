@@ -8,6 +8,7 @@
 #include <QHash>
 #include <QSaveFile>
 #include <QTextStream>
+#include <QUrl>
 
 #ifndef MEETUP_COMMIT
 #define MEETUP_COMMIT "unknown"
@@ -136,6 +137,13 @@ const char *kSample = R"conf(# MeetUp — настройки сервера.
 # Ходит только на публичные адреса, ничего не пишет на диск и в журнал.
 # false — карточек нет, ссылки остаются ссылками.
 #link_previews = true
+
+[ferry]
+# Релей Ferry (github.com/vi5vi5vi5/Ferry) для отправки файлов из чата:
+# клиенты предлагают его по умолчанию, человек может выбрать свой. Сервер
+# MeetUp к релею не ходит и файлов не видит — в чат уходит только ссылка.
+# Пусто — своего релея нет; ссылки Ferry клиенты открывают и без этого.
+#relay = https://ferry.example.com
 
 [log]
 # Что писать в журнал (docker logs):
@@ -359,6 +367,26 @@ ServerConfig ServerConfig::load(const QString &dataDir)
     if (const auto v = ini.take("chat", "link_previews"))
         cfg.chatLinkPreviews = parseBool(*v, cfg.chatLinkPreviews,
                                          "chat.link_previews", &cfg.warnings);
+
+    if (const auto v = ini.take("ferry", "relay")) {
+        // Клиенты склеивают адрес с путями API («<релей>/api/transfers»), и
+        // хвостовой слэш дал бы двойной. Адрес без схемы или с путём —
+        // почти наверняка опечатка: молча отдать его клиентам значило бы
+        // сломать отправку у всех сразу.
+        QString relay = v->trimmed();
+        while (relay.endsWith(QLatin1Char('/')))
+            relay.chop(1);
+        const QUrl url(relay, QUrl::StrictMode);
+        const bool ok = url.isValid() && !url.host().isEmpty()
+                        && (url.scheme() == QLatin1String("https") || url.scheme() == QLatin1String("http"))
+                        && url.path().isEmpty() && !url.hasQuery() && !url.hasFragment()
+                        && url.userInfo().isEmpty();
+        if (relay.isEmpty() || ok)
+            cfg.ferryRelay = relay;
+        else
+            cfg.warnings.append(QStringLiteral("ferry.relay: «%1» — не адрес релея "
+                                               "(нужно https://имя[:порт]), пропущено").arg(*v));
+    }
 
     if (const auto v = ini.take("log", "level")) {
         bool ok = false;

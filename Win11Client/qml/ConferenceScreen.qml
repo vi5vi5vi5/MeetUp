@@ -595,6 +595,12 @@ Item {
                     imageWidth: model.imageWidth
                     imageHeight: model.imageHeight
                     onImageClicked: function (src) { root.lightbox = src }
+                    // «Попросить в чате» из карточки Ferry: текст в поле ввода,
+                    // отправит человек сам — кнопка ничего не шлёт за него.
+                    onFerryAsk: function (text) {
+                        chatInput.text = text
+                        chatInput.forceActiveFocus()
+                    }
                 }
 
                 // Новейшее видно — счётчик непрочитанного ни к чему.

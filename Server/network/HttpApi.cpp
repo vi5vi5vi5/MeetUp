@@ -185,6 +185,11 @@ ApiResponse HttpApi::handleConfig() const
     };
     if (!m_config.publicUrl.isEmpty())
         j.insert(QStringLiteral("public_url"), m_config.publicUrl);
+    // Релей Ferry по умолчанию — для отправки файлов из чата. Нет поля —
+    // своего релея у сервера нет (а не «Ferry запрещён»: ссылки Ferry
+    // клиенты открывают по адресу из самой ссылки).
+    if (!m_config.ferryRelay.isEmpty())
+        j.insert(QStringLiteral("ferry_relay"), m_config.ferryRelay);
     return ApiResponse{200, j, {}};
 }
 

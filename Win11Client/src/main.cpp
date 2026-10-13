@@ -16,6 +16,7 @@
 #include "net/UpdateChecker.h"
 #include "net/ServerInfoController.h"
 #include "net/LinkPreviews.h"
+#include "ferry/FerryHub.h"
 #include "SysBridge.h"
 #include "Cli.h"
 #include "HistoryStore.h"
@@ -119,6 +120,12 @@ int main(int argc, char *argv[])
     // на чужой сервер (LinkController) оставлял правила ПРЕЖНЕГО: в
     // конференции жили его потолок картинки и его «умею предпросмотр ссылок».
     QObject::connect(&sys, &SysBridge::serverChanged, &server, &ServerInfoController::refresh);
+    // Ferry в чате: опознаёт ссылки, принимает тома, раздаёт скачанное (см.
+    // src/ferry/FerryHub.h). Приёмы живут в своём потоке; при выходе их надо
+    // остановить ДО того, как разрушится движок QML и всё остальное, —
+    // иначе недокачка осталась бы без сохранённой карты.
+    FerryHub ferry(&server, &conf);
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, &ferry, &FerryHub::shutdown);
 
     // Движок QML объявлен ПОСЛЕ screens: провайдер миниатюр принадлежит
     // движку и держит указатель на screens, а разрушается движок первым.
@@ -154,6 +161,7 @@ int main(int argc, char *argv[])
     // Портрет сервера (имя, что разрешено, версия сборки) — Server.
     engine.rootContext()->setContextProperty("Server", &server);
     engine.rootContext()->setContextProperty("Previews", &previews);
+    engine.rootContext()->setContextProperty("Ferry", &ferry);
 
     
 

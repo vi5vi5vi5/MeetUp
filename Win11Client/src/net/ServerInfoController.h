@@ -32,6 +32,9 @@ class ServerInfoController : public QObject {
     // Сервер умеет предпросмотр ссылок (GET /api/unfurl). Старый — нет:
     // тогда карточек не рисуем и не спрашиваем.
     Q_PROPERTY(bool    linkPreviews   READ linkPreviews   NOTIFY changed)
+    // Релей Ferry по умолчанию для отправки файлов из чата («https://имя»,
+    // без слэша на конце). Пусто — своего релея у сервера нет.
+    Q_PROPERTY(QString ferryRelay     READ ferryRelay     NOTIFY changed)
     // Ведёт ли сервер журнал с именами, кодами комнат и логинами.
     Q_PROPERTY(bool    logsNames      READ logsNames      NOTIFY changed)
     // Сколько миллисекунд шёл ответ на сам этот запрос; -1 — не спрашивали
@@ -61,6 +64,7 @@ public:
     int maxPersonalRooms() const { return m_maxPersonalRooms; }
     int maxScreenShares() const { return m_maxScreenShares; }
     bool linkPreviews() const { return m_linkPreviews; }
+    QString ferryRelay() const { return m_ferryRelay; }
     bool logsNames() const { return m_logsNames; }
     int pingMs() const { return m_pingMs; }
     bool reachable() const { return m_reachable; }
@@ -90,6 +94,7 @@ private:
     int m_maxPersonalRooms = 1;
     int m_maxScreenShares = 1;
     bool m_linkPreviews = false;
+    QString m_ferryRelay;
     bool m_logsNames = false;
     int m_pingMs = -1;
     bool m_reachable = false;

@@ -25,6 +25,8 @@ Item {
     property int imageWidth: 0
     property int imageHeight: 0
     signal imageClicked(string source)
+    // Карточка Ferry просит вставить текст в поле ввода («Попросить в чате»).
+    signal ferryAsk(string text)
 
     readonly property real _maxContent: width * 0.82 - 24
     readonly property color _linkColor: root.self ? Theme.accentFg : Theme.accent
@@ -40,6 +42,10 @@ Item {
     readonly property bool _previewsOn: Server.linkPreviews && AV.linkPreviews
                                         && (!Crypto.active || AV.linkPreviewsE2E)
     readonly property string previewUrl: root.locked ? "" : root._firstUrl(root.text)
+    // Ссылка Ferry узнаётся по форме адреса на любом домене. Её карточку
+    // рисует сам клиент — у сервера её не спрашиваем: часть после # там ключ,
+    // а сама страница раздачи ничего интересного серверу не покажет.
+    readonly property bool _ferry: root.previewUrl !== "" && Ferry.isFerryLink(root.previewUrl)
 
     // Адрес без хвостовой пунктуации: «example.com/a.» — конец предложения,
     // а не часть адреса. Те же правила, что при подсветке ссылок ниже.
@@ -295,7 +301,18 @@ Item {
         LinkPreviewCard {
             x: root.self ? parent.width - width : 0
             width: Math.min(root.width * 0.82, 320)
-            url: root._previewsOn ? root.previewUrl : ""
+            url: root._previewsOn && !root._ferry ? root.previewUrl : ""
+        }
+
+        // Ferry — во всю ширину ленты: это не подпись к сообщению, а предмет,
+        // с которым работают (принять, остановить, открыть папку).
+        FerryCard {
+            x: root.self ? parent.width - width : 0
+            width: Math.min(root.width, 360)
+            url: root._ferry ? root.previewUrl : ""
+            author: root.author
+            self: root.self
+            onAsk: function (text) { root.ferryAsk(text) }
         }
     }
 }
