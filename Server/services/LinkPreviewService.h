@@ -65,12 +65,17 @@ struct LinkPreviewResult
 //     Имя едет в Host и в SNI, сертификат сверяется по нему же;
 //   * переадресации — вручную, не больше четырёх, каждая проверяется заново;
 //   * страница читается только до </head> и не больше 512 КБ, картинка — не
-//     больше 1,5 МБ, на всё — 6 секунд;
+//     больше 1,5 МБ, на всё — 8 секунд;
+//   * картинка качается НЕ вместе со страницей, а когда её попросят
+//     (GET /api/unfurl/image/<id>): карточка с заголовком приходит сразу, а
+//     медленный CDN картинок (у GitHub — секунды) её больше не держит;
 //   * общий потолок: 4 похода одновременно и 120 в минуту. Лимит по адресу
 //     клиента не работает: за nginx все приходят с одного адреса.
 //
 // Ничего не пишется на диск и в журнал: адреса ссылок — переписка людей.
-// Кэш в памяти: страницы — час (отказы — 10 минут), картинки — до 24 МБ.
+// Кэш в памяти: страницы — час (отказы — 10 минут, а «сайт не ответил» —
+// полторы: сеть бывает капризной, и ссылка не должна пропадать надолго),
+// картинки — до 24 МБ.
 class LinkPreviewService : public QObject
 {
     Q_OBJECT
@@ -86,9 +91,12 @@ public:
     // когда страница дочитана.
     void preview(const QString &url, const Done &done);
 
-    // Картинка из кэша по ключу из LinkPreview::imageId. false — её нет
-    // (вытеснена или ключ чужой).
-    bool image(const QString &id, QByteArray *data, QByteArray *mime);
+    // Картинка по ключу из LinkPreview::imageId. Качается при первом запросе
+    // и дальше отдаётся из кэша; done зовётся один раз. ok = false — ключ
+    // чужой, картинка не скачалась или не картинка вовсе.
+    using ImageDone = std::function<void(bool ok, const QByteArray &data,
+                                         const QByteArray &mime)>;
+    void image(const QString &id, const ImageDone &done);
 
     // ---- для проверок ----
     // Адрес, на который ходить можно: публичный unicast, не частная сеть.
@@ -118,7 +126,6 @@ private:
 
     void startJob(Job *job);
     void onPageDone(Job *job, Fetch *fetch);
-    void onImageDone(Job *job, Fetch *fetch);
     void finishJob(Job *job, const LinkPreviewResult &result);
 
     // Поход с проверкой адреса и ручными переадресациями. Колбэк получает
@@ -133,11 +140,19 @@ private:
     void pump();             // запустить ждущих, если освободилось место
 
     void putImage(const QString &id, const QByteArray &data, const QByteArray &mime);
+    // Ключ картинки — хеш её адреса: один и тот же og:image у разных страниц
+    // качается один раз.
+    static QString imageIdOf(const QUrl &url);
 
     bool m_enabled = true;
     QNetworkAccessManager *m_nam = nullptr;
     QHash<QString, CachedPage> m_pages;
     QHash<QString, CachedImage> m_images;
+    // Какие картинки нам вообще называли страницы: ключ -> адрес. Чужой ключ
+    // (не из нашего предпросмотра) не скачивается — иначе ручка картинок
+    // стала бы прокси для чего угодно.
+    QHash<QString, QUrl> m_imageUrls;
+    QHash<QString, QList<ImageDone>> m_imageWaiters;   // качаются сейчас
     qint64 m_imageBytes = 0;
     // Ссылки в работе: второй запрос той же ссылки встаёт в очередь к первому,
     // а не идёт наружу ещё раз (сообщение видят все участники разом).

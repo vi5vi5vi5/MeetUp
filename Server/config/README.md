@@ -112,6 +112,7 @@ main.cpp  ──читает──►  config/  ──передаёт──► 
 | `chat.history_size` | `500` | Сообщений в истории комнаты |
 | `chat.history_images` | `24` | Картинок в истории |
 | `chat.image_max_kb` | `440` | Потолок картинки в чате |
+| `chat.link_previews` | `true` | Предпросмотр ссылок в чате (`GET /api/unfurl`) |
 | `log.level` | `errors` | `off` / `errors` / `normal` |
 
 Поднять `max_personal_per_user` выше единицы можно только после миграции

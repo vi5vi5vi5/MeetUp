@@ -114,6 +114,11 @@ int main(int argc, char *argv[])
     // отвергнет пароль, который сервер принял бы (и наоборот).
     QObject::connect(&server, &ServerInfoController::changed, &auth,
                      [&auth, &server] { auth.setMinPasswordLen(server.minPasswordLen()); });
+    // Сменился сервер — его правила перечитываем сразу, кто бы ни сменил.
+    // Раньше это делали только экран входа и окна настроек, а вход по ссылке
+    // на чужой сервер (LinkController) оставлял правила ПРЕЖНЕГО: в
+    // конференции жили его потолок картинки и его «умею предпросмотр ссылок».
+    QObject::connect(&sys, &SysBridge::serverChanged, &server, &ServerInfoController::refresh);
 
     // Движок QML объявлен ПОСЛЕ screens: провайдер миниатюр принадлежит
     // движку и держит указатель на screens, а разрушается движок первым.

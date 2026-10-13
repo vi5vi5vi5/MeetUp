@@ -49,8 +49,8 @@ bool HttpApi::route(const HttpRequest &req, const Respond &respond)
         return true;
     }
     if (p.startsWith(QLatin1String("/api/unfurl/image/"))) {
-        respond(m == "GET" ? handleUnfurlImage(p.mid(int(qstrlen("/api/unfurl/image/"))))
-                           : err(405, QStringLiteral("method_not_allowed")));
+        if (m == "GET") handleUnfurlImage(p.mid(int(qstrlen("/api/unfurl/image/"))), respond);
+        else respond(err(405, QStringLiteral("method_not_allowed")));
         return true;
     }
 
@@ -221,23 +221,33 @@ void HttpApi::handleUnfurl(const HttpRequest &req, const Respond &respond)
     });
 }
 
-ApiResponse HttpApi::handleUnfurlImage(const QString &id)
+void HttpApi::handleUnfurlImage(const QString &id, const Respond &respond)
 {
     static const QRegularExpression rxId(QStringLiteral("^[0-9a-f]{24}$"));
-    QByteArray data, mime;
-    if (m_previews == nullptr || !rxId.match(id).hasMatch() || !m_previews->image(id, &data, &mime))
-        return err(404, QStringLiteral("no_image"));
-    ApiResponse resp;
-    resp.contentType = mime;
-    resp.rawBody = data;
-    // Ключ — хеш адреса картинки, содержимое под ним не меняется; час — пока
-    // она живёт в кэше сервера.
-    resp.cacheControl = QByteArrayLiteral("public, max-age=3600");
-    // Тип проверен при скачивании (только jpeg/png/gif/webp), но браузер не
-    // должен угадывать его сам: угаданный text/html — это чужая страница на
-    // нашем адресе.
-    resp.headers.append({QByteArrayLiteral("X-Content-Type-Options"), QByteArrayLiteral("nosniff")});
-    return resp;
+    if (m_previews == nullptr || !rxId.match(id).hasMatch()) {
+        respond(err(404, QStringLiteral("no_image")));
+        return;
+    }
+    // Картинка качается при первом запросе (см. LinkPreviewService::image),
+    // поэтому ответ может прийти не сразу.
+    m_previews->image(id, [respond](bool ok, const QByteArray &data, const QByteArray &mime) {
+        if (!ok) {
+            respond(err(404, QStringLiteral("no_image")));
+            return;
+        }
+        ApiResponse resp;
+        resp.contentType = mime;
+        resp.rawBody = data;
+        // Ключ — хеш адреса картинки, содержимое под ним не меняется; час —
+        // пока она живёт в кэше сервера.
+        resp.cacheControl = QByteArrayLiteral("public, max-age=3600");
+        // Тип проверен при скачивании (только jpeg/png/gif/webp), но браузер
+        // не должен угадывать его сам: угаданный text/html — это чужая
+        // страница на нашем адресе.
+        resp.headers.append({QByteArrayLiteral("X-Content-Type-Options"),
+                             QByteArrayLiteral("nosniff")});
+        respond(resp);
+    });
 }
 
 // ---------- Аккаунты ----------

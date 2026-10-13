@@ -27,6 +27,8 @@ constexpr qint64 kImageCacheBytes = 24 * 1024 * 1024;
 constexpr int kMaxPages = 1000;
 constexpr int kPageTtlS = 3600;
 constexpr int kFailTtlS = 600;
+constexpr int kUnreachableTtlS = 90;
+constexpr int kMaxImageUrls = 4000;
 constexpr int kMaxTitle = 200;
 constexpr int kMaxDescription = 300;
 constexpr int kMaxSite = 80;
@@ -249,7 +251,6 @@ struct LinkPreviewService::Job
     QString key;
     QUrl url;
     QList<Done> waiters;
-    LinkPreview preview;
 };
 
 // ---------------------------------------------------------------- сервис
@@ -300,9 +301,12 @@ bool LinkPreviewService::isPublicAddress(const QHostAddress &addr)
     if (v4)
         a = QHostAddress(ip);
 
+    // isPrivateUse() здесь нет намеренно: он появился в Qt 6.6, а образ
+    // собирается на Qt из Debian bookworm (6.4). Частные сети IPv4 закрыты
+    // явными диапазонами ниже, IPv6 — isUniqueLocalUnicast/isSiteLocal.
     if (a.isNull() || a.isLoopback() || a.isLinkLocal() || a.isMulticast()
         || a.isBroadcast() || a.isUniqueLocalUnicast() || a.isSiteLocal()
-        || a.isPrivateUse() || !a.isGlobal())
+        || !a.isGlobal())
         return false;
 
     if (v4) {
@@ -310,7 +314,8 @@ bool LinkPreviewService::isPublicAddress(const QHostAddress &addr)
             const quint32 mask = bits == 0 ? 0 : 0xFFFFFFFFu << (32 - bits);
             return (ip & mask) == (net & mask);
         };
-        // Явно — то, что Qt может считать «глобальным» или чего в его списке нет.
+        // Явно — то, что Qt может считать «глобальным» (isGlobal() у Qt
+        // включает и частные сети RFC 1918) или чего в его списке нет.
         if (in(0x00000000, 8)       // 0.0.0.0/8
             || in(0x0A000000, 8)    // 10/8
             || in(0x64400000, 10)   // 100.64/10 — CGNAT
@@ -360,15 +365,49 @@ void LinkPreviewService::preview(const QString &rawUrl, const Done &done)
     startJob(job);
 }
 
-bool LinkPreviewService::image(const QString &id, QByteArray *data, QByteArray *mime)
+QString LinkPreviewService::imageIdOf(const QUrl &url)
+{
+    return QString::fromLatin1(
+        QCryptographicHash::hash(url.toEncoded(), QCryptographicHash::Sha1).toHex().left(24));
+}
+
+void LinkPreviewService::image(const QString &id, const ImageDone &done)
 {
     auto it = m_images.find(id);
-    if (it == m_images.end())
-        return false;
-    it->lastUsedMs = nowMs();
-    *data = it->data;
-    *mime = it->mime;
-    return true;
+    if (it != m_images.end()) {
+        it->lastUsedMs = nowMs();
+        done(true, it->data, it->mime);
+        return;
+    }
+    const auto url = m_imageUrls.constFind(id);
+    if (url == m_imageUrls.constEnd()) {
+        done(false, {}, {});
+        return;
+    }
+    // Ту же картинку просят сразу все участники, увидевшие сообщение, — в
+    // очередь к первому, наружу один раз.
+    auto waiting = m_imageWaiters.find(id);
+    if (waiting != m_imageWaiters.end()) {
+        waiting->append(done);
+        return;
+    }
+    m_imageWaiters.insert(id, {done});
+
+    auto *f = new Fetch;
+    f->url = url.value();
+    f->image = true;
+    f->done = [this, id](Fetch *fetch) {
+        const QByteArray mime = bareMime(fetch->contentType);
+        const bool ok = fetch->error.isEmpty() && isImageMime(mime) && !fetch->data.isEmpty();
+        if (ok)
+            putImage(id, fetch->data, mime);
+        else if (fetch->error != QLatin1String("busy"))
+            m_imageUrls.remove(id);       // не вышло — больше не пытаемся
+        const QList<ImageDone> waiters = m_imageWaiters.take(id);
+        for (const ImageDone &d : waiters)
+            d(ok, fetch->data, mime);
+    };
+    startFetch(f);
 }
 
 void LinkPreviewService::putImage(const QString &id, const QByteArray &data,
@@ -418,8 +457,7 @@ void LinkPreviewService::onPageDone(Job *job, Fetch *f)
     // Ссылка прямо на картинку: показываем её саму, подпись — имя файла.
     const QByteArray mime = bareMime(f->contentType);
     if (isImageMime(mime)) {
-        const QString id = QString::fromLatin1(
-            QCryptographicHash::hash(f->url.toEncoded(), QCryptographicHash::Sha1).toHex().left(24));
+        const QString id = imageIdOf(f->url);
         putImage(id, f->data, mime);
         p.site = host;
         p.title = cleanText(f->url.fileName(), kMaxTitle);
@@ -436,31 +474,16 @@ void LinkPreviewService::onPageDone(Job *job, Fetch *f)
     if (p.site.isEmpty())
         p.site = host;
 
-    if (!imageUrl.isValid() || !acceptableUrl(imageUrl)) {
-        finishJob(job, result);
-        return;
-    }
-
-    // Картинка — вторым походом, теми же правилами. Не вышло — предпросмотр
-    // остаётся без неё: заголовка с описанием достаточно.
-    job->preview = p;
-    auto *img = new Fetch;
-    img->url = imageUrl;
-    img->image = true;
-    img->done = [this, job](Fetch *fetch) { onImageDone(job, fetch); };
-    startFetch(img);
-}
-
-void LinkPreviewService::onImageDone(Job *job, Fetch *f)
-{
-    LinkPreviewResult result;
-    result.ok = true;
-    result.preview = job->preview;
-    if (f->error.isEmpty() && isImageMime(bareMime(f->contentType)) && !f->data.isEmpty()) {
-        const QString id = QString::fromLatin1(
-            QCryptographicHash::hash(f->url.toEncoded(), QCryptographicHash::Sha1).toHex().left(24));
-        putImage(id, f->data, bareMime(f->contentType));
-        result.preview.imageId = id;
+    // Картинку не ждём: запоминаем её адрес под ключом, а скачаем, когда
+    // клиент её попросит (см. image). Не скачается — карточка останется без
+    // неё, заголовка с описанием достаточно.
+    if (imageUrl.isValid() && acceptableUrl(imageUrl)) {
+        imageUrl.setFragment(QString());
+        const QString id = imageIdOf(imageUrl);
+        if (m_imageUrls.size() >= kMaxImageUrls && !m_imageUrls.contains(id))
+            m_imageUrls.clear();          // память важнее: ключи старых карточек
+        m_imageUrls.insert(id, imageUrl);
+        p.imageId = id;
     }
     finishJob(job, result);
 }
@@ -477,8 +500,10 @@ void LinkPreviewService::finishJob(Job *job, const LinkPreviewResult &result)
             while (m_pages.size() >= kMaxPages)
                 m_pages.erase(m_pages.begin());
         }
-        m_pages.insert(job->key, CachedPage{
-            result, QDateTime::currentDateTimeUtc().addSecs(result.ok ? kPageTtlS : kFailTtlS)});
+        const int ttl = result.ok ? kPageTtlS
+                      : result.error == QLatin1String("unreachable") ? kUnreachableTtlS
+                                                                     : kFailTtlS;
+        m_pages.insert(job->key, CachedPage{result, QDateTime::currentDateTimeUtc().addSecs(ttl)});
     }
     const QList<Done> waiters = job->waiters;
     m_jobs.remove(job->key);

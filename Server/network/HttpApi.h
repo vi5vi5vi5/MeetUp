@@ -73,7 +73,7 @@ private:
     // Предпросмотр ссылки из чата: GET /api/unfurl?url=… и картинка к нему
     // GET /api/unfurl/image/<id>. Без авторизации — в комнате бывают гости.
     void handleUnfurl(const HttpRequest &req, const Respond &respond);
-    ApiResponse handleUnfurlImage(const QString &id);
+    void handleUnfurlImage(const QString &id, const Respond &respond);
 
     // Личные комнаты владельца: /api/me/rooms (GET — список, POST — создать).
     ApiResponse handleMyRooms(const HttpRequest &req);
