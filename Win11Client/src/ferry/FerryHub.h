@@ -17,6 +17,7 @@
 #include <QObject>
 #include <QStringList>
 
+class FerrySend;
 class FerryTransfer;
 class QNetworkAccessManager;
 class QThread;
@@ -33,6 +34,13 @@ class FerryHub : public QObject
     Q_PROPERTY(QStringList trustedRelays READ trustedRelays NOTIFY settingsChanged)
     // Сколько раздач сейчас качается или раздаётся — для вопроса при выходе.
     Q_PROPERTY(int active READ active NOTIFY activeChanged)
+    // Отправка. Релей для листа погрузки: свой (выбранный раньше) или сервера
+    // MeetUp; пусто — отправлять пока некуда, лист спросит адрес.
+    Q_PROPERTY(QString defaultRelay READ defaultRelay NOTIFY settingsChanged)
+    // Своих раздач, что ещё идут, и сколько человек их сейчас качает — для
+    // плашки на главной.
+    Q_PROPERTY(int sending READ sending NOTIFY activeChanged)
+    Q_PROPERTY(int sendingReceivers READ sendingReceivers NOTIFY activeChanged)
 
 public:
     FerryHub(ServerInfoController *server, SignalingClient *conf, QObject *parent = nullptr);
@@ -44,6 +52,12 @@ public:
     void setSeedMode(const QString &mode);
     QStringList trustedRelays() const;
     int active() const { return m_active; }
+    QString defaultRelay() const;
+    int sending() const { return m_sending; }
+    int sendingReceivers() const { return m_sendingReceivers; }
+    QString serverRelay() const;
+    QString ownRelay() const;
+    void setOwnRelay(const QString &origin);
 
     // Похоже ли на ссылку раздачи: https://<любой хост>/t/<id из 22 знаков>,
     // с ключом после # или без.
@@ -58,6 +72,16 @@ public:
     // «Загрузки / том» вместо полного пути — для карточки.
     Q_INVOKABLE QString displayPath(const QString &path) const;
 
+    // Лист погрузки для выбранного или перетащенного (список file:///…).
+    // Опись собирается в фоне; когда лист закрыт — release.
+    Q_INVOKABLE QObject *prepare(const QVariant &urls);
+    Q_INVOKABLE void release(QObject *draft);
+    // Своя раздача по ссылке из чата — для карточки отправителя; null — не наша.
+    Q_INVOKABLE QObject *outgoing(const QString &url);
+    // Что сказать при закрытии приложения; пусто — закрывать можно молча.
+    Q_INVOKABLE QString quitWarning() const;
+    void addOutgoing(FerrySend *send);
+
     QNetworkAccessManager *nam() const { return m_nam; }
     QThread *ioThread();
     QString myName() const;
@@ -71,6 +95,10 @@ signals:
     void settingsChanged();
     void activeChanged();
     void transferFinished(const QString &name);
+    // Раздача заведена — положить ссылку в чат (это делает экран звонка).
+    void postLink(const QString &text);
+    // Кто-то просит том, а включено «спрашивать, кого пускать».
+    void knock(QObject *send, double receiver, const QString &name);
 
 private:
     void recount();
@@ -82,5 +110,9 @@ private:
     QNetworkAccessManager *m_nam;
     QThread *m_io = nullptr;
     QHash<QString, FerryTransfer *> m_transfers;
+    QList<FerrySend *> m_sends;
+    QHash<QString, FerrySend *> m_outgoing;   // origin|id -> своя раздача
     int m_active = 0;
+    int m_sending = 0;
+    int m_sendingReceivers = 0;
 };

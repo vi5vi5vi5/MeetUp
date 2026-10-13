@@ -50,6 +50,10 @@ public:
     const QString &root() const { return m_root; }
     void setRoot(const QString &root) { close(); m_root = root; }
 
+    // Отправителю файлы тома лежат где угодно (несколько файлов из разных
+    // папок): путь на каждый файл раскладки — явно, корень тогда не нужен.
+    void setPaths(std::vector<QString> paths) { close(); m_paths = std::move(paths); }
+
 private:
     QString pathOf(size_t file) const;
     QFile *writable(size_t file, QString *err);
@@ -61,6 +65,7 @@ private:
     };
 
     QString m_root;
+    std::vector<QString> m_paths;
     bool m_tree = false;
     const ferry::VolumeLayout *m_layout = nullptr;   // не владеем
     std::vector<Slot> m_slots;                      // кольцо открытых на запись

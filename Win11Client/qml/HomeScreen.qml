@@ -117,6 +117,41 @@ Item {
             // Обновление — здесь же, у знака: место видное, но не на дороге.
             // Пока обновления нет, ширина нулевая, и шапка выглядит как прежде.
             UpdatePill { anchors.verticalCenter: parent.verticalCenter }
+            // Своя раздача Ferry идёт и после выхода из звонка — пока открыто
+            // приложение. Говорим об этом здесь, у знака: иначе человек
+            // закроет окно, не зная, что кто-то докачивает его том.
+            Rectangle {
+                visible: Ferry.sending > 0
+                anchors.verticalCenter: parent.verticalCenter
+                width: visible ? ferryPillText.implicitWidth + 26 : 0
+                height: 26
+                radius: Theme.radiusPill
+                color: Theme.surface2
+                border.width: 1
+                border.color: Theme.border
+                Row {
+                    anchors.centerIn: parent
+                    spacing: 7
+                    Rectangle {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 7; height: 7; radius: 2
+                        color: "#ff6a1f"
+                    }
+                    Text {
+                        id: ferryPillText
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Ferry · раздаётся " + Ferry.sending + " "
+                              + (Ferry.sending % 10 === 1 && Ferry.sending % 100 !== 11 ? "том" :
+                                 Ferry.sending % 10 >= 2 && Ferry.sending % 10 <= 4
+                                 && (Ferry.sending % 100 < 12 || Ferry.sending % 100 > 14) ? "тома" : "томов")
+                              + (Ferry.sendingReceivers > 0 ? " · " + Ferry.sendingReceivers + " качают" : "")
+                        color: Theme.text
+                        font.family: Theme.uiFont
+                        font.pixelSize: Theme.textXs
+                        font.weight: Font.DemiBold
+                    }
+                }
+            }
         }
 
         // Адресная строка конференции — см. AuthScaffold: ширина считается от

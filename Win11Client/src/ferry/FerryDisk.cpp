@@ -30,6 +30,8 @@ void FerryDisk::open(const QString &root, bool tree, const ferry::VolumeLayout *
 
 QString FerryDisk::pathOf(size_t file) const
 {
+    if (!m_paths.empty())
+        return file < m_paths.size() ? m_paths[file] : QString();
     if (!m_tree)
         return m_root;
     return m_root + QLatin1Char('/') + QString::fromStdString(m_layout->files()[file].path);

@@ -560,6 +560,65 @@ Item {
             // пробел: о новых сообщениях он бы попросту не узнал.
             property int unread: 0
 
+            // Перетащили файлы на чат: одна картинка уходит обычным
+            // сообщением, как раньше; всё остальное — через лист Ferry.
+            DropArea {
+                id: chatDrop
+                anchors.fill: parent
+                z: 50
+                enabled: Conf.phase === "live"
+                property bool oneImage: false
+                onEntered: function (d) {
+                    d.accepted = d.hasUrls
+                    oneImage = d.hasUrls && d.urls.length === 1
+                               && /\.(png|jpe?g|gif|bmp|webp)$/i.test(String(d.urls[0]))
+                }
+                onDropped: function (d) {
+                    if (!d.hasUrls) return
+                    const urls = d.urls
+                    if (urls.length === 1 && /\.(png|jpe?g|gif|bmp|webp)$/i.test(String(urls[0])))
+                        Conf.sendImageFile(urls[0])
+                    else
+                        ferrySheet.draft = Ferry.prepare(urls)
+                    d.accept()
+                }
+                Rectangle {
+                    visible: chatDrop.containsDrag
+                    anchors.fill: parent
+                    anchors.margins: 10
+                    radius: Theme.radiusSm
+                    color: Qt.rgba(0, 0, 0, 0.55)
+                    border.width: 2
+                    border.color: Theme.accent
+                    Column {
+                        anchors.centerIn: parent
+                        width: parent.width - 40
+                        spacing: 6
+                        Text {
+                            width: parent.width
+                            horizontalAlignment: Text.AlignHCenter
+                            wrapMode: Text.Wrap
+                            text: chatDrop.oneImage ? "Отпустите — отправим картинкой"
+                                                    : "Отпустите — повезём через Ferry"
+                            color: "white"
+                            font.family: Theme.uiFont
+                            font.pixelSize: Theme.textMd
+                            font.weight: Font.DemiBold
+                        }
+                        Text {
+                            width: parent.width
+                            horizontalAlignment: Text.AlignHCenter
+                            wrapMode: Text.Wrap
+                            text: chatDrop.oneImage ? "Сожмём до " + Server.chatImageMaxKb + " КБ, как раньше"
+                                                    : "Файлы и папки любого размера, шифруем у вас"
+                            color: "#d0d0d0"
+                            font.family: Theme.uiFont
+                            font.pixelSize: Theme.textSm
+                        }
+                    }
+                }
+            }
+
             ListView {
                 id: chatList
                 anchors { top: parent.top; left: parent.left; right: parent.right; bottom: composer.top }
@@ -701,9 +760,81 @@ Item {
                     anchors.margins: 12
                     spacing: 8
                     IconButton {
+                        id: clipBtn
                         size: "sm"; icon: "paperclip"; variant: "neutral"
                         enabled: Conf.phase === "live"
-                        onClicked: imagePicker.open()
+                        onClicked: attachMenu.open()
+
+                        // Скрепка — три дороги: картинка обычным сообщением, как
+                        // раньше, и файлы или папка через Ferry (доска «Лист
+                        // отправки», C). Это хром MeetUp — его шрифт и акцент.
+                        Popup {
+                            id: attachMenu
+                            y: -height - 10
+                            x: -4
+                            width: 300
+                            padding: 6
+                            background: Rectangle {
+                                color: Theme.surface
+                                radius: Theme.radiusSm
+                                border.width: 1
+                                border.color: Theme.border
+                            }
+                            contentItem: Column {
+                                spacing: 2
+                                Repeater {
+                                    model: [
+                                        { icon: "image", title: "Изображение",
+                                          sub: "Сожмём до " + Server.chatImageMaxKb + " КБ, как раньше", act: 0 },
+                                        { icon: "file", title: "Файлы через Ferry",
+                                          sub: "Любого размера, шифруем у вас", act: 1 },
+                                        { icon: "folder", title: "Папку через Ferry",
+                                          sub: "Дерево целиком, пустые папки тоже", act: 2 }
+                                    ]
+                                    delegate: Rectangle {
+                                        required property var modelData
+                                        width: 288
+                                        height: 52
+                                        radius: Theme.radiusSm
+                                        color: itemHover.hovered ? Theme.surface2 : "transparent"
+                                        HoverHandler { id: itemHover; cursorShape: Qt.PointingHandCursor }
+                                        TapHandler {
+                                            onTapped: {
+                                                attachMenu.close()
+                                                if (modelData.act === 0) imagePicker.open()
+                                                else if (modelData.act === 1) ferryFiles.open()
+                                                else ferryFolder.open()
+                                            }
+                                        }
+                                        AppIcon {
+                                            x: 12
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            name: modelData.icon
+                                            size: 18
+                                            color: Theme.textMuted
+                                        }
+                                        Column {
+                                            x: 44
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            spacing: 1
+                                            Text {
+                                                text: modelData.title
+                                                color: Theme.text
+                                                font.family: Theme.uiFont
+                                                font.pixelSize: Theme.textSm
+                                                font.weight: Font.DemiBold
+                                            }
+                                            Text {
+                                                text: modelData.sub
+                                                color: Theme.textMuted
+                                                font.family: Theme.uiFont
+                                                font.pixelSize: Theme.text2xs
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                     AppInput {
                         id: chatInput
@@ -1481,6 +1612,104 @@ Item {
     }
 
     // ---- Картинки в чате ----
+    // ---- Ferry: отправка файлов из чата ----
+    FileDialog {
+        id: ferryFiles
+        title: "Файлы через Ferry"
+        fileMode: FileDialog.OpenFiles
+        onAccepted: ferrySheet.draft = Ferry.prepare(selectedFiles)
+    }
+    FolderDialog {
+        id: ferryFolder
+        title: "Папка через Ferry"
+        onAccepted: ferrySheet.draft = Ferry.prepare([selectedFolder])
+    }
+    FerrySendSheet {
+        id: ferrySheet
+        anchors.fill: parent
+        e2e: Crypto.active
+    }
+    Connections {
+        target: Ferry
+        // Раздача заведена — ссылка уходит в чат обычным сообщением (в комнате
+        // под E2E — зашифрованным, как любое другое). Старый клиент увидит
+        // ссылку, новый — карточку.
+        function onPostLink(text) {
+            if (Conf.phase === "live")
+                Conf.sendChat(text)
+        }
+        // «Спрашивать, кого пускать»: вопрос — и в карточке, и здесь, поверх
+        // звонка, — человек может смотреть не на ленту.
+        function onKnock(send, receiver, name) {
+            root.knockSend = send
+            root.knockId = receiver
+            root.knockName = name
+        }
+    }
+    property var knockSend: null
+    property double knockId: -1
+    property string knockName: ""
+    Connections {
+        target: root.knockSend
+        ignoreUnknownSignals: true
+        // Ответили в карточке или человек ушёл, не дождавшись, — уведомление
+        // больше не о чем.
+        function onChanged() {
+            if (!root.knockSend) return
+            let still = false
+            for (let i = 0; i < root.knockSend.knocks.length; i++)
+                if (root.knockSend.knocks[i].id === root.knockId) still = true
+            if (!still) root.knockSend = null
+        }
+    }
+    Rectangle {
+        id: knockToast
+        visible: root.knockSend !== null
+        z: 250
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.top: parent.top
+        anchors.topMargin: 72
+        width: Math.min(knockRow.implicitWidth + 28, parent.width - 32)
+        height: 56
+        radius: Theme.radiusSm
+        color: Theme.surface
+        border.width: 1
+        border.color: Theme.border
+        Row {
+            id: knockRow
+            anchors.verticalCenter: parent.verticalCenter
+            x: 14
+            spacing: 12
+            Avatar {
+                anchors.verticalCenter: parent.verticalCenter
+                name: root.knockName
+                size: 32
+            }
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: (root.knockName || "Кто-то") + " просит том «"
+                      + (root.knockSend ? root.knockSend.name : "") + "»"
+                color: Theme.text
+                font.family: Theme.uiFont
+                font.pixelSize: Theme.textSm
+                font.weight: Font.DemiBold
+            }
+            AppButton {
+                anchors.verticalCenter: parent.verticalCenter
+                size: "sm"
+                text: "Пустить"
+                onClicked: { root.knockSend.approve(root.knockId, true); root.knockSend = null }
+            }
+            AppButton {
+                anchors.verticalCenter: parent.verticalCenter
+                size: "sm"
+                variant: "ghost"
+                text: "Отказать"
+                onClicked: { root.knockSend.approve(root.knockId, false); root.knockSend = null }
+            }
+        }
+    }
+
     // Отправляем сразу по выбору, без предпросмотра, — как в вебе: лишний шаг
     // «подтвердите отправку» на скриншотах только мешает.
     FileDialog {

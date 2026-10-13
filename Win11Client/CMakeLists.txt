@@ -170,6 +170,14 @@ add_executable(ferry-recv-tool EXCLUDE_FROM_ALL
     src/ferry/FerryReceiver.cpp
 )
 target_link_libraries(ferry-recv-tool PRIVATE ferry-cng Qt6::Core Qt6::Network Qt6::WebSockets)
+add_executable(ferry-send-tool EXCLUDE_FROM_ALL
+    tests/FerrySendTool.cpp
+    src/ferry/FerryCargo.cpp
+    src/ferry/FerryVolume.cpp
+    src/ferry/FerryDisk.cpp
+    src/ferry/FerrySender.cpp
+)
+target_link_libraries(ferry-send-tool PRIVATE ferry-cng Qt6::Core Qt6::Network Qt6::WebSockets)
 
 qt_add_executable(Win11Client
     src/main.cpp
@@ -214,6 +222,9 @@ qt_add_executable(Win11Client
     src/ferry/FerryReceiver.cpp
     src/ferry/FerryTransfer.cpp
     src/ferry/FerryHub.cpp
+    src/ferry/FerryCargo.cpp
+    src/ferry/FerrySender.cpp
+    src/ferry/FerryOutgoing.cpp
     # Значок приложения. В qrc он НЕ нужен: ресурс Windows и ресурс Qt — разные
     # механизмы, класть .ico в оба означало бы носить его дважды.
     resources/app.rc
@@ -266,6 +277,8 @@ qt_add_qml_module(Win11Client
         qml/FerryStyle.qml
         qml/FerryScene.qml
         qml/FerryCard.qml
+        qml/FerryKit.qml
+        qml/FerrySendSheet.qml
         qml/ControlDock.qml
         qml/SettingsModal.qml
         qml/SettingsAudio.qml
@@ -346,6 +359,8 @@ qt_add_qml_module(Win11Client
         resources/icons/pip.svg
         resources/icons/pip-return.svg
         resources/icons/app-window.svg
+        resources/icons/file.svg
+        resources/icons/folder.svg
         # Знак: две готовые заготовки под тему (см. BrandMark.qml).
         resources/brand/meetup-mark-light.svg
         resources/brand/meetup-mark-dark.svg

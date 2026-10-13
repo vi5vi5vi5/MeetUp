@@ -32,7 +32,7 @@ Item {
     readonly property color _linkColor: root.self ? Theme.accentFg : Theme.accent
     // Пузырь с текстом не нужен, когда текста нет: у сообщения-картинки
     // подписи может не быть вовсе.
-    readonly property bool _hasText: root.locked || root.text !== ""
+    readonly property bool _hasText: root.locked || root._shownText !== ""
 
     // Предпросмотр ссылки: только первой в сообщении (у мессенджеров так же —
     // три карточки подряд под одной репликой превращают ленту в витрину).
@@ -46,6 +46,12 @@ Item {
     // рисует сам клиент — у сервера её не спрашиваем: часть после # там ключ,
     // а сама страница раздачи ничего интересного серверу не покажет.
     readonly property bool _ferry: root.previewUrl !== "" && Ferry.isFerryLink(root.previewUrl)
+    // Ссылку Ferry в пузыре не показываем: за неё говорит карточка, а сама
+    // ссылка — это полторы строки base64 с ключом, читать там нечего. Слова
+    // вокруг («Держите логи:») остаются; было только ссылкой — пузыря нет.
+    readonly property string _shownText: root._ferry
+        ? root.text.replace(root.previewUrl, "").replace(/[ 	]{2,}/g, " ").trim()
+        : root.text
 
     // Адрес без хвостовой пунктуации: «example.com/a.» — конец предложения,
     // а не часть адреса. Те же правила, что при подсветке ссылок ниже.
@@ -259,7 +265,7 @@ Item {
             Text {
                 id: probe
                 visible: false
-                text: root.text
+                text: root._shownText
                 font: msg.font
             }
 
@@ -270,7 +276,7 @@ Item {
                 id: msg
                 x: 12; y: 8
                 width: Math.min(probe.implicitWidth, root._maxContent)
-                text: root._markup(root.text)
+                text: root._markup(root._shownText)
                 textFormat: TextEdit.RichText
                 readOnly: true
                 selectByMouse: true

@@ -14,11 +14,13 @@ Item {
     // «Попросить в чате»: вставить просьбу в поле ввода — отправит человек.
     signal ask(string text)
 
-    readonly property var t: url !== "" ? Ferry.transfer(url) : null
+    // Своя раздача — карточка отправителя (пульт); чужая — получателя.
+    readonly property var send: url !== "" && root.self ? Ferry.outgoing(url) : null
+    readonly property var t: url !== "" && !send ? Ferry.transfer(url) : null
     readonly property string phase: t ? t.phase : ""
 
-    visible: t !== null
-    implicitHeight: !t ? 0 : t.declined ? collapsed.height : card.height
+    visible: t !== null || send !== null
+    implicitHeight: send ? sendCard.height : !t ? 0 : t.declined ? collapsed.height : card.height
 
     function esc(s) {
         return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
@@ -153,6 +155,7 @@ Item {
         id: btn
         property string text: ""
         property bool primary: false
+        property bool danger: false
         property bool small: false
         property bool enabledState: true
         signal clicked()
@@ -160,14 +163,16 @@ Item {
         implicitHeight: small ? 32 : 42
         radius: 4
         opacity: enabledState ? 1 : 0.55
-        color: primary ? (ma.containsMouse && enabledState ? FerryStyle.signalHover : FerryStyle.signal) : "transparent"
-        border.width: primary ? 0 : 1
+        color: danger ? (ma.containsMouse && enabledState ? "#d8443f" : FerryStyle.danger)
+               : primary ? (ma.containsMouse && enabledState ? FerryStyle.signalHover : FerryStyle.signal)
+               : "transparent"
+        border.width: primary || danger ? 0 : 1
         border.color: ma.containsMouse && enabledState ? FerryStyle.ink200 : FerryStyle.line200
         Text {
             id: bl
             anchors.centerIn: parent
             text: btn.text
-            color: btn.primary ? FerryStyle.inkOnSignal : FerryStyle.ink100
+            color: btn.danger ? "#fff2f0" : btn.primary ? FerryStyle.inkOnSignal : FerryStyle.ink100
             font.family: FerryStyle.sans
             font.pixelSize: btn.small ? 13 : 15
             font.weight: Font.DemiBold
@@ -250,7 +255,7 @@ Item {
 
     Rectangle {
         id: collapsed
-        visible: root.t !== null && root.t.declined
+        visible: root.t !== null && root.t.declined && !root.send
         width: parent.width
         height: 38
         radius: 8
@@ -299,7 +304,7 @@ Item {
 
     Rectangle {
         id: card
-        visible: root.t !== null && !root.t.declined
+        visible: root.t !== null && !root.t.declined && !root.send
         width: parent.width
         height: col.implicitHeight + 2
         radius: 8
@@ -339,57 +344,91 @@ Item {
                         font.letterSpacing: 1.4
                     }
                 }
-                Rectangle {   // чип состояния
-                    id: chipBox
-                    visible: root.chip !== ""
+                Row {   // справа: скопировать ссылку, состояние или «закрыть»
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.right: parent.right
-                    anchors.rightMargin: 14
-                    width: chipRow.implicitWidth + 16
-                    height: 22
-                    color: "transparent"
-                    border.width: 1
-                    border.color: root.phase === "approval" || root.phase === "reconnecting" || root.phase === "stopped"
-                                  || (root.t && root.t.senderAway) ? FerryStyle.wait : FerryStyle.signal
-                    Row {
-                        id: chipRow
-                        anchors.centerIn: parent
-                        spacing: 6
-                        Rectangle {
-                            visible: root.phase === "approval"
-                            anchors.verticalCenter: parent.verticalCenter
-                            width: 6; height: 6; radius: 3
-                            color: FerryStyle.wait
+                    anchors.rightMargin: root.chip !== "" ? 14 : 8
+                    spacing: 4
+                    // Ссылки в пузыре сообщения нет (её место заняла карточка),
+                    // а переслать её бывает нужно — отсюда.
+                    Rectangle {
+                        id: copyBtn
+                        property bool copied: false
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 32; height: 32; radius: 4
+                        color: "transparent"
+                        AppIcon {
+                            anchors.centerIn: parent
+                            name: copyBtn.copied ? "check" : "copy"
+                            size: 15
+                            color: copyBtn.copied ? FerryStyle.okText
+                                   : copyMa.containsMouse ? FerryStyle.ink100 : FerryStyle.ink200
                         }
+                        MouseArea {
+                            id: copyMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                Sys.copyText(root.url)
+                                copyBtn.copied = true
+                                copiedTimer.restart()
+                            }
+                        }
+                        Timer {
+                            id: copiedTimer
+                            interval: 1500
+                            onTriggered: copyBtn.copied = false
+                        }
+                    }
+                    Rectangle {   // чип состояния
+                        id: chipBox
+                        visible: root.chip !== ""
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: chipRow.implicitWidth + 16
+                        height: 22
+                        color: "transparent"
+                        border.width: 1
+                        border.color: root.phase === "approval" || root.phase === "reconnecting" || root.phase === "stopped"
+                                      || (root.t && root.t.senderAway) ? FerryStyle.wait : FerryStyle.signal
+                        Row {
+                            id: chipRow
+                            anchors.centerIn: parent
+                            spacing: 6
+                            Rectangle {
+                                visible: root.phase === "approval"
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 6; height: 6; radius: 3
+                                color: FerryStyle.wait
+                            }
+                            Text {
+                                text: root.chip.toUpperCase()
+                                color: chipBox.border.color === FerryStyle.wait ? FerryStyle.ink200 : FerryStyle.signalText
+                                font.family: FerryStyle.mono
+                                font.pixelSize: 12
+                                font.weight: Font.DemiBold
+                                font.letterSpacing: 1.2
+                            }
+                        }
+                    }
+                    Rectangle {   // «закрыть» — свернуть карточку
+                        visible: root.chip === "" && ["offer", "password", "nokey", "done", "failed"].indexOf(root.phase) >= 0
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 32; height: 32; radius: 4
+                        color: "transparent"
                         Text {
-                            text: root.chip.toUpperCase()
-                            color: chipBox.border.color === FerryStyle.wait ? FerryStyle.ink200 : FerryStyle.signalText
-                            font.family: FerryStyle.mono
-                            font.pixelSize: 12
-                            font.weight: Font.DemiBold
-                            font.letterSpacing: 1.2
+                            anchors.centerIn: parent
+                            text: "✕"
+                            color: closeMa.containsMouse ? FerryStyle.ink100 : FerryStyle.ink200
+                            font.pixelSize: 14
                         }
-                    }
-                }
-                Rectangle {   // «закрыть» — свернуть карточку
-                    visible: root.chip === "" && ["offer", "password", "nokey", "done", "failed"].indexOf(root.phase) >= 0
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.right: parent.right
-                    anchors.rightMargin: 8
-                    width: 32; height: 32; radius: 4
-                    color: "transparent"
-                    Text {
-                        anchors.centerIn: parent
-                        text: "✕"
-                        color: closeMa.containsMouse ? FerryStyle.ink100 : FerryStyle.ink200
-                        font.pixelSize: 14
-                    }
-                    MouseArea {
-                        id: closeMa
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: root.t.decline(true)
+                        MouseArea {
+                            id: closeMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.t.decline(true)
+                        }
                     }
                 }
                 Rectangle {
@@ -425,6 +464,489 @@ Item {
                     }
                 }
             }
+        }
+    }
+
+
+    // ---------- своя раздача: пульт отправителя ----------
+
+    property bool sendPanel: false     // раскрыты «условия на ходу»
+    property bool ownerCopied: false
+    readonly property bool sendLive: send !== null && ["live", "lost", "creating", "hashing", "offering"].indexOf(send.phase) >= 0
+    readonly property bool sendDone: send !== null && (send.phase === "closed" || send.phase === "revoked")
+    readonly property real sendProgress: {
+        if (!send || send.receivers.length === 0) return 0
+        let best = 0
+        for (let i = 0; i < send.receivers.length; i++)
+            best = Math.max(best, send.receivers[i].progress)
+        return best
+    }
+    // Тикает раз в минуту ради «ещё 23 ч»: срок — от часов, а не от сигналов.
+    property double nowMs: Date.now()
+    Timer {
+        running: root.send !== null && root.sendLive
+        interval: 30000
+        repeat: true
+        onTriggered: root.nowMs = Date.now()
+    }
+    function hoursLeft() {
+        if (!send || send.expiresAt <= 0) return -1
+        return Math.max(0, (send.expiresAt - root.nowMs) / 3600000)
+    }
+    function ttlText() {
+        const h = hoursLeft()
+        if (h < 0) return "срок по релею"
+        if (h >= 48) return "ещё " + Math.round(h / 24) + " " + FerryStyle.plural(Math.round(h / 24), "день", "дня", "дней")
+        if (h >= 1) return "ещё " + Math.floor(h) + " ч"
+        return "ещё " + Math.max(1, Math.round(h * 60)) + " мин"
+    }
+    function usesText() {
+        if (!send || send.usesLeft < 0) return "без лимита"
+        return send.usesLeft + " " + FerryStyle.plural(send.usesLeft, "раз", "раза", "раз")
+    }
+    function roleText(r) { return r === "seed" ? "раздаёт" : r === "catching" ? "догоняет" : "качает" }
+
+    Rectangle {
+        id: sendCard
+        visible: root.send !== null
+        width: parent.width
+        height: sendCol.implicitHeight + 2
+        radius: 8
+        color: FerryStyle.surface100
+        border.width: 1
+        border.color: FerryStyle.line200
+        clip: true
+
+        Column {
+            id: sendCol
+            x: 1; y: 1
+            width: parent.width - 2
+
+            Item {   // шапка
+                width: parent.width
+                height: 46
+                Row {
+                    anchors.verticalCenter: parent.verticalCenter
+                    x: 14
+                    spacing: 10
+                    Text {
+                        text: "Ferry"
+                        color: FerryStyle.ink100
+                        font.family: FerryStyle.sans
+                        font.pixelSize: 17
+                        font.weight: Font.DemiBold
+                    }
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: !root.send ? "" : root.sendPanel ? "УСЛОВИЯ ВЫДАЧИ"
+                              : root.sendDone ? "КВИТАНЦИЯ"
+                              : root.send.phase === "failed" ? "ОТКАЗ В ПЕРЕВОЗКЕ" : "ВАША РАЗДАЧА"
+                        color: FerryStyle.ink300
+                        font.family: FerryStyle.mono
+                        font.pixelSize: 12
+                        font.letterSpacing: 1.4
+                    }
+                }
+                Rectangle {
+                    id: sendChip
+                    readonly property bool waiting: root.send && (root.send.knocks.length > 0 || root.send.phase === "lost")
+                    visible: root.send && root.send.phase !== "failed" && !root.sendPanel
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.right: parent.right
+                    anchors.rightMargin: 14
+                    width: sendChipText.implicitWidth + 16
+                    height: 22
+                    color: "transparent"
+                    border.width: 1
+                    border.color: root.sendDone ? FerryStyle.ok : waiting ? FerryStyle.wait : FerryStyle.signal
+                    Text {
+                        id: sendChipText
+                        anchors.centerIn: parent
+                        text: !root.send ? "" : root.sendDone ? (root.send.delivered.length > 0 ? "ДОСТАВЛЕНО" : "ЗАКРЫТО")
+                              : root.send.knocks.length > 0 ? root.send.knocks.length + " У ДВЕРИ"
+                              : root.send.phase === "lost" ? "СВЯЗЬ" : "ИДЁТ"
+                        color: root.sendDone ? FerryStyle.okText : sendChip.waiting ? FerryStyle.ink200 : FerryStyle.signalText
+                        font.family: FerryStyle.mono
+                        font.pixelSize: 12
+                        font.weight: Font.DemiBold
+                        font.letterSpacing: 1.2
+                    }
+                }
+                Rectangle {
+                    anchors.bottom: parent.bottom
+                    width: parent.width; height: 2
+                    color: FerryStyle.ink100
+                }
+            }
+
+            FerryScene {
+                visible: root.send !== null && root.send.phase !== "failed" && !root.sendPanel
+                width: parent.width
+                height: visible ? 64 : 0
+                mode: root.sendDone ? "home" : root.send && root.send.phase === "lost" ? "wait" : "sail"
+                progress: root.sendProgress
+                animate: root.visible && root.sendLive
+            }
+
+            Loader {
+                width: parent.width
+                sourceComponent: !root.send ? null
+                                 : root.send.phase === "failed" ? sendFailedBody
+                                 : root.sendDone ? receiptBody
+                                 : root.sendPanel ? policyBody : liveBody
+            }
+        }
+    }
+
+    Component {
+        id: liveBody
+        Column {
+            id: liveCol
+            padding: 14
+            spacing: 12
+            width: parent ? parent.width : 0
+            Column {
+                spacing: 2
+                Mono { text: root.send.name; width: liveCol.width - 28; elide: Text.ElideMiddle }
+                Caption {
+                    text: (root.send.tree ? FerryStyle.num(root.send.files) + " "
+                           + FerryStyle.plural(root.send.files, "файл", "файла", "файлов") + " · " : "")
+                          + FerryStyle.size(root.send.total).join(" ")
+                }
+            }
+            Column {   // хеши, пока считаются
+                visible: !root.send.hashesDone && root.send.count > 0
+                width: liveCol.width - 28
+                spacing: 6
+                Item {
+                    width: parent.width
+                    height: 16
+                    Caption { text: "хеши"; color: FerryStyle.ink200 }
+                    Mono {
+                        anchors.right: parent.right
+                        text: FerryStyle.num(root.send.hashed) + " из " + FerryStyle.num(root.send.count)
+                        font.pixelSize: 12
+                    }
+                }
+                Rectangle {
+                    width: parent.width; height: 4
+                    color: FerryStyle.surface300
+                    Rectangle {
+                        width: parent.width * (root.send.count > 0 ? root.send.hashed / root.send.count : 0)
+                        height: 4
+                        color: FerryStyle.line200
+                    }
+                }
+            }
+            // У двери: первый в очереди — с кнопками, остальные — списком.
+            Column {
+                visible: root.send.knocks.length > 0
+                width: liveCol.width - 28
+                spacing: 8
+                Label {
+                    width: parent.width
+                    textFormat: Text.StyledText
+                    color: FerryStyle.ink200
+                    text: root.send.knocks.length > 0
+                          ? "<b><font color=\"" + FerryStyle.ink100 + "\">" + root.esc(root.send.knocks[0].name || "Без имени")
+                            + "</font></b> просит том" : ""
+                }
+                Caption { width: parent.width; text: "Ключ верный. Пустите — спишется одно использование." }
+                Row {
+                    spacing: 10
+                    Button {
+                        primary: true
+                        small: true
+                        text: "Пустить"
+                        onClicked: root.send.approve(root.send.knocks[0].id, true)
+                    }
+                    Button {
+                        small: true
+                        text: "Отказать"
+                        onClicked: root.send.approve(root.send.knocks[0].id, false)
+                    }
+                }
+                Item {
+                    visible: root.send.knocks.length > 1
+                    width: parent.width
+                    height: 18
+                    Caption {
+                        width: parent.width - allBtn.width - 10
+                        elide: Text.ElideRight
+                        text: "ещё ждёт: " + root.send.knocks.slice(1).map(function (k) { return k.name || "без имени" }).join(", ")
+                    }
+                    FerryKit.TextAction {
+                        id: allBtn
+                        anchors.right: parent.right
+                        text: "Пускать всех"
+                        onClicked: root.send.approveAll()
+                    }
+                }
+            }
+            Column {   // получатели
+                width: liveCol.width - 28
+                Item {
+                    width: parent.width
+                    height: 22
+                    FerryKit.SmallLabel { text: "ПОЛУЧАТЕЛИ" }
+                    FerryKit.SmallLabel {
+                        anchors.right: parent.right
+                        text: root.send.receivers.length + " из " + (root.send.maxConcurrent > 0 ? root.send.maxConcurrent : 8) + " мест"
+                    }
+                    Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: FerryStyle.line200 }
+                }
+                Caption {
+                    visible: root.send.receivers.length === 0
+                    topPadding: 8
+                    width: parent.width
+                    text: "Пока никто не забрал. Ссылка в чате — ждём."
+                }
+                Repeater {
+                    model: root.send.receivers
+                    delegate: Item {
+                        required property var modelData
+                        width: parent.width
+                        height: 36
+                        Text {
+                            id: rName
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 56
+                            elide: Text.ElideRight
+                            text: modelData.name
+                            color: FerryStyle.ink100
+                            font.family: FerryStyle.sans
+                            font.pixelSize: 14
+                            font.weight: Font.DemiBold
+                        }
+                        Rectangle {
+                            x: 64
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: parent.width - 64 - 8 - 40 - 8 - 76
+                            height: 6
+                            color: FerryStyle.surface300
+                            Rectangle {
+                                width: parent.width * Math.min(1, modelData.progress)
+                                height: 6
+                                color: modelData.role === "catching" ? FerryStyle.chunkPeer : FerryStyle.chunkHave
+                                Behavior on width { NumberAnimation { duration: 600 } }
+                            }
+                        }
+                        Mono {
+                            anchors.verticalCenter: parent.verticalCenter
+                            x: parent.width - 76 - 8 - 40
+                            width: 40
+                            horizontalAlignment: Text.AlignRight
+                            text: Math.round(modelData.progress * 100) + "%"
+                            font.pixelSize: 12
+                        }
+                        Row {
+                            anchors.verticalCenter: parent.verticalCenter
+                            anchors.right: parent.right
+                            spacing: 6
+                            Rectangle {
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 7; height: 7; radius: 2
+                                color: modelData.role === "seed" ? FerryStyle.seed
+                                       : modelData.role === "catching" ? FerryStyle.chunkInflight : FerryStyle.wait
+                            }
+                            Mono {
+                                text: root.roleText(modelData.role)
+                                color: modelData.role === "seed" ? FerryStyle.seedText : FerryStyle.ink200
+                                font.pixelSize: 12
+                            }
+                        }
+                        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: FerryStyle.line100 }
+                    }
+                }
+            }
+            Column {   // откуда байты
+                visible: root.send.srcWindow + root.send.srcPeers + root.send.srcSender > 0
+                width: liveCol.width - 28
+                spacing: 6
+                Rectangle {
+                    width: parent.width; height: 10
+                    color: FerryStyle.surface300
+                    Row {
+                        x: 2; y: 2
+                        spacing: 2
+                        Rectangle { width: (parent.parent.width - 8) * root.send.srcWindow; height: 6; color: FerryStyle.chunkHave }
+                        Rectangle { width: (parent.parent.width - 8) * root.send.srcPeers; height: 6; color: FerryStyle.chunkPeer }
+                        Rectangle { width: (parent.parent.width - 8) * root.send.srcSender; height: 6; color: "#ff9a52" }
+                    }
+                }
+                Text {
+                    textFormat: Text.StyledText
+                    color: FerryStyle.ink300
+                    font.family: FerryStyle.sans
+                    font.pixelSize: 13
+                    text: "окно <b><font color=\"" + FerryStyle.ink100 + "\">" + Math.round(root.send.srcWindow * 100) + " %</font></b>"
+                          + "&nbsp;&nbsp; другие <b><font color=\"" + FerryStyle.seedText + "\">" + Math.round(root.send.srcPeers * 100) + " %</font></b>"
+                          + "&nbsp;&nbsp; вы <b><font color=\"" + FerryStyle.ink100 + "\">" + Math.round(root.send.srcSender * 100) + " %</font></b>"
+                }
+            }
+            Mono {
+                color: FerryStyle.ink200
+                font.pixelSize: 12
+                text: root.usesText() + " · " + root.ttlText()
+                      + (root.send.maxConcurrent > 0 ? " · не более " + root.send.maxConcurrent : "")
+            }
+            Status {
+                visible: root.send.phase === "lost"
+                width: liveCol.width - 28
+                text: "Связь с релеем пропала — возвращаемся; получатели подождут."
+            }
+            Row {
+                spacing: 8
+                Button {
+                    width: Math.max(implicitWidth, liveCol.width - 28 - closeAccess.width - 8)
+                    text: "Условия"
+                    onClicked: root.sendPanel = true
+                }
+                Button {
+                    id: closeAccess
+                    danger: true
+                    text: "Закрыть доступ"
+                    onClicked: root.send.revoke()
+                }
+            }
+            Caption {
+                width: liveCol.width - 28
+                text: "Раздача идёт, пока открыт MeetUp, — и после выхода из звонка тоже."
+            }
+        }
+    }
+
+    Component {
+        id: policyBody
+        Column {
+            id: polCol
+            padding: 14
+            spacing: 12
+            width: parent ? parent.width : 0
+            Item {
+                width: polCol.width - 28
+                height: 18
+                Caption { text: "использований"; color: FerryStyle.ink200 }
+                Mono { anchors.right: parent.right; text: root.usesText(); font.pixelSize: 12 }
+            }
+            FerryKit.Seg {
+                width: polCol.width - 28
+                labels: ["+1", "+5", "без лимита"]
+                current: -1
+                onPicked: function (i) {
+                    const now = root.send.usesLeft < 0 ? 0 : root.send.usesLeft
+                    root.send.setUses(i === 0 ? now + 1 : i === 1 ? now + 5 : -1)
+                }
+            }
+            Item {
+                width: polCol.width - 28
+                height: 18
+                Caption { text: "срок"; color: FerryStyle.ink200 }
+                Mono { anchors.right: parent.right; text: root.ttlText(); font.pixelSize: 12 }
+            }
+            FerryKit.Seg {
+                width: polCol.width - 28
+                labels: ["+1 ч", "+24 ч", "неделя"]
+                current: -1
+                onPicked: function (i) {
+                    const left = Math.max(0, root.hoursLeft())
+                    root.send.setTtlHours(i === 0 ? left + 1 : i === 1 ? left + 24 : 168)
+                }
+            }
+            Column {
+                width: polCol.width - 28
+                Rectangle { width: parent.width; height: 1; color: FerryStyle.line100 }
+                FerryKit.Toggle {
+                    title: "Спрашивать, кого пускать"
+                    hint: "Вопрос придёт вам в звонок — в карточке и уведомлением."
+                    on: root.send.requireApproval
+                    onFlipped: root.send.setApproval(!root.send.requireApproval)
+                }
+                FerryKit.Toggle {
+                    title: "Раздача без меня"
+                    hint: "Уйдёте или закроете MeetUp — том отдадут те, кто скачал целиком."
+                    on: root.send.leaveOpen
+                    onFlipped: root.send.setLeaveOpen(!root.send.leaveOpen)
+                }
+            }
+            Column {
+                width: polCol.width - 28
+                spacing: 6
+                FerryKit.SmallLabel { text: "ССЫЛКА ВЛАДЕЛЬЦА" }
+                Item {
+                    width: parent.width
+                    height: 32
+                    Mono {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: parent.width - copyOwner.width - 10
+                        elide: Text.ElideRight
+                        text: root.send.ownerLink.replace(/^https?:\/\//, "")
+                        font.pixelSize: 12
+                    }
+                    Button {
+                        id: copyOwner
+                        anchors.right: parent.right
+                        small: true
+                        text: root.ownerCopied ? "Скопировано" : "Скопировать"
+                        onClicked: {
+                            Sys.copyText(root.send.ownerLink)
+                            root.ownerCopied = true
+                            ownerCopiedTimer.restart()
+                        }
+                        Timer { id: ownerCopiedTimer; interval: 1500; onTriggered: root.ownerCopied = false }
+                    }
+                }
+                Caption {
+                    width: parent.width
+                    text: "С ней можно управлять раздачей из браузера, когда MeetUp закрыт. В чат её не отправляйте."
+                }
+            }
+            Button {
+                primary: true
+                text: "Готово"
+                onClicked: root.sendPanel = false
+            }
+        }
+    }
+
+    Component {
+        id: receiptBody
+        Column {
+            id: rcCol
+            padding: 14
+            spacing: 10
+            width: parent ? parent.width : 0
+            Mono { text: root.send.name; width: rcCol.width - 28; elide: Text.ElideMiddle }
+            Column {
+                width: rcCol.width - 28
+                Field { label: "вы отдали"; value: FerryStyle.size(root.send.sentBytes)[0]; unit: FerryStyle.size(root.send.sentBytes)[1] }
+                Field {
+                    label: "получили"
+                    value: root.send.delivered.length > 0 ? root.send.delivered.join(", ") : "никто"
+                    small: true
+                }
+            }
+            Caption {
+                width: rcCol.width - 28
+                text: (root.send.phase === "revoked" ? "Вы закрыли доступ в " : "Вы ушли в ")
+                      + Qt.formatTime(new Date(root.send.closedAt), "HH:mm") + ". "
+                      + (root.send.phase === "closed" && root.send.leaveOpen && root.send.delivered.length > 0
+                         ? "Том остался у скачавших — раздают они."
+                         : "На релее не осталось ничего.")
+            }
+        }
+    }
+
+    Component {
+        id: sendFailedBody
+        Column {
+            id: sfCol
+            padding: 14
+            spacing: 10
+            width: parent ? parent.width : 0
+            Label { width: sfCol.width - 28; text: root.send.errorTitle; font.weight: Font.DemiBold }
+            Caption { visible: text !== ""; width: sfCol.width - 28; color: FerryStyle.ink200; text: root.send.errorText }
+            Mono { text: root.send.errorCode; color: FerryStyle.ink300; font.pixelSize: 12 }
         }
     }
 

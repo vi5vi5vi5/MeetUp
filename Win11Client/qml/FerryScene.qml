@@ -228,7 +228,8 @@ Rectangle {
             art: root.mode === "sail" ? "boat" : "boat-wait"
             width: root.mode === "sail" ? 88 : 76
             height: width / 2
-            x: lane.width * Math.max(0, Math.min(1, root.progress)) - width * 0.92
+            // В начале пути паром стоит у причала целиком, а не прячется за край.
+            x: Math.max(0, lane.width * Math.max(0, Math.min(1, root.progress)) - width * 0.92)
             y: -height + (root.mode === "sail" ? 10 : 9)
             Behavior on x { NumberAnimation { duration: 900 } }
         }

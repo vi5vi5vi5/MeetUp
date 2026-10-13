@@ -9,6 +9,7 @@
 #include <QThread>
 #include <QUrl>
 
+#include "FerryOutgoing.h"
 #include "FerryTransfer.h"
 #include "core/Link.h"
 #include "../net/ServerInfoController.h"
@@ -166,10 +167,112 @@ void FerryHub::recount()
     int n = 0;
     for (FerryTransfer *t : std::as_const(m_transfers))
         n += t->active() ? 1 : 0;
-    if (n != m_active) {
+    int sending = 0;
+    int receivers = 0;
+    for (FerrySend *s : std::as_const(m_sends)) {
+        if (!s->active())
+            continue;
+        ++sending;
+        receivers += s->downloading().size();
+    }
+    n += sending;
+    if (n != m_active || sending != m_sending || receivers != m_sendingReceivers) {
         m_active = n;
+        m_sending = sending;
+        m_sendingReceivers = receivers;
         emit activeChanged();
     }
+}
+
+QString FerryHub::serverRelay() const
+{
+    const QString r = m_server->ferryRelay();
+    return r.isEmpty() ? QString() : normOrigin(r);
+}
+
+QString FerryHub::ownRelay() const
+{
+    return QSettings().value(QStringLiteral("ferry/relay")).toString();
+}
+
+void FerryHub::setOwnRelay(const QString &origin)
+{
+    if (origin.isEmpty())
+        QSettings().remove(QStringLiteral("ferry/relay"));
+    else
+        QSettings().setValue(QStringLiteral("ferry/relay"), normOrigin(origin));
+    emit settingsChanged();
+}
+
+QString FerryHub::defaultRelay() const
+{
+    const QString own = ownRelay();
+    return own.isEmpty() ? serverRelay() : own;
+}
+
+QObject *FerryHub::prepare(const QVariant &urls)
+{
+    auto *d = new FerryDraft(this, this);
+    QQmlEngine::setObjectOwnership(d, QQmlEngine::CppOwnership);
+    d->add(urls);
+    return d;
+}
+
+void FerryHub::release(QObject *draft)
+{
+    if (qobject_cast<FerryDraft *>(draft))
+        draft->deleteLater();
+}
+
+void FerryHub::addOutgoing(FerrySend *send)
+{
+    QQmlEngine::setObjectOwnership(send, QQmlEngine::CppOwnership);
+    m_sends.append(send);
+    connect(send, &FerrySend::ready, this, [this, send](const QString &link) {
+        ferry::TransferLink parsed;
+        if (ferry::TransferLink::parse(link.toStdString(), parsed))
+            m_outgoing.insert(normOrigin(QString::fromStdString(parsed.origin())) + QLatin1Char('|')
+                                  + QString::fromStdString(parsed.id),
+                              send);
+        emit postLink(link);
+        recount();
+    });
+    connect(send, &FerrySend::knocked, this, [this, send](double receiver, const QString &name) {
+        emit knock(send, receiver, name);
+    });
+    connect(send, &FerrySend::changed, this, &FerryHub::recount);
+    connect(send, &FerrySend::progressChanged, this, &FerryHub::recount);
+    recount();
+}
+
+QObject *FerryHub::outgoing(const QString &url)
+{
+    ferry::TransferLink link;
+    if (!ferry::TransferLink::parse(url.toStdString(), link))
+        return nullptr;
+    return m_outgoing.value(normOrigin(QString::fromStdString(link.origin())) + QLatin1Char('|')
+                            + QString::fromStdString(link.id));
+}
+
+// Закрыть приложение с раздачей, которую ещё никто не скачал целиком, —
+// значит оборвать её у тех, кто качает. Об этом спрашиваем; о раздаче, у
+// которой уже есть сид и «без меня», — нет: её подхватят скачавшие.
+QString FerryHub::quitWarning() const
+{
+    for (FerrySend *s : m_sends) {
+        if (!s->active() || (s->leaveOpen() && s->hasSeed()))
+            continue;
+        const QStringList who = s->downloading();
+        QString text = QStringLiteral("Идёт раздача Ferry «%1». ").arg(s->name());
+        if (who.isEmpty())
+            text += QStringLiteral("Если закрыть, ссылка в чате перестанет работать.");
+        else
+            text += QStringLiteral("Целиком её ещё никто не скачал — если закрыть, %1 не %2.")
+                        .arg(who.join(QStringLiteral(", ")),
+                             who.size() == 1 ? QStringLiteral("докачает") : QStringLiteral("докачают"));
+        return text;
+    }
+    return QString();
 }
 
 void FerryHub::reveal(const QString &path)
@@ -242,6 +345,8 @@ void FerryHub::onLeftCall()
 
 void FerryHub::shutdown()
 {
+    for (FerrySend *s : std::as_const(m_sends))
+        s->shutdown();
     for (FerryTransfer *t : std::as_const(m_transfers))
         t->shutdown();
     if (m_io) {

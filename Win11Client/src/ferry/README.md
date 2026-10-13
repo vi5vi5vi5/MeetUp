@@ -1,4 +1,4 @@
-# src/ferry — Ferry links in the chat (receiving)
+# src/ferry — Ferry in the chat (receiving and sending)
 
 A Ferry link (`https://<any host>/t/<id>#<key>`) dropped into a MeetUp chat
 turns into a card under the message: what the volume is, **Accept**, progress,
@@ -37,6 +37,38 @@ third receiver next to the CLI and the web page, written after
 - **`FerryHub`** (QML: `Ferry`) — recognizes links, hands out transfers, owns
   the I/O thread and the settings (Settings → «Файлы»).
 
+## Sending
+
+The paperclip in the chat is now a menu — an image as before, files or a
+folder through Ferry — and dropping files on the chat does the same (a single
+image still goes as an ordinary chat image). Both open the **send sheet**
+(`qml/FerrySendSheet.qml`): what goes (with what will be skipped and why),
+uses, lifetime, concurrency, «ask whom to let in», «serve without me»,
+password instead of key, relay. The link goes to the chat as an ordinary
+message as soon as the relay accepts the offer — hashes keep being computed in
+the background (streamed hashes). In the sender's own chat the message shows
+the **sender card**: hashing progress, receivers with their roles, where the
+bytes come from, the door (approve / deny / let everyone in, also as a toast
+over the call), conditions on the fly, the owner link, «close access», and a
+receipt at the end.
+
+- **`FerryCargo`** — the manifest from what was picked: one file, one folder
+  or several things (a `ferry-YYYY-MM-DD` tree), same rules as Ferry's CLI and
+  web; shortcuts, unreadable files and names that would not survive on the
+  other side are listed as skipped, before the link exists.
+- **`FerrySender`** — the protocol, after `send.worker.js`: draft, offer,
+  hash segments, serving exactly what the relay asks for (live wave first, up
+  to three tenths for backfill), owner commands, returning after a dropped
+  connection (`resume_owner`). Hashing runs in its own thread (`FerryHasher`).
+- **`FerryDraft` / `FerrySend`** — what the sheet and the sender card bind to.
+
+Sending lives while the app is open — leaving the call does not stop it; the
+home screen shows «Ferry · раздаётся N тома», and closing the app while nobody
+has the whole volume yet asks first.
+
+Not done yet: picking a sending back up after a restart (the card then shows
+the receiver side of one's own link).
+
 ## Privacy rules the card keeps
 
 - **Unknown relays are not contacted** until the person clicks «Показать
@@ -57,7 +89,7 @@ third receiver next to the CLI and the web page, written after
 None of these are part of the normal build:
 
 ```
-cmake --build out/build/release --target ferry-core-test ferry-cng-test ferry-recv-tool
+cmake --build out/build/release --target ferry-core-test ferry-cng-test ferry-recv-tool ferry-send-tool
 ```
 
 - `ferry-core-test` — Ferry's own core self-tests, run against `FerryCrypto.cpp`.
@@ -67,3 +99,13 @@ cmake --build out/build/release --target ferry-core-test ferry-cng-test ferry-re
   the same receiver without the UI, for checking against a real relay and
   `ferry send` (single file, tree, password, streamed hashes, resume, seeding a
   latecomer after the sender left were all verified this way).
+- `ferry-send-tool <relay> <path>... [--password p] [--uses n] [--leave-open]
+  [--approve-all] [--seconds n] [--revoke]` — the same sender without the UI.
+  Its volumes were received byte for byte by our receiver and by Ferry's own
+  `receiver.js` (WebCrypto, JS BLAKE3) run in node; approval, password, several
+  loose files, a latecomer served by a seed after the sender left, and revoke
+  were all checked this way.
+
+Build these from PowerShell, not from Git Bash: there the console code page is
+OEM, Ninja does not recognise the localized `/showIncludes` prefix, and header
+dependencies silently stop being tracked.

@@ -31,6 +31,45 @@ ApplicationWindow {
     }
 
     Shortcut { sequences: ["F11"]; onActivated: window.toggleFullScreen() }
+
+    // Закрыть приложение с раздачей Ferry, которую ещё никто не скачал
+    // целиком, — значит оборвать её у тех, кто качает. Спрашиваем один раз.
+    property bool _quitAnyway: false
+    onClosing: function (close) {
+        const warning = window._quitAnyway ? "" : Ferry.quitWarning()
+        if (warning === "")
+            return
+        close.accepted = false
+        quitAsk.text = warning
+        quitAsk.open = true
+    }
+    AppModal {
+        id: quitAsk
+        property string text: ""
+        title: "Закрыть MeetUp?"
+        modalWidth: 440
+        onClosed: open = false
+        Text {
+            width: parent.width
+            wrapMode: Text.Wrap
+            text: quitAsk.text
+            color: Theme.textMuted
+            font.family: Theme.uiFont
+            font.pixelSize: Theme.textSm
+        }
+        Row {
+            spacing: 10
+            AppButton {
+                text: "Не закрывать"
+                onClicked: quitAsk.open = false
+            }
+            AppButton {
+                text: "Закрыть и прервать"
+                variant: "ghost"
+                onClicked: { window._quitAnyway = true; quitAsk.open = false; window.close() }
+            }
+        }
+    }
     Shortcut {
         sequences: ["Esc"]
         enabled: window.fullScreen      // вне полного экрана Esc не наш
