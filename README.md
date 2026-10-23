@@ -11,6 +11,8 @@
 
 [Лицензия Apache 2.0](LICENSE) · [Сервер](Server/) · [Клиент для Windows](Win11Client/) · [Документация](Server/docs/)
 
+[![CI](https://github.com/vi5vi5vi5/MeetUp/actions/workflows/ci.yml/badge.svg)](https://github.com/vi5vi5vi5/MeetUp/actions/workflows/ci.yml) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 </div>
 
 ---

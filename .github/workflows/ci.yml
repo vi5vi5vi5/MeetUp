@@ -1,0 +1,42 @@
+# Сборка сервера и дымовая проверка HTTP API на каждый пуш и пулл-реквест.
+#
+# Server/tools/smoke.sh поднимает собранный сервер с пустой базой и проходит
+# сценарий аккаунта: конфиг, регистрация, сессия по куке, комнаты, выход.
+#
+# Клиент для Windows здесь не собирается: ему нужны Qt6 Quick и ffmpeg под
+# Windows, и это отдельная работа.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  server:
+    name: Сервер и API
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Зависимости
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build qt6-base-dev qt6-websockets-dev jq
+
+      - name: Сборка
+        run: |
+          cmake -S Server -B Server/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DMEETUP_COMMIT="${GITHUB_SHA::12}"
+          cmake --build Server/build
+
+      - name: Дымовая проверка API
+        # Через bash, а не ./: если файл закоммичен с Windows, бита +x у него нет.
+        run: bash Server/tools/smoke.sh
